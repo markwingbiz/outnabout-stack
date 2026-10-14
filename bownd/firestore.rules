@@ -1,0 +1,70 @@
+// Firestore security rules for Bownd.
+// Deploy with: firebase deploy --only firestore:rules
+// Or paste into Firebase Console -> Firestore Database -> Rules.
+//
+// Principles:
+// - Events/venues are public to read. Writes require a signed-in user
+//   (used by the one-time demo seed; tighten to an admin role when
+//   Livework venue management lands — see TODO below).
+// - Each user can only read/write their own user doc, favorites, and
+//   redemption history.
+// - Top-level `redemptions` tokens: any signed-in user may create a
+//   token and may flip a NEW token to REDEEMED exactly once. They may
+//   NOT edit other fields, un-redeem, or delete tokens. This is the
+//   atomic anti-double-redemption guard.
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    // Public catalog (read). Writes: signed-in only (demo seed).
+    // TODO(Livework): restrict events/venues writes to admin/venue roles.
+    match /events/{id} {
+      allow read: if true;
+      allow create, update, delete: if signedIn();
+    }
+    match /venues/{id} {
+      allow read: if true;
+      allow create, update, delete: if signedIn();
+    }
+
+    // User profiles — owner only.
+    match /users/{uid} {
+      allow read, write: if isOwner(uid);
+
+      match /favorites/{favId} {
+        allow read, write: if isOwner(uid);
+      }
+
+      // Redemption history — owner can read + create (via the app's
+      // redeem flow). No updates/deletes.
+      match /redemptions/{token} {
+        allow read: if isOwner(uid);
+        allow create: if isOwner(uid);
+        allow update, delete: if false;
+      }
+    }
+
+    // Verifiable redemption tokens — atomic single-use.
+    match /redemptions/{token} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      // Only a NEW -> REDEEMED transition, and only the status +
+      // redemption metadata fields may change.
+      allow update: if signedIn()
+        && resource.data.status == 'NEW'
+        && request.resource.data.status == 'REDEEMED'
+        && request.resource.data.diff(resource.data).changedKeys()
+             .hasOnly(['status', 'redeemedAt', 'redeemedAtServer', 'redeemedByDevice']);
+      allow delete: if false;
+    }
+  }
+}

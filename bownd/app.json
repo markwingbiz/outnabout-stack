@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "OutnAbout",
+    "slug": "vibekc",
+    "scheme": "vibekc",
+    "version": "1.0.1",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "platforms": ["ios", "android"],
+
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#000000"
+    },
+
+    "android": {
+      "package": "com.vibekc.app",
+      "versionCode": 2,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#000000"
+      }
+    },
+
+    "ios": {
+      "bundleIdentifier": "com.vibekc.app"
+    },
+
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow OutnAbout to access your camera to scan QR codes for rewards and check-ins."
+        }
+      ]
+    ],
+
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "02628eed-6cf4-424a-9b6c-77148948ddfb"
+      }
+    }
+  }
+}
