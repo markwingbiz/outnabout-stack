@@ -1,4 +1,4 @@
-// Livework — Add New Event form (Phase 5).
+// Livework — Add New Event form (Phase 5 + Phase 7 Slice 1).
 // Ticket tiers are real and editable, and saved in the existing
 // `events.price_label` column ("GA — $25; VIP — $50"). Date is validated
 // before save. No fake success: unconfigured Supabase shows an error and
@@ -6,7 +6,14 @@
 // confirms. Event Image stays disabled (needs expo-image-picker +
 // Supabase Storage — not installed yet).
 // Requires phase-a-ui Auth (<AuthProvider> in app/_layout.tsx).
-import React, { useState } from "react";
+//
+// Slice 1: the insert MUST include tenant_id + venue_id — without
+// tenant_id the insert fails RLS (NULL fails the with_check). The venue
+// comes from the vendor's own venues (one venue → auto-attached;
+// several → a picker). events.source_ref is NOT NULL with no default,
+// so vendor-created events use "livework". events.start_ts is NOT NULL,
+// so a date is required.
+import React, { useCallback, useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -23,6 +30,7 @@ import { useRouter } from "expo-router";
 import { THEME } from "../lib/theme";
 import { supabase, supabaseConfigured } from "../lib/supabase";
 import { useAuth } from "../lib/auth";
+import { getUserVenues, type TenantVenue } from "../lib/tenant";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -51,10 +59,29 @@ export default function AddEventScreen() {
   const [performers, setPerformers] = useState("");
   const [tiers, setTiers] = useState<Tier[]>([newTier("General Admission", "")]);
   const [busy, setBusy] = useState(false);
+  const [venues, setVenues] = useState<TenantVenue[] | null>(null);
+  const [venuesError, setVenuesError] = useState<string | null>(null);
+  const [selectedVenueId, setSelectedVenueId] = useState<string | null>(null);
+
+  const loadVenues = useCallback(async () => {
+    setVenuesError(null);
+    try {
+      const list = await getUserVenues();
+      setVenues(list);
+      setSelectedVenueId((prev) => prev ?? list[0]?.id ?? null);
+    } catch (e: unknown) {
+      setVenuesError(e instanceof Error ? e.message : "Could not load your venues.");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (session) void loadVenues();
+  }, [session, loadVenues]);
 
   function validateDate(value: string): string | null {
     const trimmed = value.trim();
-    if (!trimmed) return null;
+    // events.start_ts is NOT NULL with no default — a date is required.
+    if (!trimmed) return "Enter a date & time.";
     const parsed = new Date(trimmed);
     if (Number.isNaN(parsed.getTime())) {
       return "Enter a valid date & time (e.g. May 24, 2026, 8:00 PM).";
@@ -78,6 +105,18 @@ export default function AddEventScreen() {
     const err = validateDate(date);
     setDateError(err);
     if (err) return;
+    const selectedVenue = (venues ?? []).find((v) => v.id === selectedVenueId) ?? null;
+    if (!selectedVenue) {
+      Alert.alert("Missing venue", "Select a venue for this event.");
+      return;
+    }
+    if (!selectedVenue.tenant_id) {
+      Alert.alert(
+        "Venue has no tenant",
+        "This venue is missing its tenant link. Set up your venue again.",
+      );
+      return;
+    }
     if (!supabaseConfigured || !supabase) {
       Alert.alert(
         "Supabase is not configured",
@@ -93,12 +132,18 @@ export default function AddEventScreen() {
     setBusy(true);
     try {
       const { error } = await supabase.from("events").insert({
+        // tenant_id is REQUIRED: without it the insert fails RLS
+        // (NULL fails the with_check). venue_id attributes the event.
+        tenant_id: selectedVenue.tenant_id,
+        venue_id: selectedVenue.id,
         title: title.trim(),
         description: performers.trim() || null,
-        start_ts: date.trim() ? new Date(date.trim()).toISOString() : null,
+        start_ts: new Date(date.trim()).toISOString(),
         price_label: priceLabel,
         event_type: eventType,
         status: "draft",
+        // events.source_ref is NOT NULL with no default.
+        source_ref: "livework",
       });
       if (error) throw error;
       // Success only after the backend confirms the insert.
@@ -134,6 +179,42 @@ export default function AddEventScreen() {
     );
   }
 
+  if (venues === null) {
+    return (
+      <SafeAreaView style={styles.root}>
+        <ActivityIndicator color={THEME.purple} size="large" style={{ marginTop: 40 }} />
+      </SafeAreaView>
+    );
+  }
+
+  if (venuesError) {
+    return (
+      <SafeAreaView style={styles.root}>
+        <View style={styles.center}>
+          <Text style={styles.centerTitle}>Could not load your venues</Text>
+          <Text style={styles.centerSub}>{venuesError}</Text>
+          <Pressable style={styles.centerBtn} onPress={() => void loadVenues()}>
+            <Text style={styles.centerBtnText}>Retry</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (venues.length === 0) {
+    return (
+      <SafeAreaView style={styles.root}>
+        <View style={styles.center}>
+          <Text style={styles.centerTitle}>Set up your venue first</Text>
+          <Text style={styles.centerSub}>Events belong to a venue. Set yours up, then come back to add events.</Text>
+          <Pressable style={styles.centerBtn} onPress={() => router.push("/setup-venue")}>
+            <Text style={styles.centerBtnText}>Set up your venue</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.root}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
@@ -144,6 +225,24 @@ export default function AddEventScreen() {
           <Text style={styles.title}>Add New Event</Text>
           <View style={{ width: 24 }} />
         </View>
+
+        <Field label="Venue">
+          {venues.length === 1 ? (
+            <Text style={styles.venueSingle}>{venues[0].name}</Text>
+          ) : (
+            <View style={styles.typeRow}>
+              {venues.map((v) => (
+                <Pressable
+                  key={v.id}
+                  style={[styles.typeBtn, selectedVenueId === v.id && styles.typeBtnActive]}
+                  onPress={() => setSelectedVenueId(v.id)}
+                >
+                  <Text style={[styles.typeText, selectedVenueId === v.id && styles.typeTextActive]}>{v.name}</Text>
+                </Pressable>
+              ))}
+            </View>
+          )}
+        </Field>
 
         <Field label="Event Title">
           <TextInput
@@ -270,6 +369,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   inlineError: { color: "#F9A8D4", fontSize: 12, marginTop: 6, lineHeight: 16 },
+  venueSingle: { color: "#fff", fontSize: 15, fontWeight: "800" },
   typeRow: { flexDirection: "row", gap: 8, flexWrap: "wrap" },
   typeBtn: {
     borderWidth: 1,

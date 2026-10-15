@@ -1,11 +1,19 @@
-// Livework dashboard data layer — Phase 5.
+// Livework dashboard data layer — Phase 5 + Phase 7 Slice 1.
 // Live Supabase queries ONLY. No demo object, no fake numbers, no
 // fake publish / payout claims. Every section returns real rows
 // or an explicit empty state (the screen renders the empty text).
-// Reads: venues (name), events (list/calendar/activity), revenue_events
-// (verified revenue only: amount > 0 — amount-0 rows are tracking,
-// never revenue).
+// Reads: venues (the vendor's venues, ordered by name), events
+// (the vendor's tenants only), revenue_events (verified revenue only:
+// amount > 0 — amount-0 rows are tracking, never revenue).
+//
+// Tenant scoping (Slice 1): events are filtered by the signed-in user's
+// tenant_id(s) AND by RLS. A user with no membership gets the honest
+// empty state (needsSetup: true) — never another vendor's rows.
+// revenue_events has NO tenant_id column (verified live), so it cannot
+// be tenant-scoped; the dashboard labels that revenue as ecosystem-wide
+// (see revenueScopeNote) until a later slice links revenue rows to tenants.
 import { supabase } from "./supabase";
+import { getUserTenantIds, getUserVenues } from "./tenant";
 
 export type RangeKey = "7d" | "30d" | "month" | "all";
 
@@ -30,6 +38,8 @@ export type DashboardEvent = {
 export type CalendarDay = {
   day: string;
   date: number;
+  /** Start-of-day timestamp, used to sort days by full date (not day-of-month). */
+  sortKey: number;
   events: { time: string; title: string }[];
 };
 
@@ -45,6 +55,16 @@ export type DashboardData = {
   events: DashboardEvent[];
   calendar: CalendarDay[];
   latestEvents: string[];
+  /** True when the signed-in user has no tenant membership yet (needs onboarding). */
+  needsSetup: boolean;
+  /** True when the user has at least one venue. */
+  hasVenue: boolean;
+  /**
+   * Non-null when the revenue figure is NOT tenant-scoped (revenue_events
+   * has no tenant_id column). The dashboard renders this as a caption so
+   * the number is never misread as the vendor's own revenue.
+   */
+  revenueScopeNote: string | null;
   error: string | null;
 };
 
@@ -97,9 +117,13 @@ function formatTime(iso: string | null): string {
   return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
-const emptyData = (rangeLabel: string, error: string | null): DashboardData => ({
+const emptyData = (
+  rangeLabel: string,
+  error: string | null,
+  extra: Partial<Pick<DashboardData, "userName" | "needsSetup" | "hasVenue" | "revenueScopeNote">> = {},
+): DashboardData => ({
   venueName: "No venue yet",
-  userName: "there",
+  userName: extra.userName ?? "there",
   rangeLabel,
   eventCount: 0,
   verifiedRevenue: 0,
@@ -108,6 +132,9 @@ const emptyData = (rangeLabel: string, error: string | null): DashboardData => (
   events: [],
   calendar: [],
   latestEvents: [],
+  needsSetup: extra.needsSetup ?? false,
+  hasVenue: extra.hasVenue ?? false,
+  revenueScopeNote: extra.revenueScopeNote ?? null,
   error,
 });
 
@@ -124,16 +151,30 @@ export async function fetchDashboard(range: RangeKey): Promise<DashboardData> {
     const email = userData?.user?.email ?? null;
     const userName = email ? email.split("@")[0] : "there";
 
-    const [venueRes, eventsRes, revenueRes] = await Promise.all([
-      supabase.from("venues").select("id, name").limit(1).maybeSingle(),
+    // Tenant scoping: a user with no membership gets the honest empty
+    // state (needsSetup) — never another vendor's rows.
+    const tenantIds = await getUserTenantIds();
+    if (tenantIds.length === 0) {
+      return emptyData(rangeLabel, null, { userName, needsSetup: true, hasVenue: false });
+    }
+    const venues = await getUserVenues();
+    const venueName = venues[0]?.name ?? "No venue yet";
+    const hasVenue = venues.length > 0;
+
+    const [eventsRes, revenueRes] = await Promise.all([
       supabase
         .from("events")
         .select("id, title, description, start_ts, price_label, event_type, status")
+        .in("tenant_id", tenantIds)
         .order("start_ts", { ascending: true })
+        // Cap: first 100 events by start_ts. No pagination in this slice;
+        // events beyond 100 are not shown (a later slice adds pagination).
         .limit(100),
       // Verified revenue only: amount > 0 in the past window.
-      // revenue_events.amount is treated as dollars, matching the prior
-      // display code. If the table stores cents, divide by 100 here.
+      // revenue_events.amount is in DOLLARS (confirmed). Do NOT divide by 100.
+      // NOT tenant-scoped: revenue_events has no tenant_id column, so this
+      // query cannot be filtered by tenant. The result is ecosystem-wide
+      // revenue; the dashboard labels it as such (revenueScopeNote).
       supabase
         .from("revenue_events")
         .select("amount, occurred_at")
@@ -141,12 +182,8 @@ export async function fetchDashboard(range: RangeKey): Promise<DashboardData> {
         .gte("occurred_at", w.revStart.toISOString())
         .lte("occurred_at", w.revEnd.toISOString()),
     ]);
-    if (venueRes.error) throw new Error(`venues: ${venueRes.error.message}`);
     if (eventsRes.error) throw new Error(`events: ${eventsRes.error.message}`);
     if (revenueRes.error) throw new Error(`revenue_events: ${revenueRes.error.message}`);
-
-    const venueName =
-      (venueRes.data as { name?: string | null } | null)?.name ?? "No venue yet";
 
     const allEvents = ((eventsRes.data ?? []) as Record<string, unknown>[]).map((e) => ({
       id: String(e.id ?? ""),
@@ -167,17 +204,26 @@ export async function fetchDashboard(range: RangeKey): Promise<DashboardData> {
       return d >= w.eventStart && d < w.eventEnd;
     });
 
-    // Activity: events-per-day over the window (7 buckets for 7d, else daily
-    // buckets for the first 7 days of the window — chart has 7 slots).
-    const bucketDays: { label: string; start: Date; end: Date }[] = [];
-    for (let i = 0; i < 7; i++) {
-      const start = new Date(w.eventStart);
-      start.setDate(start.getDate() + i);
-      const end = new Date(start);
-      end.setDate(end.getDate() + 1);
-      bucketDays.push({ label: start.toLocaleDateString("en-US", { month: "short", day: "numeric" }), start, end });
+    // Activity: events-per-bucket over the WHOLE selected range. Bucket
+    // width adapts so the chart has at most ~14 buckets: 1 day for 7d,
+    // ~3 days for 30d / month, ~131 days for "all" (5-year window).
+    const windowMs = w.eventEnd.getTime() - w.eventStart.getTime();
+    const windowDays = Math.max(1, Math.ceil(windowMs / 86400000));
+    const bucketDays = Math.max(1, Math.ceil(windowDays / 14));
+    const bucketRanges: { label: string; start: Date; end: Date }[] = [];
+    for (
+      let start = new Date(w.eventStart);
+      start < w.eventEnd;
+      start = new Date(start.getTime() + bucketDays * 86400000)
+    ) {
+      const end = new Date(start.getTime() + bucketDays * 86400000);
+      bucketRanges.push({
+        label: start.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+        start,
+        end,
+      });
     }
-    const activityPoints = bucketDays.map(({ start, end }) =>
+    const activityPoints = bucketRanges.map(({ start, end }) =>
       inWindow.filter((e) => {
         if (!e.startTs) return false;
         const d = new Date(e.startTs);
@@ -185,18 +231,25 @@ export async function fetchDashboard(range: RangeKey): Promise<DashboardData> {
       }).length,
     );
 
-    // Calendar: group window events by date.
+    // Calendar: group window events by date, sorted by full date.
     const calMap = new Map<string, CalendarDay>();
     for (const e of inWindow) {
       if (!e.startTs) continue;
       const d = new Date(e.startTs);
       if (Number.isNaN(d.getTime())) continue;
       const key = d.toDateString();
-      const existing = calMap.get(key) ?? { day: DAY_NAMES[d.getDay()], date: d.getDate(), events: [] };
+      const existing =
+        calMap.get(key) ??
+        {
+          day: DAY_NAMES[d.getDay()],
+          date: d.getDate(),
+          sortKey: new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(),
+          events: [],
+        };
       existing.events.push({ time: formatTime(e.startTs), title: e.title });
       calMap.set(key, existing);
     }
-    const calendar = [...calMap.values()].sort((a, b) => a.date - b.date);
+    const calendar = [...calMap.values()].sort((a, b) => a.sortKey - b.sortKey);
 
     const verifiedRevenue = ((revenueRes.data ?? []) as { amount?: unknown }[]).reduce(
       (sum, r) => sum + (typeof r.amount === "number" ? r.amount : 0),
@@ -212,10 +265,14 @@ export async function fetchDashboard(range: RangeKey): Promise<DashboardData> {
       eventCount: inWindow.length,
       verifiedRevenue,
       activityPoints,
-      activityDays: bucketDays.map((b) => b.label),
+      activityDays: bucketRanges.map((b) => b.label),
       events: inWindow,
       calendar,
       latestEvents,
+      needsSetup: false,
+      hasVenue,
+      revenueScopeNote:
+        "Ecosystem-wide — revenue rows are not yet linked to venues, so per-venue revenue is not available yet.",
       error: null,
     };
   } catch (e) {
