@@ -1,1 +1,32 @@
-{"expo":{"android":{"package":"com.liveworkplus.app"},"experiments":{"typedRoutes":true},"extra":{"eas":{"projectId":"00000000-0000-0000-0000-000000000000"},"router":{}},"ios":{"bundleIdentifier":"com.liveworkplus.app","supportsTablet":true},"name":"Livework+","newArchEnabled":true,"orientation":"portrait","plugins":["expo-router"],"scheme":"liveworkplus","slug":"livework-plus","userInterfaceStyle":"dark","version":"1.0.0"}}
+{
+  "expo": {
+    "android": {
+      "package": "com.liveworkplus.app"
+    },
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "4c34bde7-2050-4a48-951b-a29f4113731f"
+      },
+      "router": {}
+    },
+    "ios": {
+      "bundleIdentifier": "com.liveworkplus.app",
+      "supportsTablet": true
+    },
+    "name": "Livework+",
+    "newArchEnabled": true,
+    "orientation": "portrait",
+    "plugins": [
+      "expo-router",
+      "expo-font"
+    ],
+    "scheme": "liveworkplus",
+    "slug": "livework-plus",
+    "userInterfaceStyle": "dark",
+    "version": "1.0.0",
+    "owner": "markwing"
+  }
+}
