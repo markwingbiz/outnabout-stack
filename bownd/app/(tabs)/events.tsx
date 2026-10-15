@@ -1,5 +1,22 @@
 // app/(tabs)/events.tsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
+// Phase 6 fix notes (see FIX-PLAN.md):
+// - MiniEventCard / BigEventRow navigate to the real detail screen
+//   (/detail?id=...&kind=event). VenueCard navigates to Events filtered
+//   to that venue (params.venue). No more dead cards.
+// - Section chevrons are now functional: tapping collapses/expands the
+//   section (previously a plain non-pressable <Text>).
+// - Favorite toggle (heart) on every event card, wired to
+//   toggleFavorite() in lib/store.ts (previously zero UI call sites).
+// - Accepts params { q, venue } (from Home search + venue orbs +
+//   Personal favorite venues) and applies them as filters, with a
+//   visible "Venue: X" chip that can be cleared.
+// - Top nav + Change Persona point at the CANONICAL (tabs) routes
+//   (previously /events and /persona, which were the bundled-only
+//   duplicate screens — deleted in Phase 6).
+// - Events + venues come from Firestore ONLY. No bundled demo fallback:
+//   an empty catalog shows "No events yet", never demo events.
+// - Visual design is UNCHANGED: same layout, styles, and components.
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -9,16 +26,23 @@ import {
   TextInput,
   FlatList,
   Animated,
-  Platform,
   StatusBar,
+  Alert,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 
-import { EVENTS, EventItem } from "../../data/events";
-import { VENUES } from "../../data/venues";
 import { loadPersona, PersonaProfile, DEFAULT_PERSONA } from "../../lib/personaStore";
-import { fetchEvents } from "../../lib/store";
+import {
+  fetchEvents,
+  fetchVenues,
+  getFavorites,
+  toggleFavorite,
+  type EventItem,
+  type Venue,
+  type FavoriteItem,
+} from "../../lib/store";
+import { useAuth } from "../../lib/auth";
 
 type TimeChip = "tonight" | "tomorrow" | "weekend" | "week" | "all";
 
@@ -119,10 +143,9 @@ function inTimeWindow(e: EventItem, mode: TimeChip) {
   return t >= n && t <= end7;
 }
 
-function matchesSearch(e: EventItem, q: string) {
+function matchesSearch(e: EventItem, venueName: string, q: string) {
   if (!q.trim()) return true;
   const query = q.trim().toLowerCase();
-  const venueName = typeof e.venueId === "string" ? e.venueId : "";
   return (
     e.title.toLowerCase().includes(query) ||
     venueName.toLowerCase().includes(query) ||
@@ -197,10 +220,32 @@ function Chip({
   );
 }
 
-function MiniEventCard({ item }: { item: EventItem }) {
-  const venue = typeof item.venueId === "string" ? item.venueId : "Venue";
+// Favorite heart. Rendered as a SIBLING of the card Pressable (not
+// nested inside it) so tapping the heart never also opens the detail.
+function FavButton({ isFav, onToggle }: { isFav: boolean; onToggle: () => void }) {
   return (
-    <Pressable style={styles.miniCard}>
+    <Pressable onPress={onToggle} hitSlop={8} style={styles.favBtn}>
+      <Text style={styles.favBtnText}>{isFav ? "♥" : "♡"}</Text>
+    </Pressable>
+  );
+}
+
+function MiniEventCard({
+  item,
+  venueName,
+  isFav,
+  onToggleFav,
+  onOpen,
+}: {
+  item: EventItem;
+  venueName: string;
+  isFav: boolean;
+  onToggleFav: () => void;
+  onOpen: () => void;
+}) {
+  return (
+    <View style={styles.miniCard}>
+      <Pressable onPress={onOpen} style={StyleSheet.absoluteFill} />
       <LinearGradient
         colors={["rgba(255,255,255,0.16)", "rgba(255,255,255,0.08)"]}
         start={{ x: 0, y: 0 }}
@@ -212,7 +257,7 @@ function MiniEventCard({ item }: { item: EventItem }) {
         {item.title}
       </Text>
       <Text style={styles.miniVenue} numberOfLines={1}>
-        {venue}
+        {venueName}
       </Text>
       <View style={styles.tagRow}>
         {uniq([...(item.vibeTags || []), ...(item.audienceTags || [])])
@@ -223,13 +268,14 @@ function MiniEventCard({ item }: { item: EventItem }) {
             </View>
           ))}
       </View>
-    </Pressable>
+      <FavButton isFav={isFav} onToggle={onToggleFav} />
+    </View>
   );
 }
 
-function VenueCard({ name }: { name: string }) {
+function VenueCard({ name, onOpen }: { name: string; onOpen: () => void }) {
   return (
-    <Pressable style={styles.venueCard}>
+    <Pressable style={styles.venueCard} onPress={onOpen}>
       <LinearGradient
         colors={["rgba(255,255,255,0.14)", "rgba(255,255,255,0.06)"]}
         start={{ x: 0, y: 0 }}
@@ -246,9 +292,14 @@ function VenueCard({ name }: { name: string }) {
 
 export default function EventsScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ q?: string; venue?: string }>();
+  const { user } = useAuth();
 
   // Explore
   const [query, setQuery] = useState("");
+
+  // Venue filter (from Home orbs / Personal favorite venues)
+  const [venueFilter, setVenueFilter] = useState<string | null>(null);
 
   // Persona
   const [persona, setPersona] = useState<PersonaProfile>(DEFAULT_PERSONA);
@@ -257,30 +308,61 @@ export default function EventsScreen() {
   const [timeChip, setTimeChip] = useState<TimeChip>("tonight");
   const [personalizedOn, setPersonalizedOn] = useState<boolean>(false);
 
+  // Collapsible sections (chevrons toggle these)
+  const [tailoredOpen, setTailoredOpen] = useState(true);
+  const [spotlightOpen, setSpotlightOpen] = useState(true);
+  const [venuesOpen, setVenuesOpen] = useState(true);
+
+  // Favorites (Set of `event:<id>`)
+  const [favKeys, setFavKeys] = useState<Set<string>>(new Set());
+
   const drift = useRef(new Animated.Value(0)).current;
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const p = await loadPersona();
-        setPersona(p || DEFAULT_PERSONA);
-      } catch {
-        setPersona(DEFAULT_PERSONA);
-      }
-    })();
-  }, []);
+  // Persona + favorites refresh whenever the screen gains focus
+  // (persona may have changed on the picker; favorites may have
+  // changed on Detail / Personal).
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true;
+      loadPersona()
+        .then((p) => {
+          if (alive) setPersona(p || DEFAULT_PERSONA);
+        })
+        .catch(() => {
+          if (alive) setPersona(DEFAULT_PERSONA);
+        });
+      getFavorites(user?.uid ?? null)
+        .then((favs) => {
+          if (alive) setFavKeys(new Set(favs.map((f) => `${f.kind}:${f.id}`)));
+        })
+        .catch(() => {});
+      return () => {
+        alive = false;
+      };
+    }, [user?.uid])
+  );
 
-  // Events come from Firestore when configured, else the bundled data.
-  const [events, setEvents] = useState<EventItem[]>(EVENTS);
+  // Events + venues come from Firestore only (no bundled demo fallback).
+  const [events, setEvents] = useState<EventItem[]>([]);
+  const [venues, setVenues] = useState<Venue[]>([]);
   useEffect(() => {
     let alive = true;
-    fetchEvents().then((rows) => {
-      if (alive) setEvents(rows);
+    Promise.all([fetchEvents(), fetchVenues()]).then(([rows, venueRows]) => {
+      if (alive) {
+        setEvents(rows);
+        setVenues(venueRows);
+      }
     });
     return () => {
       alive = false;
     };
   }, []);
+
+  // Incoming params (Home search, venue orbs, Personal favorites).
+  useEffect(() => {
+    if (typeof params.q === "string" && params.q.trim()) setQuery(params.q);
+    if (typeof params.venue === "string" && params.venue.trim()) setVenueFilter(params.venue);
+  }, [params.q, params.venue]);
 
   useEffect(() => {
     const anim = Animated.loop(
@@ -297,6 +379,48 @@ export default function EventsScreen() {
   const driftY = drift.interpolate({ inputRange: [0, 1], outputRange: [8, -8] });
   const glowOpacity = drift.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0.18] });
 
+  const venueNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const v of venues) {
+      map.set(v.id, v.name);
+      map.set(v.name, v.name);
+    }
+    return map;
+  }, [venues]);
+
+  function venueNameFor(e: EventItem): string {
+    return venueNameById.get(e.venueId) ?? (e.venueId || "Venue");
+  }
+
+  function openEvent(id: string) {
+    router.push({ pathname: "/detail", params: { id, kind: "event" } });
+  }
+
+  function openVenue(name: string) {
+    setVenueFilter(name);
+  }
+
+  async function onToggleFav(item: EventItem) {
+    const fav: FavoriteItem = {
+      id: item.id,
+      kind: "event",
+      title: item.title,
+      subtitle: venueNameFor(item),
+      when: formatWhen(item.startISO),
+    };
+    try {
+      const nowFav = await toggleFavorite(user?.uid ?? null, fav);
+      setFavKeys((prev) => {
+        const next = new Set(prev);
+        if (nowFav) next.add(`event:${item.id}`);
+        else next.delete(`event:${item.id}`);
+        return next;
+      });
+    } catch {
+      Alert.alert("Could not save favorite", "Try again.");
+    }
+  }
+
   const spotlight = useMemo(() => {
     return events.filter((e) => e.category === "spotlight")
       .filter((e) => inTimeWindow(e, "week"))
@@ -310,15 +434,19 @@ export default function EventsScreen() {
   }, [persona, events]);
 
   const topVenues = useMemo(() => {
-    const names =
-      Array.isArray(VENUES) && VENUES.length
-        ? VENUES.map((v: any) => (typeof v === "string" ? v : v?.name || v?.title || v?.id || "Venue"))
-        : [];
-    return names.slice(0, 10);
-  }, []);
+    return venues.map((v) => v.name).slice(0, 10);
+  }, [venues]);
 
   const allEvents = useMemo(() => {
-    const base = events.filter((e) => inTimeWindow(e, timeChip)).filter((e) => matchesSearch(e, query));
+    const base = events
+      .filter((e) => inTimeWindow(e, timeChip))
+      .filter((e) => matchesSearch(e, venueNameFor(e), query))
+      .filter((e) =>
+        venueFilter
+          ? venueNameFor(e).toLowerCase() === venueFilter.toLowerCase() ||
+            e.venueId.toLowerCase() === venueFilter.toLowerCase()
+          : true
+      );
 
     const personaFiltered = personalizedOn ? base.filter((e) => matchesPersona(e, persona)) : base;
 
@@ -327,7 +455,8 @@ export default function EventsScreen() {
       const db = parseISO(b.startISO)?.getTime() ?? Number.MAX_SAFE_INTEGER;
       return da - db;
     });
-  }, [persona, personalizedOn, query, timeChip, events]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [persona, personalizedOn, query, timeChip, events, venueFilter, venues]);
 
   const headerSubtitle = useMemo(() => {
     const city = "Kansas City";
@@ -359,12 +488,24 @@ export default function EventsScreen() {
         />
       </View>
 
-      {/* Top nav row (Home / Events / Personal) */}
+      {/* Top nav row (Home / Events / Personal) — canonical (tabs) routes */}
       <View style={styles.topNavRow}>
-        <TopNavButton label="Home" onPress={() => router.replace("/")} />
-        <TopNavButton label="Events" active onPress={() => router.replace("/events")} />
-        <TopNavButton label="Personal" onPress={() => router.replace("/personal")} />
+        <TopNavButton label="Home" onPress={() => router.replace("/(tabs)")} />
+        <TopNavButton label="Events" active onPress={() => router.replace("/(tabs)/events")} />
+        <TopNavButton label="Personal" onPress={() => router.replace("/(tabs)/personal")} />
       </View>
+
+      {/* Venue filter chip (from Home orbs / Personal favorites) */}
+      {!!venueFilter && (
+        <View style={styles.venueFilterRow}>
+          <Text style={styles.venueFilterText} numberOfLines={1}>
+            Venue: {venueFilter}
+          </Text>
+          <Pressable onPress={() => setVenueFilter(null)} hitSlop={8}>
+            <Text style={styles.venueFilterClear}>✕ Clear</Text>
+          </Pressable>
+        </View>
+      )}
 
       {/* Living header (ambient motion + glass + context + chips) */}
       <View style={styles.livingHeaderWrap}>
@@ -418,7 +559,7 @@ export default function EventsScreen() {
                 setPersonalizedOn(false);
               }}
             />
-            <Pressable onPress={() => router.push("/persona")} style={styles.changePersonaBtn}>
+            <Pressable onPress={() => router.push("/(tabs)/persona")} style={styles.changePersonaBtn}>
               <Text style={styles.changePersonaText}>Change persona</Text>
             </Pressable>
           </View>
@@ -426,37 +567,74 @@ export default function EventsScreen() {
       </View>
 
       {/* Sections */}
-      <SectionTitle title="Tailored For You" subtitle="Based on your persona" />
-      <FlatList
-        data={tailored}
-        keyExtractor={(i) => i.id}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ paddingVertical: 10, paddingRight: 16 }}
-        renderItem={({ item }) => <MiniEventCard item={item} />}
+      <SectionTitle
+        title="Tailored For You"
+        subtitle="Based on your persona"
+        open={tailoredOpen}
+        onToggle={() => setTailoredOpen((v) => !v)}
       />
+      {tailoredOpen && (
+        <FlatList
+          data={tailored}
+          keyExtractor={(i) => i.id}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingVertical: 10, paddingRight: 16 }}
+          renderItem={({ item }) => (
+            <MiniEventCard
+              item={item}
+              venueName={venueNameFor(item)}
+              isFav={favKeys.has(`event:${item.id}`)}
+              onToggleFav={() => onToggleFav(item)}
+              onOpen={() => openEvent(item.id)}
+            />
+          )}
+        />
+      )}
 
-      <SectionTitle title="Spotlight Events" subtitle="Hand-picked experiences" />
-      <FlatList
-        data={spotlight}
-        keyExtractor={(i) => i.id}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ paddingVertical: 10, paddingRight: 16 }}
-        renderItem={({ item }) => <MiniEventCard item={item} />}
+      <SectionTitle
+        title="Spotlight Events"
+        subtitle="Hand-picked experiences"
+        open={spotlightOpen}
+        onToggle={() => setSpotlightOpen((v) => !v)}
       />
+      {spotlightOpen && (
+        <FlatList
+          data={spotlight}
+          keyExtractor={(i) => i.id}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingVertical: 10, paddingRight: 16 }}
+          renderItem={({ item }) => (
+            <MiniEventCard
+              item={item}
+              venueName={venueNameFor(item)}
+              isFav={favKeys.has(`event:${item.id}`)}
+              onToggleFav={() => onToggleFav(item)}
+              onOpen={() => openEvent(item.id)}
+            />
+          )}
+        />
+      )}
 
-      <SectionTitle title="Top Venues" subtitle="Great places right now" />
-      <FlatList
-        data={topVenues}
-        keyExtractor={(x, idx) => `${x}_${idx}`}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ paddingVertical: 10, paddingRight: 16 }}
-        renderItem={({ item }) => <VenueCard name={String(item)} />}
+      <SectionTitle
+        title="Top Venues"
+        subtitle="Great places right now"
+        open={venuesOpen}
+        onToggle={() => setVenuesOpen((v) => !v)}
       />
+      {venuesOpen && (
+        <FlatList
+          data={topVenues}
+          keyExtractor={(x, idx) => `${x}_${idx}`}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingVertical: 10, paddingRight: 16 }}
+          renderItem={({ item }) => <VenueCard name={String(item)} onOpen={() => openVenue(String(item))} />}
+        />
+      )}
 
-      <SectionTitle title="All Events" subtitle="Full list" />
+      <SectionTitle title="All Events" subtitle="Full list" open alwaysOpen />
       <View style={{ height: 8 }} />
     </View>
   );
@@ -482,11 +660,26 @@ export default function EventsScreen() {
           data={allEvents}
           keyExtractor={(i) => i.id}
           ListHeaderComponent={Header}
+          ListEmptyComponent={
+            <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
+              <Text style={styles.emptyText}>
+                {events.length === 0
+                  ? "No events yet — check back soon."
+                  : "No events match your filters."}
+              </Text>
+            </View>
+          }
           contentContainerStyle={{ paddingBottom: 22 }}
           showsVerticalScrollIndicator={false}
           renderItem={({ item }) => (
             <View style={{ paddingHorizontal: 16, paddingBottom: 10 }}>
-              <BigEventRow item={item} />
+              <BigEventRow
+                item={item}
+                venueName={venueNameFor(item)}
+                isFav={favKeys.has(`event:${item.id}`)}
+                onToggleFav={() => onToggleFav(item)}
+                onOpen={() => openEvent(item.id)}
+              />
             </View>
           )}
         />
@@ -495,22 +688,50 @@ export default function EventsScreen() {
   );
 }
 
-function SectionTitle({ title, subtitle }: { title: string; subtitle?: string }) {
+function SectionTitle({
+  title,
+  subtitle,
+  open,
+  onToggle,
+  alwaysOpen,
+}: {
+  title: string;
+  subtitle?: string;
+  open?: boolean;
+  onToggle?: () => void;
+  alwaysOpen?: boolean;
+}) {
   return (
     <View style={styles.sectionTitleRow}>
       <View style={{ flex: 1 }}>
         <Text style={styles.sectionTitle}>{title}</Text>
         {!!subtitle && <Text style={styles.sectionSub}>{subtitle}</Text>}
       </View>
-      <Text style={styles.sectionChevron}>›</Text>
+      {!alwaysOpen && (
+        <Pressable onPress={onToggle} hitSlop={8} style={styles.sectionChevronBtn}>
+          <Text style={styles.sectionChevron}>{open ? "˄" : "›"}</Text>
+        </Pressable>
+      )}
     </View>
   );
 }
 
-function BigEventRow({ item }: { item: EventItem }) {
-  const venue = typeof item.venueId === "string" ? item.venueId : "Venue";
+function BigEventRow({
+  item,
+  venueName,
+  isFav,
+  onToggleFav,
+  onOpen,
+}: {
+  item: EventItem;
+  venueName: string;
+  isFav: boolean;
+  onToggleFav: () => void;
+  onOpen: () => void;
+}) {
   return (
-    <Pressable style={styles.bigRow}>
+    <View style={styles.bigRow}>
+      <Pressable onPress={onOpen} style={StyleSheet.absoluteFill} />
       <LinearGradient
         colors={["rgba(255,255,255,0.14)", "rgba(255,255,255,0.06)"]}
         start={{ x: 0.1, y: 0.1 }}
@@ -523,7 +744,7 @@ function BigEventRow({ item }: { item: EventItem }) {
           {item.title}
         </Text>
         <Text style={styles.bigVenue} numberOfLines={1}>
-          {venue}
+          {venueName}
         </Text>
         <View style={styles.tagRow}>
           {uniq([...(item.vibeTags || []), ...(item.audienceTags || [])])
@@ -540,7 +761,8 @@ function BigEventRow({ item }: { item: EventItem }) {
         <Text style={styles.priceText}>{item.priceLabel || ""}</Text>
         <Text style={styles.moreText}>View</Text>
       </View>
-    </Pressable>
+      <FavButton isFav={isFav} onToggle={onToggleFav} />
+    </View>
   );
 }
 
@@ -591,6 +813,38 @@ const styles = StyleSheet.create({
   },
   navBtnTextActive: {
     color: "rgba(255,255,255,0.95)",
+  },
+
+  // Venue filter chip
+  venueFilterRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    marginBottom: 12,
+  },
+  venueFilterText: {
+    flex: 1,
+    color: "rgba(255,255,255,0.90)",
+    fontWeight: "800",
+    fontSize: 13,
+  },
+  venueFilterClear: {
+    color: "rgba(255,255,255,0.75)",
+    fontWeight: "900",
+    fontSize: 13,
+  },
+
+  emptyText: {
+    color: "rgba(255,255,255,0.72)",
+    fontSize: 14,
+    fontWeight: "800",
   },
 
   // Living header
@@ -702,6 +956,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
   },
+  sectionChevronBtn: {
+    padding: 4,
+    marginLeft: 4,
+  },
   sectionChevron: {
     color: "rgba(255,255,255,0.55)",
     fontSize: 26,
@@ -737,6 +995,19 @@ const styles = StyleSheet.create({
     color: "rgba(255,255,255,0.70)",
     fontSize: 12,
     fontWeight: "800",
+  },
+
+  // Favorite heart (sibling of the card pressable, top-right)
+  favBtn: {
+    position: "absolute",
+    top: 8,
+    right: 10,
+    padding: 4,
+  },
+  favBtnText: {
+    color: "rgba(255,255,255,0.95)",
+    fontSize: 20,
+    fontWeight: "900",
   },
 
   // Venue cards

@@ -1,4 +1,9 @@
-// Livework+ Home — Control Center (recreated from the supplied mockup).
+// Livework+ Home — Control Center (Phase 5).
+// Preference + settings rows are HONESTLY DISABLED: no profile settings
+// backend exists yet, so they render at reduced opacity with a "Soon"
+// tag and a group explanation instead of pretending to work. The fake
+// badges ("Serious", "3 set", "12 set", "Current", "Dark") and the fake
+// 85% Profile Strength are deleted. Avatar navigates to Settings (real).
 import React from "react";
 import {
   View,
@@ -10,53 +15,54 @@ import {
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import TopTabs from "../../components/TopTabs";
-import Ring from "../../components/Ring";
 import { THEME } from "../../lib/theme";
 
 type Row = {
   icon: string;
   title: string;
   sub: string;
-  badge?: string;
-  badgeColor?: string;
 };
 
 const PREFERENCES: Row[] = [
-  { icon: "heart", title: "Relationship Goals", sub: "Define what you're looking for", badge: "Serious", badgeColor: "#8B5CF6" },
-  { icon: "person", title: "Deal Breakers", sub: "Set your must-haves", badge: "3 set", badgeColor: "#38BDF8" },
-  { icon: "options", title: "Preferences", sub: "Customize what matters to you", badge: "12 set", badgeColor: "#38BDF8" },
-  { icon: "location", title: "Location", sub: "Manage your location preferences", badge: "Current", badgeColor: "#34D399" },
+  { icon: "heart", title: "Relationship Goals", sub: "Define what you're looking for" },
+  { icon: "person", title: "Deal Breakers", sub: "Set your must-haves" },
+  { icon: "options", title: "Preferences", sub: "Customize what matters to you" },
+  { icon: "location", title: "Location", sub: "Manage your location preferences" },
 ];
 
 const SETTINGS: Row[] = [
   { icon: "notifications", title: "Notifications", sub: "Manage alerts and reminders" },
   { icon: "lock-closed", title: "Privacy & Safety", sub: "Control your privacy settings" },
   { icon: "eye", title: "Visibility", sub: "Control your profile visibility" },
-  { icon: "color-palette", title: "Appearance", sub: "Customize your app experience", badge: "Dark 🌙", badgeColor: "#3B3B4D" },
+  { icon: "color-palette", title: "Appearance", sub: "Customize your app experience" },
 ];
 
-function RowCard({ row }: { row: Row }) {
+const DISABLED_NOTE =
+  "Preference and settings editing needs the profile settings backend — not yet built. These rows are disabled until then.";
+
+/** Disabled row: visibly disabled, no press handler, "Soon" tag. */
+function DisabledRow({ row }: { row: Row }) {
   return (
-    <Pressable style={styles.rowCard} onPress={() => {}}>
+    <View style={[styles.rowCard, styles.rowDisabled]}>
       <View style={styles.rowIcon}>
-        <Ionicons name={row.icon as any} size={20} color={THEME.purpleBright} />
+        <Ionicons name={row.icon as never} size={20} color={THEME.purpleBright} />
       </View>
       <View style={styles.rowMid}>
         <Text style={styles.rowTitle}>{row.title}</Text>
         <Text style={styles.rowSub}>{row.sub}</Text>
       </View>
-      {!!row.badge && (
-        <View style={[styles.badge, { backgroundColor: row.badgeColor ?? "#8B5CF6" }]}>
-          <Text style={styles.badgeText}>{row.badge}</Text>
-        </View>
-      )}
+      <View style={styles.soonTag}>
+        <Text style={styles.soonText}>Soon</Text>
+      </View>
       <Ionicons name="chevron-forward" size={18} color={THEME.textFaint} />
-    </Pressable>
+    </View>
   );
 }
 
 export default function HomeScreen() {
+  const router = useRouter();
   return (
     <SafeAreaView style={styles.root}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
@@ -65,9 +71,13 @@ export default function HomeScreen() {
           <Text style={styles.logo}>
             Livework<Text style={styles.logoPlus}>+</Text>
           </Text>
-          <View style={styles.avatar}>
+          <Pressable
+            style={styles.avatar}
+            onPress={() => router.push("/(tabs)/settings")}
+            accessibilityLabel="Open Settings"
+          >
             <Ionicons name="person" size={22} color="rgba(255,255,255,0.85)" />
-          </View>
+          </Pressable>
         </View>
 
         <TopTabs />
@@ -90,37 +100,35 @@ export default function HomeScreen() {
           </View>
         </LinearGradient>
 
-        {/* Preferences */}
+        {/* Preferences — disabled until the profile settings backend exists */}
         <Text style={styles.sectionLabel}>Preferences</Text>
         <View style={styles.group}>
           {PREFERENCES.map((r) => (
-            <RowCard key={r.title} row={r} />
+            <DisabledRow key={r.title} row={r} />
           ))}
         </View>
+        <Text style={styles.disabledNote}>{DISABLED_NOTE}</Text>
 
-        {/* Your Settings */}
+        {/* Your Settings — disabled until the settings backend exists */}
         <Text style={styles.sectionLabel}>Your Settings</Text>
         <View style={styles.group}>
           {SETTINGS.map((r) => (
-            <RowCard key={r.title} row={r} />
+            <DisabledRow key={r.title} row={r} />
           ))}
         </View>
+        <Text style={styles.disabledNote}>{DISABLED_NOTE}</Text>
 
-        {/* Profile Strength */}
+        {/* Profile Strength — no profile model exists, so no number is shown */}
         <View style={styles.strengthCard}>
-          <Ring pct={85} size={76} center="85%" />
           <View style={{ flex: 1 }}>
-            <Text style={styles.strengthTitle}>Profile Strength ✨</Text>
+            <Text style={styles.strengthTitle}>Profile Strength</Text>
             <Text style={styles.strengthSub}>
-              Complete your profile to get better matches
+              Not calculated yet. Profile strength needs the profile model (not yet built).
             </Text>
-            <View style={styles.strengthBar}>
-              <View style={[styles.strengthFill, { width: "85%" }]} />
-            </View>
           </View>
-          <Pressable style={styles.improveBtn} onPress={() => {}}>
-            <Text style={styles.improveText}>Improve</Text>
-          </Pressable>
+          <View style={[styles.improveBtn, styles.improveBtnDisabled]}>
+            <Text style={[styles.improveText, styles.improveTextDisabled]}>Improve</Text>
+          </View>
         </View>
 
         <View style={{ height: 12 }} />
@@ -179,7 +187,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.cardBorder,
     overflow: "hidden",
-    marginBottom: 22,
+    marginBottom: 8,
   },
   rowCard: {
     flexDirection: "row",
@@ -190,6 +198,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "rgba(255,255,255,0.05)",
   },
+  rowDisabled: { opacity: 0.55 },
   rowIcon: {
     width: 40,
     height: 40,
@@ -201,12 +210,14 @@ const styles = StyleSheet.create({
   rowMid: { flex: 1 },
   rowTitle: { color: "#fff", fontSize: 15, fontWeight: "800" },
   rowSub: { color: THEME.textMuted, fontSize: 12, marginTop: 2 },
-  badge: {
+  soonTag: {
+    backgroundColor: "rgba(255,255,255,0.12)",
+    borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 5,
-    borderRadius: 999,
   },
-  badgeText: { color: "#fff", fontSize: 11, fontWeight: "800" },
+  soonText: { color: THEME.textMuted, fontSize: 11, fontWeight: "800" },
+  disabledNote: { color: THEME.textFaint, fontSize: 12, lineHeight: 16, marginBottom: 22 },
   strengthCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -219,14 +230,6 @@ const styles = StyleSheet.create({
   },
   strengthTitle: { color: "#fff", fontSize: 15, fontWeight: "900" },
   strengthSub: { color: THEME.textMuted, fontSize: 12, marginTop: 4, lineHeight: 16 },
-  strengthBar: {
-    marginTop: 10,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: "rgba(255,255,255,0.12)",
-    overflow: "hidden",
-  },
-  strengthFill: { height: "100%", backgroundColor: THEME.purpleBright, borderRadius: 3 },
   improveBtn: {
     borderWidth: 1,
     borderColor: THEME.purpleBright,
@@ -234,5 +237,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
   },
+  improveBtnDisabled: { opacity: 0.5 },
   improveText: { color: THEME.purpleBright, fontWeight: "800", fontSize: 13 },
+  improveTextDisabled: { color: THEME.textMuted },
 });

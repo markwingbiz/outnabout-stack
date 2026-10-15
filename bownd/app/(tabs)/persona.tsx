@@ -103,8 +103,9 @@ export default function Persona() {
       } catch {}
     }
 
+    // Phase 6: canonical route. The root /events duplicate is deleted.
     if (router.canGoBack()) router.back();
-    else router.push("/events");
+    else router.push("/(tabs)/events");
   }
 
   /* ---------------- UI ---------------- */

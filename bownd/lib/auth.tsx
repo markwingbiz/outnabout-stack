@@ -18,7 +18,6 @@ import { auth, requireAuth, firebaseConfigured } from "./firebase";
 import {
   ensureUserProfile,
   getUserProfile,
-  seedEventsIfEmpty,
   type UserProfile,
 } from "./store";
 
@@ -52,8 +51,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await ensureUserProfile(u.uid, u.email, u.displayName);
           const p = await getUserProfile(u.uid);
           setProfile(p);
-          // Seed demo events/venues on first signed-in launch (no-op if seeded).
-          seedEventsIfEmpty().catch(() => {});
+          // Phase 6: NO demo seed. Bundled demo data must never be
+          // written into Firestore as if it were real. Real events
+          // arrive via Forge / bownd-sync / Livework publish.
         } catch {
           setProfile(null);
         }

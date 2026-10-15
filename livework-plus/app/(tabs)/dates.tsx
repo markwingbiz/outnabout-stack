@@ -1,5 +1,9 @@
-// Livework+ Dates — Date Planning (recreated from the supplied mockup).
-import React from "react";
+// Livework+ Dates — Date Planning (Phase 5).
+// Every action has a real handler backed by on-device storage
+// (AsyncStorage, via lib/local-store.ts) — labeled "Saved on this device".
+// Success is shown only after the storage write resolves. Nothing here
+// claims server sync. Ideas are editorial suggestions, not fake data.
+import React, { useCallback, useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -7,11 +11,24 @@ import {
   ScrollView,
   Pressable,
   SafeAreaView,
+  TextInput,
+  Alert,
+  ActivityIndicator,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import TopTabs from "../../components/TopTabs";
 import { THEME } from "../../lib/theme";
+import {
+  addSavedIdea,
+  addScheduledDate,
+  loadBudget,
+  loadSavedIdeas,
+  loadScheduledDates,
+  saveBudget,
+  type SavedIdea,
+  type ScheduledDate,
+} from "../../lib/local-store";
 
 type Idea = { icon: string; title: string; sub: string; tint: string };
 
@@ -21,16 +38,144 @@ const IDEAS: Idea[] = [
   { icon: "film", title: "At-home movie night", sub: "Pick a classic, make snacks, and unwind together.", tint: "#F59E0B" },
 ];
 
-type Action = { icon: string; title: string; sub: string; tint: string };
-
-const ACTIONS: Action[] = [
-  { icon: "calendar", title: "Schedule Date", sub: "Pick a time that works", tint: "#8B5CF6" },
-  { icon: "bookmark", title: "Save Idea", sub: "Keep for later", tint: "#EC4899" },
-  { icon: "wallet", title: "Set Budget", sub: "Plan with clarity", tint: "#38BDF8" },
-  { icon: "list", title: "View Saved", sub: "See your ideas", tint: "#34D399" },
-];
+const RECOMMENDATION: Idea = {
+  icon: "business",
+  title: "Rooftop dinner with city view",
+  sub: "A rooftop table with a city view — good for a first or anniversary date.",
+  tint: "#EC4899",
+};
 
 export default function DatesScreen() {
+  const [expandedTitle, setExpandedTitle] = useState<string | null>(null);
+  const [savedIdeas, setSavedIdeas] = useState<SavedIdea[]>([]);
+  const [scheduled, setScheduled] = useState<ScheduledDate[]>([]);
+  const [budget, setBudget] = useState("");
+  const [showSchedule, setShowSchedule] = useState(false);
+  const [showBudget, setShowBudget] = useState(false);
+  const [showSaved, setShowSaved] = useState(false);
+  const [schedTitle, setSchedTitle] = useState("");
+  const [schedDate, setSchedDate] = useState("");
+  const [schedNote, setSchedNote] = useState("");
+  const [budgetInput, setBudgetInput] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [loadingSaved, setLoadingSaved] = useState(false);
+
+  const refreshSaved = useCallback(async () => {
+    setLoadingSaved(true);
+    try {
+      const [ideas, dates, b] = await Promise.all([loadSavedIdeas(), loadScheduledDates(), loadBudget()]);
+      setSavedIdeas(ideas);
+      setScheduled(dates);
+      setBudget(b);
+      setBudgetInput(b);
+    } finally {
+      setLoadingSaved(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshSaved();
+  }, [refreshSaved]);
+
+  const isSaved = (title: string) => savedIdeas.some((i) => i.title === title);
+
+  async function saveIdea(idea: { title: string; sub: string }) {
+    if (isSaved(idea.title)) return;
+    setSaving(true);
+    try {
+      const next = await addSavedIdea(idea);
+      setSavedIdeas(next);
+    } catch {
+      Alert.alert("Could not save", "The idea was not saved. Try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function onScheduleSave() {
+    if (!schedTitle.trim() || !schedDate.trim()) {
+      Alert.alert("Missing details", "Enter an idea and a date.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const next = await addScheduledDate({
+        title: schedTitle.trim(),
+        dateText: schedDate.trim(),
+        note: schedNote.trim(),
+      });
+      setScheduled(next);
+      setShowSchedule(false);
+      setSchedTitle("");
+      setSchedDate("");
+      setSchedNote("");
+    } catch {
+      Alert.alert("Could not save", "The date was not saved. Try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function onBudgetSave() {
+    setSaving(true);
+    try {
+      await saveBudget(budgetInput.trim());
+      setBudget(budgetInput.trim());
+      setShowBudget(false);
+    } catch {
+      Alert.alert("Could not save", "The budget was not saved. Try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function onSaveIdeaAction() {
+    const idea = IDEAS.find((i) => i.title === expandedTitle) ?? null;
+    if (!idea) {
+      Alert.alert("Select an idea first", "Tap an idea to open it, then save it.");
+      return;
+    }
+    void saveIdea(idea);
+  }
+
+  function renderIdeaRow(idea: Idea) {
+    const expanded = expandedTitle === idea.title;
+    const saved = isSaved(idea.title);
+    return (
+      <View key={idea.title}>
+        <Pressable
+          style={styles.ideaRow}
+          onPress={() => setExpandedTitle(expanded ? null : idea.title)}
+        >
+          <View style={styles.ideaPhoto}>
+            <Ionicons name={idea.icon as never} size={26} color="#fff" />
+          </View>
+          <View style={[styles.ideaIcon, { backgroundColor: `${idea.tint}30` }]}>
+            <Ionicons name={idea.icon as never} size={22} color={idea.tint} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.ideaTitle}>{idea.title}</Text>
+            <Text style={styles.ideaSub}>{idea.sub}</Text>
+          </View>
+          <Ionicons name={expanded ? "chevron-up" : "chevron-down"} size={18} color={THEME.textFaint} />
+        </Pressable>
+        {expanded && (
+          <View style={styles.expanded}>
+            <Text style={styles.expandedText}>{idea.sub}</Text>
+            <Pressable
+              style={[styles.saveBtn, saved && styles.saveBtnDone]}
+              onPress={() => void saveIdea(idea)}
+              disabled={saved || saving}
+            >
+              <Text style={styles.saveBtnText}>{saved ? "Saved ✓" : saving ? "Saving…" : "Save Idea"}</Text>
+            </Pressable>
+            <Text style={styles.deviceNote}>Saved on this device.</Text>
+          </View>
+        )}
+      </View>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.root}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
@@ -63,42 +208,146 @@ export default function DatesScreen() {
         </LinearGradient>
 
         {/* Date ideas */}
-        <View style={styles.group}>
-          {IDEAS.map((idea) => (
-            <Pressable key={idea.title} style={styles.ideaRow} onPress={() => {}}>
-              <View style={styles.ideaPhoto}>
-                <Ionicons name={idea.icon as any} size={26} color="#fff" />
-              </View>
-              <View style={[styles.ideaIcon, { backgroundColor: `${idea.tint}30` }]}>
-                <Ionicons name={idea.icon as any} size={22} color={idea.tint} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.ideaTitle}>{idea.title}</Text>
-                <Text style={styles.ideaSub}>{idea.sub}</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={THEME.textFaint} />
-            </Pressable>
-          ))}
-        </View>
+        <View style={styles.group}>{IDEAS.map((idea) => renderIdeaRow(idea))}</View>
 
-        {/* Date Actions */}
+        {/* Date Actions — all real, on-device */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Date Actions</Text>
-          <Text style={styles.cardSub}>Turn ideas into plans</Text>
+          <Text style={styles.cardSub}>Turn ideas into plans · Saved on this device</Text>
           <View style={styles.actionGrid}>
-            {ACTIONS.map((a) => (
-              <Pressable key={a.title} style={styles.actionBtn} onPress={() => {}}>
-                <View style={[styles.actionIcon, { backgroundColor: `${a.tint}30` }]}>
-                  <Ionicons name={a.icon as any} size={22} color={a.tint} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.actionTitle}>{a.title}</Text>
-                  <Text style={styles.actionSub}>{a.sub}</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={16} color={THEME.textFaint} />
-              </Pressable>
-            ))}
+            <Pressable style={styles.actionBtn} onPress={() => setShowSchedule((v) => !v)}>
+              <View style={[styles.actionIcon, { backgroundColor: "#8B5CF630" }]}>
+                <Ionicons name="calendar" size={22} color="#8B5CF6" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.actionTitle}>Schedule Date</Text>
+                <Text style={styles.actionSub}>Pick a time that works</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={THEME.textFaint} />
+            </Pressable>
+            <Pressable style={styles.actionBtn} onPress={onSaveIdeaAction}>
+              <View style={[styles.actionIcon, { backgroundColor: "#EC489930" }]}>
+                <Ionicons name="bookmark" size={22} color="#EC4899" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.actionTitle}>Save Idea</Text>
+                <Text style={styles.actionSub}>Keep for later</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={THEME.textFaint} />
+            </Pressable>
+            <Pressable style={styles.actionBtn} onPress={() => setShowBudget((v) => !v)}>
+              <View style={[styles.actionIcon, { backgroundColor: "#38BDF830" }]}>
+                <Ionicons name="wallet" size={22} color="#38BDF8" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.actionTitle}>Set Budget</Text>
+                <Text style={styles.actionSub}>Plan with clarity</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={THEME.textFaint} />
+            </Pressable>
+            <Pressable
+              style={styles.actionBtn}
+              onPress={() => {
+                setShowSaved((v) => !v);
+                void refreshSaved();
+              }}
+            >
+              <View style={[styles.actionIcon, { backgroundColor: "#34D39930" }]}>
+                <Ionicons name="list" size={22} color="#34D399" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.actionTitle}>View Saved</Text>
+                <Text style={styles.actionSub}>See your ideas</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={THEME.textFaint} />
+            </Pressable>
           </View>
+
+          {showSchedule && (
+            <View style={styles.form}>
+              <Text style={styles.formLabel}>Idea</Text>
+              <TextInput
+                value={schedTitle}
+                onChangeText={setSchedTitle}
+                placeholder="e.g. Dinner and walk"
+                placeholderTextColor={THEME.textFaint}
+                style={styles.input}
+              />
+              <Text style={styles.formLabel}>Date</Text>
+              <TextInput
+                value={schedDate}
+                onChangeText={setSchedDate}
+                placeholder="e.g. Friday, 7:00 PM"
+                placeholderTextColor={THEME.textFaint}
+                style={styles.input}
+              />
+              <Text style={styles.formLabel}>Note (optional)</Text>
+              <TextInput
+                value={schedNote}
+                onChangeText={setSchedNote}
+                placeholder="Anything to remember"
+                placeholderTextColor={THEME.textFaint}
+                style={styles.input}
+              />
+              <Pressable style={styles.saveBtn} onPress={() => void onScheduleSave()} disabled={saving}>
+                <Text style={styles.saveBtnText}>{saving ? "Saving…" : "Save Date"}</Text>
+              </Pressable>
+              <Text style={styles.deviceNote}>Saved on this device.</Text>
+            </View>
+          )}
+
+          {showBudget && (
+            <View style={styles.form}>
+              <Text style={styles.formLabel}>Monthly date budget</Text>
+              <TextInput
+                value={budgetInput}
+                onChangeText={(v) => setBudgetInput(v.replace(/[^0-9.]/g, ""))}
+                placeholder="e.g. 200"
+                placeholderTextColor={THEME.textFaint}
+                style={styles.input}
+                keyboardType="decimal-pad"
+              />
+              <Pressable style={styles.saveBtn} onPress={() => void onBudgetSave()} disabled={saving}>
+                <Text style={styles.saveBtnText}>{saving ? "Saving…" : "Save Budget"}</Text>
+              </Pressable>
+              <Text style={styles.deviceNote}>Saved on this device.</Text>
+            </View>
+          )}
+
+          {showSaved && (
+            <View style={styles.savedBox}>
+              {loadingSaved ? (
+                <ActivityIndicator color={THEME.purpleBright} />
+              ) : (
+                <>
+                  <Text style={styles.savedHeading}>Saved ideas</Text>
+                  {savedIdeas.length === 0 ? (
+                    <Text style={styles.savedEmpty}>Nothing saved yet.</Text>
+                  ) : (
+                    savedIdeas.map((i) => (
+                      <Text key={i.title} style={styles.savedLine}>
+                        • {i.title}
+                      </Text>
+                    ))
+                  )}
+                  <Text style={[styles.savedHeading, { marginTop: 12 }]}>Scheduled dates</Text>
+                  {scheduled.length === 0 ? (
+                    <Text style={styles.savedEmpty}>Nothing scheduled yet.</Text>
+                  ) : (
+                    scheduled.map((d, idx) => (
+                      <Text key={`${d.title}-${idx}`} style={styles.savedLine}>
+                        • {d.title} — {d.dateText}
+                        {d.note ? ` (${d.note})` : ""}
+                      </Text>
+                    ))
+                  )}
+                  <Text style={[styles.savedHeading, { marginTop: 12 }]}>Budget</Text>
+                  <Text style={styles.savedLine}>{budget ? `$${budget} / month` : "No budget set."}</Text>
+                  <Text style={styles.deviceNote}>Saved on this device.</Text>
+                </>
+              )}
+            </View>
+          )}
         </View>
 
         {/* Recommended */}
@@ -108,12 +357,30 @@ export default function DatesScreen() {
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.recoLabel}>Recommended for you</Text>
-            <Text style={styles.recoTitle}>Rooftop dinner with city view</Text>
+            <Text style={styles.recoTitle}>{RECOMMENDATION.title}</Text>
           </View>
-          <Pressable style={styles.viewBtn} onPress={() => {}}>
-            <Text style={styles.viewText}>View</Text>
+          <Pressable
+            style={styles.viewBtn}
+            onPress={() => setExpandedTitle(expandedTitle === RECOMMENDATION.title ? null : RECOMMENDATION.title)}
+          >
+            <Text style={styles.viewText}>{expandedTitle === RECOMMENDATION.title ? "Hide" : "View"}</Text>
           </Pressable>
         </View>
+        {expandedTitle === RECOMMENDATION.title && (
+          <View style={[styles.card, { marginTop: 10 }]}>
+            <Text style={styles.expandedText}>{RECOMMENDATION.sub}</Text>
+            <Pressable
+              style={[styles.saveBtn, isSaved(RECOMMENDATION.title) && styles.saveBtnDone]}
+              onPress={() => void saveIdea(RECOMMENDATION)}
+              disabled={isSaved(RECOMMENDATION.title) || saving}
+            >
+              <Text style={styles.saveBtnText}>
+                {isSaved(RECOMMENDATION.title) ? "Saved ✓" : saving ? "Saving…" : "Save Idea"}
+              </Text>
+            </Pressable>
+            <Text style={styles.deviceNote}>Saved on this device.</Text>
+          </View>
+        )}
 
         <View style={{ height: 12 }} />
       </ScrollView>
@@ -197,6 +464,18 @@ const styles = StyleSheet.create({
   },
   ideaTitle: { color: "#fff", fontSize: 15, fontWeight: "800" },
   ideaSub: { color: THEME.textMuted, fontSize: 12, marginTop: 3, lineHeight: 16 },
+  expanded: { paddingHorizontal: 12, paddingBottom: 12, gap: 8 },
+  expandedText: { color: THEME.textMuted, fontSize: 13, lineHeight: 18 },
+  saveBtn: {
+    backgroundColor: THEME.purpleDeep,
+    borderRadius: 999,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    alignSelf: "flex-start",
+  },
+  saveBtnDone: { backgroundColor: "rgba(52,211,153,0.25)" },
+  saveBtnText: { color: "#fff", fontSize: 13, fontWeight: "800" },
+  deviceNote: { color: THEME.textFaint, fontSize: 11, marginTop: 2 },
   card: {
     backgroundColor: THEME.card,
     borderRadius: THEME.radius,
@@ -229,6 +508,22 @@ const styles = StyleSheet.create({
   },
   actionTitle: { color: "#fff", fontSize: 13, fontWeight: "800" },
   actionSub: { color: THEME.textMuted, fontSize: 11, marginTop: 2 },
+  form: { marginTop: 16, gap: 8, borderTopWidth: 1, borderTopColor: "rgba(255,255,255,0.08)", paddingTop: 14 },
+  formLabel: { color: THEME.textMuted, fontSize: 12, fontWeight: "700" },
+  input: {
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.1)",
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    height: 48,
+    color: "#fff",
+    fontSize: 15,
+  },
+  savedBox: { marginTop: 16, borderTopWidth: 1, borderTopColor: "rgba(255,255,255,0.08)", paddingTop: 14, gap: 4 },
+  savedHeading: { color: "#fff", fontSize: 13, fontWeight: "800" },
+  savedEmpty: { color: THEME.textMuted, fontSize: 12 },
+  savedLine: { color: THEME.textMuted, fontSize: 12, lineHeight: 17 },
   recoCard: {
     flexDirection: "row",
     alignItems: "center",

@@ -1,8 +1,11 @@
-// Livework — Add New Event form (matches the mockup's right panel:
-// Event Title, Date & Time, Event Type, Performers/Artists,
-// Ticket Type & Price, General Admission, Add Ticket Type, Event Image).
-// Submitting writes to Supabase `events` when configured; otherwise it
-// confirms locally (the Supabase tables are currently empty).
+// Livework — Add New Event form (Phase 5).
+// Ticket tiers are real and editable, and saved in the existing
+// `events.price_label` column ("GA — $25; VIP — $50"). Date is validated
+// before save. No fake success: unconfigured Supabase shows an error and
+// does NOT navigate back; success is shown only after the insert
+// confirms. Event Image stays disabled (needs expo-image-picker +
+// Supabase Storage — not installed yet).
+// Requires phase-a-ui Auth (<AuthProvider> in app/_layout.tsx).
 import React, { useState } from "react";
 import {
   View,
@@ -13,11 +16,13 @@ import {
   SafeAreaView,
   TextInput,
   Alert,
+  ActivityIndicator,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { THEME } from "../lib/theme";
-import { supabase } from "../lib/supabase";
+import { supabase, supabaseConfigured } from "../lib/supabase";
+import { useAuth } from "../lib/auth";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -28,41 +33,105 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+type Tier = { id: string; name: string; price: string };
+
+let tierSeq = 0;
+function newTier(name = "", price = ""): Tier {
+  tierSeq += 1;
+  return { id: `tier-${Date.now()}-${tierSeq}`, name, price };
+}
+
 export default function AddEventScreen() {
   const router = useRouter();
+  const { session, loading: authLoading } = useAuth();
   const [title, setTitle] = useState("");
   const [date, setDate] = useState("");
+  const [dateError, setDateError] = useState<string | null>(null);
   const [eventType, setEventType] = useState("General Admission");
   const [performers, setPerformers] = useState("");
-  const [price, setPrice] = useState("");
+  const [tiers, setTiers] = useState<Tier[]>([newTier("General Admission", "")]);
   const [busy, setBusy] = useState(false);
+
+  function validateDate(value: string): string | null {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const parsed = new Date(trimmed);
+    if (Number.isNaN(parsed.getTime())) {
+      return "Enter a valid date & time (e.g. May 24, 2026, 8:00 PM).";
+    }
+    return null;
+  }
+
+  function updateTier(id: string, patch: Partial<Tier>) {
+    setTiers((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+  }
+
+  function removeTier(id: string) {
+    setTiers((prev) => (prev.length <= 1 ? prev : prev.filter((t) => t.id !== id)));
+  }
 
   async function onSave() {
     if (!title.trim()) {
       Alert.alert("Missing title", "Enter an event title.");
       return;
     }
+    const err = validateDate(date);
+    setDateError(err);
+    if (err) return;
+    if (!supabaseConfigured || !supabase) {
+      Alert.alert(
+        "Supabase is not configured",
+        "Event was not saved. Set EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY, then try again.",
+      );
+      return;
+    }
+    const filledTiers = tiers.filter((t) => t.name.trim() || t.price.trim());
+    const priceLabel =
+      filledTiers.length > 0
+        ? filledTiers.map((t) => `${t.name.trim() || "Ticket"}${t.price.trim() ? ` — $${t.price.trim().replace(/^\$/, "")}` : ""}`).join("; ")
+        : null;
     setBusy(true);
     try {
-      if (supabase) {
-        const { error } = await supabase.from("events").insert({
-          title: title.trim(),
-          description: performers.trim() || null,
-          start_ts: date.trim() ? new Date(date.trim()).toISOString() : null,
-          price_label: price.trim() || null,
-          event_type: eventType,
-          status: "draft",
-        });
-        if (error) throw error;
-      }
-      Alert.alert("Event saved", supabase ? "Saved to Supabase." : "Saved locally (Supabase not configured).", [
+      const { error } = await supabase.from("events").insert({
+        title: title.trim(),
+        description: performers.trim() || null,
+        start_ts: date.trim() ? new Date(date.trim()).toISOString() : null,
+        price_label: priceLabel,
+        event_type: eventType,
+        status: "draft",
+      });
+      if (error) throw error;
+      // Success only after the backend confirms the insert.
+      Alert.alert("Event saved", "Saved to Supabase.", [
         { text: "OK", onPress: () => router.back() },
       ]);
-    } catch (e: any) {
-      Alert.alert("Could not save", e?.message ?? "Try again.");
+    } catch (e: unknown) {
+      Alert.alert("Could not save", e instanceof Error ? e.message : "Try again.");
     } finally {
       setBusy(false);
     }
+  }
+
+  if (authLoading) {
+    return (
+      <SafeAreaView style={styles.root}>
+        <ActivityIndicator color={THEME.purple} size="large" style={{ marginTop: 40 }} />
+      </SafeAreaView>
+    );
+  }
+
+  if (!session) {
+    return (
+      <SafeAreaView style={styles.root}>
+        <View style={styles.center}>
+          <Text style={styles.centerTitle}>Sign in to create events</Text>
+          <Text style={styles.centerSub}>Events are saved to your account. Sign in to continue.</Text>
+          <Pressable style={styles.centerBtn} onPress={() => router.push("/(auth)/login")}>
+            <Text style={styles.centerBtnText}>Sign in</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
   }
 
   return (
@@ -89,11 +158,15 @@ export default function AddEventScreen() {
         <Field label="Date & Time">
           <TextInput
             value={date}
-            onChangeText={setDate}
-            placeholder="May 24, 2024, 8:00 PM"
+            onChangeText={(v) => {
+              setDate(v);
+              setDateError(validateDate(v));
+            }}
+            placeholder="May 24, 2026, 8:00 PM"
             placeholderTextColor={THEME.textFaint}
             style={styles.input}
           />
+          {!!dateError && <Text style={styles.inlineError}>{dateError}</Text>}
         </Field>
 
         <Field label="Event Type">
@@ -120,25 +193,46 @@ export default function AddEventScreen() {
           />
         </Field>
 
-        <Field label="Ticket Type & Price">
-          <TextInput
-            value={price}
-            onChangeText={setPrice}
-            placeholder="General Admission — $25"
-            placeholderTextColor={THEME.textFaint}
-            style={styles.input}
-            keyboardType="decimal-pad"
-          />
+        <Field label="Ticket Types & Prices">
+          {tiers.map((t) => (
+            <View key={t.id} style={styles.tierRow}>
+              <TextInput
+                value={t.name}
+                onChangeText={(v) => updateTier(t.id, { name: v })}
+                placeholder="Ticket name"
+                placeholderTextColor={THEME.textFaint}
+                style={[styles.input, styles.tierName]}
+              />
+              <TextInput
+                value={t.price}
+                onChangeText={(v) => updateTier(t.id, { price: v.replace(/[^0-9.]/g, "") })}
+                placeholder="$"
+                placeholderTextColor={THEME.textFaint}
+                style={[styles.input, styles.tierPrice]}
+                keyboardType="decimal-pad"
+              />
+              <Pressable onPress={() => removeTier(t.id)} hitSlop={8} disabled={tiers.length <= 1}>
+                <Ionicons
+                  name="close-circle"
+                  size={24}
+                  color={tiers.length <= 1 ? THEME.textFaint : "#F9A8D4"}
+                />
+              </Pressable>
+            </View>
+          ))}
         </Field>
 
-        <Pressable style={styles.addTicket} onPress={() => {}}>
+        <Pressable style={styles.addTicket} onPress={() => setTiers((prev) => [...prev, newTier("", "")])}>
           <Text style={styles.addTicketText}>+ Add Ticket Type</Text>
         </Pressable>
 
-        <Pressable style={styles.imageBox} onPress={() => {}}>
+        <View style={[styles.imageBox, styles.imageBoxDisabled]}>
           <Ionicons name="image-outline" size={28} color={THEME.textFaint} />
           <Text style={styles.imageText}>Event Image</Text>
-        </Pressable>
+          <Text style={styles.disabledNote}>
+            Event images need image upload (expo-image-picker + Supabase Storage) — not installed yet.
+          </Text>
+        </View>
 
         <Pressable style={[styles.saveBtn, busy && { opacity: 0.7 }]} onPress={onSave} disabled={busy}>
           <Text style={styles.saveText}>{busy ? "Saving…" : "Create Event"}</Text>
@@ -151,6 +245,11 @@ export default function AddEventScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: THEME.bg },
   content: { paddingHorizontal: 18, paddingTop: 10, paddingBottom: 24, gap: 4 },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 24, gap: 12 },
+  centerTitle: { color: "#fff", fontSize: 20, fontWeight: "900", textAlign: "center" },
+  centerSub: { color: THEME.textMuted, fontSize: 14, textAlign: "center", lineHeight: 20 },
+  centerBtn: { backgroundColor: THEME.purple, borderRadius: 999, paddingHorizontal: 24, paddingVertical: 12, marginTop: 8 },
+  centerBtnText: { color: "#fff", fontSize: 15, fontWeight: "800" },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -170,6 +269,7 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 15,
   },
+  inlineError: { color: "#F9A8D4", fontSize: 12, marginTop: 6, lineHeight: 16 },
   typeRow: { flexDirection: "row", gap: 8, flexWrap: "wrap" },
   typeBtn: {
     borderWidth: 1,
@@ -182,6 +282,9 @@ const styles = StyleSheet.create({
   typeBtnActive: { borderColor: THEME.purple, backgroundColor: "rgba(139,92,246,0.2)" },
   typeText: { color: THEME.textMuted, fontSize: 13, fontWeight: "700" },
   typeTextActive: { color: "#fff" },
+  tierRow: { flexDirection: "row", gap: 8, alignItems: "center", marginBottom: 8 },
+  tierName: { flex: 1 },
+  tierPrice: { width: 96 },
   addTicket: {
     borderWidth: 1,
     borderStyle: "dashed",
@@ -202,8 +305,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 8,
     marginBottom: 20,
+    paddingHorizontal: 18,
   },
+  imageBoxDisabled: { opacity: 0.6 },
   imageText: { color: THEME.textFaint, fontSize: 13, fontWeight: "700" },
+  disabledNote: { color: THEME.textFaint, fontSize: 12, textAlign: "center", lineHeight: 16 },
   saveBtn: {
     backgroundColor: THEME.purple,
     borderRadius: 12,

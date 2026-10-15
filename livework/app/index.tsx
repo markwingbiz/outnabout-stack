@@ -1,7 +1,9 @@
-// Livework Dashboard — venue dashboard (recreated from the supplied
-// mockup). The desktop layout is stacked vertically for phone width;
-// every section and value from the mockup is preserved.
-import React, { useEffect, useState } from "react";
+// Livework Dashboard — venue dashboard (Phase 5).
+// Every button has a real handler. Every section shows live Supabase data
+// or an explicit empty state. No demo data, no fake publish/payout claims,
+// no fake projections/audience numbers.
+// Requires phase-a-ui Auth (<AuthProvider> in app/_layout.tsx).
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -9,22 +11,35 @@ import {
   ScrollView,
   Pressable,
   SafeAreaView,
+  ActivityIndicator,
+  Alert,
+  Share,
   useWindowDimensions,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import MultiLine from "../components/MultiLine";
-import Donut from "../components/Donut";
 import { THEME } from "../lib/theme";
-import { fetchDashboard, DEMO, type DashboardData } from "../lib/data";
+import {
+  fetchDashboard,
+  formatMoney,
+  GENERAL_TIPS,
+  RANGES,
+  type DashboardData,
+  type RangeKey,
+} from "../lib/data";
+import { useAuth } from "../lib/auth";
+import { supabase } from "../lib/supabase";
 
 function Section({
   title,
   action,
+  onAction,
   children,
 }: {
   title: string;
   action?: string;
+  onAction?: () => void;
   children: React.ReactNode;
 }) {
   return (
@@ -32,7 +47,7 @@ function Section({
       <View style={styles.cardHeader}>
         <Text style={styles.cardTitle}>{title}</Text>
         {!!action && (
-          <Pressable onPress={() => {}}>
+          <Pressable onPress={onAction}>
             <Text style={styles.cardAction}>{action}</Text>
           </Pressable>
         )}
@@ -45,183 +60,291 @@ function Section({
 export default function DashboardScreen() {
   const router = useRouter();
   const { width } = useWindowDimensions();
-  const [data, setData] = useState<DashboardData>(DEMO);
+  const { session, loading: authLoading } = useAuth();
+  const [range, setRange] = useState<RangeKey>("7d");
+  const [rangePickerOpen, setRangePickerOpen] = useState(false);
+  const [data, setData] = useState<DashboardData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const scrollRef = useRef<ScrollView | null>(null);
+  const calendarY = useRef(0);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    const d = await fetchDashboard(range);
+    setData(d);
+    setLoading(false);
+  }, [range]);
 
   useEffect(() => {
-    let alive = true;
-    fetchDashboard().then((d) => {
-      if (alive) setData(d);
-    });
-    return () => {
-      alive = false;
-    };
-  }, []);
+    if (session) void refresh();
+    else setLoading(false);
+  }, [session, refresh]);
+
+  async function onExport() {
+    if (!data) return;
+    if (data.events.length === 0 && data.verifiedRevenue === 0) {
+      Alert.alert("Nothing to export yet", "No events or verified revenue in this range.");
+      return;
+    }
+    const lines = [
+      "Livework export",
+      `Venue,${data.venueName}`,
+      `Range,${data.rangeLabel}`,
+      `Verified revenue,${data.verifiedRevenue}`,
+      "",
+      "Title,Date,Type,Price,Status",
+      ...data.events.map((e) =>
+        [e.title, e.dateLabel, e.eventType ?? "", e.priceLabel ?? "", e.status ?? ""]
+          .map((v) => `"${v.replace(/"/g, '""')}"`)
+          .join(","),
+      ),
+    ];
+    try {
+      await Share.share({ message: lines.join("\n"), title: "Livework export" });
+    } catch {
+      Alert.alert("Could not share", "The share sheet could not be opened. Try again.");
+    }
+  }
 
   const chartWidth = Math.max(width - 64, 240);
 
+  if (authLoading) {
+    return (
+      <SafeAreaView style={styles.root}>
+        <ActivityIndicator color={THEME.purple} size="large" style={{ marginTop: 40 }} />
+      </SafeAreaView>
+    );
+  }
+
+  if (!session) {
+    return (
+      <SafeAreaView style={styles.root}>
+        <View style={styles.center}>
+          <Text style={styles.centerTitle}>Sign in to see your dashboard</Text>
+          <Text style={styles.centerSub}>Livework shows your venue's real data. Sign in to continue.</Text>
+          <Pressable style={styles.centerBtn} onPress={() => router.push("/(auth)/login")}>
+            <Text style={styles.centerBtnText}>Sign in</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.root}>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
+      <ScrollView
+        ref={scrollRef}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.content}
+      >
         {/* Header */}
         <View style={styles.header}>
           <View>
-            <Text style={styles.greeting}>Welcome back, {data.userName}.</Text>
+            <Text style={styles.greeting}>Welcome back, {data?.userName ?? "there"}.</Text>
             <Text style={styles.sub}>
-              Here&apos;s what&apos;s happening at {data.venueName}.
+              Here&apos;s what&apos;s happening at {data?.venueName ?? "your venue"}.
             </Text>
           </View>
-          <Pressable style={styles.exportBtn} onPress={() => {}}>
+          <Pressable style={styles.exportBtn} onPress={() => void onExport()}>
             <Text style={styles.exportText}>Export</Text>
           </Pressable>
         </View>
 
         <View style={styles.headerRow}>
-          <Pressable style={styles.rangeBtn} onPress={() => {}}>
-            <Text style={styles.rangeText}>{data.rangeLabel}</Text>
+          <Pressable style={styles.rangeBtn} onPress={() => setRangePickerOpen((v) => !v)}>
+            <Text style={styles.rangeText}>{data?.rangeLabel ?? "Next 7 days"}</Text>
           </Pressable>
           <Pressable style={styles.addBtn} onPress={() => router.push("/add-event")}>
             <Text style={styles.addText}>+ Add New Event</Text>
           </Pressable>
         </View>
 
-        {/* KPI cards */}
-        <View style={styles.kpiGrid}>
-          {data.kpis.map((k) => (
-            <View key={k.label} style={styles.kpiCard}>
-              <Text style={styles.kpiLabel}>{k.label}</Text>
-              <Text style={styles.kpiValue}>{k.value}</Text>
-              <Text style={styles.kpiDelta}>{k.delta}</Text>
-            </View>
-          ))}
-        </View>
-
-        {/* Event Activity */}
-        <Section title="Event Activity" action="Last 7 Days">
-          <View style={styles.legendRow}>
-            <Text style={styles.legend}><Text style={{ color: THEME.purple }}>●</Text> Views</Text>
-            <Text style={styles.legend}><Text style={{ color: THEME.blue }}>●</Text> Tickets Sold</Text>
-            <Text style={styles.legend}><Text style={{ color: THEME.green }}>●</Text> Revenue</Text>
-          </View>
-          <MultiLine
-            width={chartWidth}
-            height={130}
-            series={[
-              { color: THEME.purple, points: data.activity.views },
-              { color: THEME.blue, points: data.activity.tickets },
-              { color: THEME.green, points: data.activity.revenue },
-            ]}
-          />
-          <View style={styles.dayRow}>
-            {data.activityDays.map((d) => (
-              <Text key={d} style={styles.dayLabel}>{d.replace("May ", "")}</Text>
+        {rangePickerOpen && (
+          <View style={styles.picker}>
+            {RANGES.map((r) => (
+              <Pressable
+                key={r.key}
+                style={styles.pickerRow}
+                onPress={() => {
+                  setRange(r.key);
+                  setRangePickerOpen(false);
+                }}
+              >
+                <Text style={[styles.pickerText, range === r.key && styles.pickerTextActive]}>{r.label}</Text>
+                {range === r.key && <Text style={styles.pickerCheck}>✓</Text>}
+              </Pressable>
             ))}
           </View>
-        </Section>
+        )}
 
-        {/* Projections */}
-        <Section title="Projections" action="This Week">
-          {data.projections.map((p) => (
-            <View key={p.label} style={styles.projRow}>
-              <Text style={styles.projLabel}>{p.label}</Text>
-              <Text style={styles.projValue}>{p.value}</Text>
-              <Text style={styles.projDelta}>{p.delta}</Text>
-            </View>
-          ))}
-        </Section>
-
-        {/* Top Performing Events */}
-        <Section title="Top Performing Events" action="This Month">
-          {data.topEvents.map((e) => (
-            <Pressable key={e.title} style={styles.eventRow} onPress={() => {}}>
-              <View style={styles.eventThumb}>
-                <Ionicons name="musical-notes" size={18} color="#fff" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.eventTitle}>{e.title}</Text>
-                <Text style={styles.eventDate}>{e.date}</Text>
-              </View>
-              <View style={{ alignItems: "flex-end" }}>
-                <Text style={styles.eventRevenue}>{e.revenue}</Text>
-                <Text style={styles.eventTickets}>{e.tickets}</Text>
-              </View>
+        {!!data?.error && (
+          <View style={[styles.card, styles.errorCard]}>
+            <Text style={styles.errorText}>{data.error}</Text>
+            <Pressable onPress={() => void refresh()}>
+              <Text style={styles.retryText}>Retry</Text>
             </Pressable>
-          ))}
-        </Section>
+          </View>
+        )}
 
-        {/* Audience Insights */}
-        <Section title="Audience Insights" action="This Month">
-          <Text style={styles.subTitle}>Age Range</Text>
-          <View style={styles.audienceRow}>
-            <Donut slices={data.ageRanges} />
-            <View style={{ flex: 1, gap: 6 }}>
-              {data.ageRanges.map((a) => (
-                <View key={a.label} style={styles.legendItem}>
-                  <View style={[styles.dot, { backgroundColor: a.color }]} />
-                  <Text style={styles.legendText}>{a.label}</Text>
-                  <Text style={styles.legendPct}>{a.pct}%</Text>
+        {loading ? (
+          <ActivityIndicator color={THEME.purple} size="large" style={{ marginTop: 24 }} />
+        ) : (
+          <>
+            {/* KPI cards — real counts only */}
+            <View style={styles.kpiGrid}>
+              <View style={styles.kpiCard}>
+                <Text style={styles.kpiLabel}>Events</Text>
+                <Text style={styles.kpiValue}>{data?.eventCount ?? 0}</Text>
+                <Text style={styles.kpiDelta}>{data?.rangeLabel ?? ""}</Text>
+              </View>
+              <View style={styles.kpiCard}>
+                <Text style={styles.kpiLabel}>Verified Revenue</Text>
+                <Text style={styles.kpiValue}>{formatMoney(data?.verifiedRevenue ?? 0)}</Text>
+                <Text style={styles.kpiDelta}>Verified only — projections never shown as earned</Text>
+              </View>
+            </View>
+
+            {/* Event Activity — real events-per-day */}
+            <Section
+              title="Event Activity"
+              action="Last 7 Days"
+              onAction={() => setRange("7d")}
+            >
+              <View style={styles.legendRow}>
+                <Text style={styles.legend}><Text style={{ color: THEME.purple }}>●</Text> Events</Text>
+              </View>
+              {(data?.activityPoints ?? []).some((p) => p > 0) ? (
+                <>
+                  <MultiLine
+                    width={chartWidth}
+                    height={130}
+                    series={[{ color: THEME.purple, points: data?.activityPoints ?? [] }]}
+                  />
+                  <View style={styles.dayRow}>
+                    {(data?.activityDays ?? []).map((d) => (
+                      <Text key={d} style={styles.dayLabel}>{d.replace("May ", "")}</Text>
+                    ))}
+                  </View>
+                </>
+              ) : (
+                <Text style={styles.empty}>No events in this window.</Text>
+              )}
+            </Section>
+
+            {/* Projections — no ticketing data exists, so no numbers are shown */}
+            <Section title="Projections">
+              <Text style={styles.empty}>Projections need historical ticket data — not available yet.</Text>
+            </Section>
+
+            {/* Your Events — real events rows, expandable */}
+            <Section
+              title="Your Events"
+              action="This Month"
+              onAction={() => setRange("month")}
+            >
+              {(data?.events ?? []).length === 0 ? (
+                <Text style={styles.empty}>No events yet.</Text>
+              ) : (
+                (data?.events ?? []).map((e) => {
+                  const expanded = expandedId === e.id;
+                  return (
+                    <Pressable
+                      key={e.id}
+                      style={styles.eventRow}
+                      onPress={() => setExpandedId(expanded ? null : e.id)}
+                    >
+                      <View style={styles.eventThumb}>
+                        <Ionicons name="musical-notes" size={18} color="#fff" />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.eventTitle}>{e.title}</Text>
+                        <Text style={styles.eventDate}>{e.dateLabel}</Text>
+                        {expanded && (
+                          <View style={{ marginTop: 6, gap: 2 }}>
+                            {!!e.eventType && <Text style={styles.detailText}>Type: {e.eventType}</Text>}
+                            {!!e.priceLabel && <Text style={styles.detailText}>Tickets: {e.priceLabel}</Text>}
+                            {!!e.status && <Text style={styles.detailText}>Status: {e.status}</Text>}
+                            {!!e.description && <Text style={styles.detailText}>{e.description}</Text>}
+                          </View>
+                        )}
+                      </View>
+                      <Ionicons
+                        name={expanded ? "chevron-up" : "chevron-down"}
+                        size={16}
+                        color={THEME.textMuted}
+                      />
+                    </Pressable>
+                  );
+                })
+              )}
+            </Section>
+
+            {/* Audience Insights — no attendee data exists */}
+            <Section title="Audience Insights" action="This Month" onAction={() => setRange("month")}>
+              <Text style={styles.empty}>Audience insights need attendee data — not available yet.</Text>
+            </Section>
+
+            {/* Event Calendar — real events */}
+            <View
+              onLayout={(ev) => {
+                calendarY.current = ev.nativeEvent.layout.y;
+              }}
+            >
+              <Section
+                title="Event Calendar"
+                action="View Calendar"
+                onAction={() => scrollRef.current?.scrollTo({ y: calendarY.current, animated: true })}
+              >
+                {(data?.calendar ?? []).length === 0 ? (
+                  <Text style={styles.empty}>No events scheduled in this window.</Text>
+                ) : (
+                  (data?.calendar ?? []).map((d) => (
+                    <View key={`${d.day}-${d.date}`} style={styles.calRow}>
+                      <View style={styles.calDay}>
+                        <Text style={styles.calDayLabel}>{d.day}</Text>
+                        <Text style={styles.calDate}>{d.date}</Text>
+                      </View>
+                      <View style={{ flex: 1, gap: 4 }}>
+                        {d.events.map((e) => (
+                          <View key={e.title} style={styles.calEvent}>
+                            <Text style={styles.calTime}>{e.time}</Text>
+                            <Text style={styles.calTitle}>{e.title}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  ))
+                )}
+              </Section>
+            </View>
+
+            {/* Tips — general tips, labeled as such (not personalized) */}
+            <Section title="Tips">
+              <Text style={styles.tipsNote}>General tips — personalized suggestions need your event history.</Text>
+              {GENERAL_TIPS.map((s) => (
+                <View key={s} style={styles.suggRow}>
+                  <Ionicons name="bulb" size={18} color={THEME.orange} />
+                  <Text style={styles.suggText}>{s}</Text>
                 </View>
               ))}
-            </View>
-          </View>
-          <Text style={[styles.subTitle, { marginTop: 16 }]}>Top Locations</Text>
-          {data.topLocations.map((l) => (
-            <View key={l.name} style={styles.locRow}>
-              <Text style={styles.locName}>{l.name}</Text>
-              <View style={styles.locBarTrack}>
-                <View style={[styles.locBarFill, { width: `${l.pct}%` }]} />
-              </View>
-              <Text style={styles.locPct}>{l.pct}%</Text>
-            </View>
-          ))}
-          <Text style={[styles.subTitle, { marginTop: 16 }]}>Top Interests</Text>
-          <View style={styles.chipRow}>
-            {data.topInterests.map((t) => (
-              <View key={t} style={styles.chip}>
-                <Text style={styles.chipText}>{t}</Text>
-              </View>
-            ))}
-          </View>
-        </Section>
+            </Section>
 
-        {/* Event Calendar */}
-        <Section title="Event Calendar" action="View Calendar">
-          {data.calendar.map((d) => (
-            <View key={d.date} style={styles.calRow}>
-              <View style={styles.calDay}>
-                <Text style={styles.calDayLabel}>{d.day}</Text>
-                <Text style={styles.calDate}>{d.date}</Text>
-              </View>
-              <View style={{ flex: 1, gap: 4 }}>
-                {d.events.map((e) => (
-                  <View key={e.title} style={styles.calEvent}>
-                    <Text style={styles.calTime}>{e.time}</Text>
-                    <Text style={styles.calTitle}>{e.title}</Text>
+            {/* Latest Events — real events, no fake publish/payout claims */}
+            <Section title="Latest Events">
+              {(data?.latestEvents ?? []).length === 0 ? (
+                <Text style={styles.empty}>No events yet.</Text>
+              ) : (
+                (data?.latestEvents ?? []).map((a) => (
+                  <View key={a} style={styles.activityRow}>
+                    <View style={styles.activityDot} />
+                    <Text style={styles.activityText}>{a}</Text>
                   </View>
-                ))}
-              </View>
-            </View>
-          ))}
-        </Section>
-
-        {/* Smart Suggestions */}
-        <Section title="Smart Suggestions" action="Based on your past events">
-          {data.suggestions.map((s) => (
-            <View key={s} style={styles.suggRow}>
-              <Ionicons name="bulb" size={18} color={THEME.orange} />
-              <Text style={styles.suggText}>{s}</Text>
-            </View>
-          ))}
-        </Section>
-
-        {/* Recent Activity */}
-        <Section title="Recent Activity">
-          {data.recentActivity.map((a) => (
-            <View key={a} style={styles.activityRow}>
-              <View style={styles.activityDot} />
-              <Text style={styles.activityText}>{a}</Text>
-            </View>
-          ))}
-        </Section>
+                ))
+              )}
+            </Section>
+          </>
+        )}
 
         <View style={{ height: 16 }} />
       </ScrollView>
@@ -232,6 +355,11 @@ export default function DashboardScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: THEME.bg },
   content: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8, gap: 14 },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 24, gap: 12 },
+  centerTitle: { color: "#fff", fontSize: 20, fontWeight: "900", textAlign: "center" },
+  centerSub: { color: THEME.textMuted, fontSize: 14, textAlign: "center", lineHeight: 20 },
+  centerBtn: { backgroundColor: THEME.purple, borderRadius: 999, paddingHorizontal: 24, paddingVertical: 12, marginTop: 8 },
+  centerBtnText: { color: "#fff", fontSize: 15, fontWeight: "800" },
   header: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -266,6 +394,29 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   addText: { color: "#fff", fontWeight: "900", fontSize: 13 },
+  picker: {
+    backgroundColor: THEME.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: THEME.cardBorder,
+    overflow: "hidden",
+  },
+  pickerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.05)",
+  },
+  pickerText: { color: THEME.textMuted, fontSize: 14, fontWeight: "700" },
+  pickerTextActive: { color: "#fff" },
+  pickerCheck: { color: THEME.green, fontSize: 14, fontWeight: "900" },
+  errorCard: { borderColor: "rgba(236,72,153,0.5)" },
+  errorText: { color: "#F9A8D4", fontSize: 13, lineHeight: 18 },
+  retryText: { color: THEME.purple, fontSize: 13, fontWeight: "800", marginTop: 8 },
+  empty: { color: THEME.textMuted, fontSize: 13, lineHeight: 18 },
   kpiGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   kpiCard: {
     width: "48%",
@@ -298,17 +449,6 @@ const styles = StyleSheet.create({
   legend: { color: THEME.textMuted, fontSize: 11, fontWeight: "700" },
   dayRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 6 },
   dayLabel: { color: THEME.textFaint, fontSize: 11, fontWeight: "700" },
-  projRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(255,255,255,0.05)",
-  },
-  projLabel: { color: THEME.textMuted, fontSize: 13, flex: 1 },
-  projValue: { color: "#fff", fontSize: 15, fontWeight: "900" },
-  projDelta: { color: THEME.green, fontSize: 11, fontWeight: "800", width: 110, textAlign: "right" },
   eventRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -327,33 +467,8 @@ const styles = StyleSheet.create({
   },
   eventTitle: { color: "#fff", fontSize: 14, fontWeight: "800" },
   eventDate: { color: THEME.textMuted, fontSize: 12, marginTop: 2 },
-  eventRevenue: { color: "#fff", fontSize: 14, fontWeight: "900" },
-  eventTickets: { color: THEME.textMuted, fontSize: 11, marginTop: 2 },
-  subTitle: { color: "#fff", fontSize: 13, fontWeight: "800", marginBottom: 10 },
-  audienceRow: { flexDirection: "row", alignItems: "center", gap: 16 },
-  legendItem: { flexDirection: "row", alignItems: "center", gap: 8 },
-  dot: { width: 10, height: 10, borderRadius: 5 },
-  legendText: { color: THEME.textMuted, fontSize: 12, flex: 1 },
-  legendPct: { color: "#fff", fontSize: 12, fontWeight: "800" },
-  locRow: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 8 },
-  locName: { color: THEME.textMuted, fontSize: 12, width: 110 },
-  locBarTrack: {
-    flex: 1,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: "rgba(255,255,255,0.1)",
-    overflow: "hidden",
-  },
-  locBarFill: { height: "100%", backgroundColor: THEME.purple, borderRadius: 3 },
-  locPct: { color: "#fff", fontSize: 12, fontWeight: "800", width: 36, textAlign: "right" },
-  chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  chip: {
-    backgroundColor: "rgba(139,92,246,0.18)",
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  chipText: { color: THEME.purple, fontSize: 12, fontWeight: "800" },
+  detailText: { color: THEME.textMuted, fontSize: 12, lineHeight: 16 },
+  tipsNote: { color: THEME.textFaint, fontSize: 12, marginBottom: 10, lineHeight: 16 },
   calRow: {
     flexDirection: "row",
     gap: 12,

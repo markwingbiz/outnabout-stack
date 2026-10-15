@@ -1,4 +1,20 @@
 // app/(tabs)/personal.tsx
+// Phase 6 fix notes (see FIX-PLAN.md):
+// - REMOVED demoAdventures: guests no longer see 3 fake adventures
+//   ("Jazz + Dessert Hop", "Downtown Lights", "Family Fun Run") presented
+//   as "Recent Adventures". Guests see a sign-in prompt; signed-in users
+//   see real redemption history (or an honest empty state).
+// - Favorite venue tiles navigate to /(tabs)/events filtered to that
+//   venue. Favorite event tiles navigate to /detail. Previously both
+//   had onPress={() => {}} (dead).
+// - Adventure rows are redemption-history records, not navigable
+//   content: they are now plain rows (no onPress, no chevron) instead
+//   of dead pressables with a misleading chevron.
+// - Change Persona points at the canonical /(tabs)/persona route
+//   (the root /persona duplicate is deleted in Phase 6).
+// - Rewards "Redeem" button relabeled "Show QR": it scrolls to the QR
+//   section; it never redeemed anything, and the old label implied it
+//   did. Visual design is otherwise UNCHANGED.
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
   View,
@@ -118,16 +134,8 @@ export default function PersonalScreen() {
     [favorites]
   );
 
-  // Signed-in users see real redemption history; guests see demo examples.
-  const demoAdventures: Adventure[] = useMemo(
-    () => [
-      { id: "a1", title: "Jazz + Dessert Hop", subtitle: "Green Lady → Betty Rae’s", dateLabel: "Last weekend" },
-      { id: "a2", title: "Downtown Lights", subtitle: "Union Station + Streetcar", dateLabel: "2 weeks ago" },
-      { id: "a3", title: "Family Fun Run", subtitle: "Park + Hot Cocoa", dateLabel: "3 weeks ago" },
-    ],
-    []
-  );
-
+  // Adventures = REAL redemption history for signed-in users.
+  // Guests see no adventures (never fake demo adventures).
   const recentAdventures: Adventure[] = useMemo(
     () =>
       user
@@ -137,8 +145,8 @@ export default function PersonalScreen() {
             subtitle: `+${h.pointsAwarded} pts`,
             dateLabel: new Date(h.redeemedAt).toLocaleDateString(),
           }))
-        : demoAdventures,
-    [user, history, demoAdventures]
+        : [],
+    [user, history]
   );
 
   // ✅ Search filtering (no UI changes, only filters data)
@@ -262,8 +270,6 @@ export default function PersonalScreen() {
 
   // ✅ route handler for Events pill (keeps pill row clean)
   function goToEvents() {
-    // If your events screen is app/events.tsx, use "/events"
-    // If your events screen is app/(tabs)/events.tsx, use "/(tabs)/events"
     router.replace("/(tabs)/events");
   }
 
@@ -283,7 +289,7 @@ export default function PersonalScreen() {
               <Text style={styles.heroSubtitle}>Rewards • Favorites • Adventures</Text>
             </View>
 
-            <Pressable style={styles.changePersonaBtn} onPress={() => router.push("/persona")}>
+            <Pressable style={styles.changePersonaBtn} onPress={() => router.push("/(tabs)/persona")}>
               <Ionicons name="sparkles-outline" size={16} color="#fff" />
               <Text style={styles.changePersonaText}>Change Persona</Text>
             </Pressable>
@@ -428,8 +434,10 @@ export default function PersonalScreen() {
                   <Text style={styles.rewardsHint}>Earn points by redeeming offers + going on adventures.</Text>
                 </View>
 
+                {/* Scrolls to the QR section. Label says what it does —
+                    the old "Redeem" label implied it redeemed something. */}
                 <Pressable style={styles.claimBtn} onPress={() => applyPill("qr")}>
-                  <Text style={styles.claimBtnText}>Redeem</Text>
+                  <Text style={styles.claimBtnText}>Show QR</Text>
                 </Pressable>
               </View>
 
@@ -454,7 +462,10 @@ export default function PersonalScreen() {
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.hListPad}
               renderItem={({ item }) => (
-                <Pressable style={styles.tile} onPress={() => {}}>
+                <Pressable
+                  style={styles.tile}
+                  onPress={() => router.push({ pathname: "/(tabs)/events", params: { venue: item.name } })}
+                >
                   <LinearGradient
                     colors={["#A56CFF", "#6A35FF", "#2D6BFF"]}
                     start={{ x: 0.0, y: 0.0 }}
@@ -484,7 +495,10 @@ export default function PersonalScreen() {
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.hListPad}
               renderItem={({ item }) => (
-                <Pressable style={[styles.tile, { width: Math.min(240, SCREEN_W * 0.62) }]} onPress={() => {}}>
+                <Pressable
+                  style={[styles.tile, { width: Math.min(240, SCREEN_W * 0.62) }]}
+                  onPress={() => router.push({ pathname: "/detail", params: { id: item.id, kind: "event" } })}
+                >
                   <LinearGradient
                     colors={["#FFD57A", "#B46CFF", "#6A35FF"]}
                     start={{ x: 0.0, y: 0.1 }}
@@ -512,17 +526,25 @@ export default function PersonalScreen() {
             />
           )}
 
-          {/* Recent Adventures */}
+          {/* Recent Adventures — real redemption history only. */}
           <SectionHeader title="Recent Adventures" open={adventuresOpen} onPress={() => setAdventuresOpen((s) => !s)} />
           {adventuresOpen && (
             <View style={styles.listWrap}>
+              {!user && (
+                <Text style={{ fontSize: 13, color: "#6F6F6F", fontWeight: "800", padding: 4 }}>
+                  Sign in to see your adventures.
+                </Text>
+              )}
               {user && filteredAdventures.length === 0 && (
                 <Text style={{ fontSize: 13, color: "#6F6F6F", fontWeight: "800", padding: 4 }}>
                   No adventures yet — redeem an offer to start earning.
                 </Text>
               )}
+              {/* History records are display-only (not navigable content),
+                  so rows are plain Views with no chevron — previously dead
+                  pressables with a misleading chevron. */}
               {filteredAdventures.map((a) => (
-                <Pressable key={a.id} style={styles.rowCard} onPress={() => {}}>
+                <View key={a.id} style={styles.rowCard}>
                   <View style={styles.rowLeft}>
                     <LinearGradient
                       colors={["#6A35FF", "#B46CFF", "#FFD57A"]}
@@ -543,9 +565,7 @@ export default function PersonalScreen() {
                     </Text>
                     <Text style={styles.rowMeta}>{a.dateLabel}</Text>
                   </View>
-
-                  <Ionicons name="chevron-forward" size={18} color="#A0A0A0" />
-                </Pressable>
+                </View>
               ))}
             </View>
           )}

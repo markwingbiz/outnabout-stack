@@ -2,16 +2,25 @@
 // Deploy with: firebase deploy --only firestore:rules
 // Or paste into Firebase Console -> Firestore Database -> Rules.
 //
+// Phase 6 changes (see FIX-PLAN.md):
+// - events/venues writes are now DENIED from clients (allow: if false).
+//   The old "any signed-in user may write" rule existed only for the
+//   one-time demo seed, which Phase 6 deletes (demo data must never be
+//   written into Firestore). Catalog writes come from the bownd-sync
+//   service identity (server-side) and, later, an admin/venue role —
+//   never from the customer app. Reads stay public.
+// - Redemptions rules are UNCHANGED: the NEW -> REDEEMED transition
+//   with the restricted changed-keys set is the second layer of the
+//   anti-double-redemption guard (the first layer is the Firestore
+//   transaction in lib/redemptions.ts).
+//
 // Principles:
-// - Events/venues are public to read. Writes require a signed-in user
-//   (used by the one-time demo seed; tighten to an admin role when
-//   Livework venue management lands — see TODO below).
+// - Events/venues are public to read. Client writes are denied.
 // - Each user can only read/write their own user doc, favorites, and
 //   redemption history.
 // - Top-level `redemptions` tokens: any signed-in user may create a
 //   token and may flip a NEW token to REDEEMED exactly once. They may
-//   NOT edit other fields, un-redeem, or delete tokens. This is the
-//   atomic anti-double-redemption guard.
+//   NOT edit other fields, un-redeem, or delete tokens.
 rules_version = '2';
 
 service cloud.firestore {
@@ -25,15 +34,17 @@ service cloud.firestore {
       return signedIn() && request.auth.uid == uid;
     }
 
-    // Public catalog (read). Writes: signed-in only (demo seed).
-    // TODO(Livework): restrict events/venues writes to admin/venue roles.
+    // Public catalog (read). Client writes DENIED (Phase 6) — catalog
+    // writes come from bownd-sync (service identity) and, later, an
+    // admin/venue role. The old signed-in write allowance existed only
+    // for the deleted demo seed.
     match /events/{id} {
       allow read: if true;
-      allow create, update, delete: if signedIn();
+      allow create, update, delete: if false;
     }
     match /venues/{id} {
       allow read: if true;
-      allow create, update, delete: if signedIn();
+      allow create, update, delete: if false;
     }
 
     // User profiles — owner only.

@@ -1,4 +1,16 @@
-// app/(tabs)/index.tsx
+// app/(tabs)/home.tsx
+// Phase 6 fix notes (see FIX-PLAN.md):
+// - Home search is WIRED: typing filters spotlight/featured events and
+//   venues in place (title, venue, vibe/audience tags). A "See results in
+//   Events" row navigates to /(tabs)/events with the query prefilled.
+// - Spotlight / featured cards navigate to the real detail screen
+//   (/detail?id=...&kind=event) instead of generically replacing to
+//   /(tabs)/events and losing which event was tapped.
+// - Venue orbs navigate to /(tabs)/events filtered to that venue.
+// - Events + venues come from Firestore ONLY (lib/store.ts). No bundled
+//   demo fallback: an empty catalog shows "No events yet", never demo
+//   events presented as real.
+// - Visual design is UNCHANGED: same layout, styles, and components.
 import React, { useEffect, useMemo, useState } from "react";
 import {
   View,
@@ -17,23 +29,16 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 
-import { EVENTS, EventItem } from "../../data/events";
-import { VENUES } from "../../data/venues";
-import { fetchEvents } from "../../lib/store";
+import { fetchEvents, fetchVenues, type EventItem, type Venue } from "../../lib/store";
 
 type TabKey = "home" | "events" | "personal";
 
-function pickSpotlight(events: EventItem[]) {
-  return events.find((e) => e.category === "spotlight") ?? events[0];
-}
 function pickFeatured(events: EventItem[]) {
   return events.find((e) => e.category === "featured") ?? events[1] ?? events[0];
 }
-function getVenueNameFromEvent(e: EventItem) {
-  const v = (VENUES as any[]).find(
-    (x: any) => x.id === (e as any).venueId || x.name === (e as any).venueId
-  );
-  return v?.name ?? "Venue";
+function getVenueNameFromEvent(e: EventItem, venues: Venue[]) {
+  const v = venues.find((x) => x.id === e.venueId || x.name === e.venueId);
+  return v?.name ?? (e.venueId || "Venue");
 }
 
 function titleToTwoLines(title: string) {
@@ -50,62 +55,91 @@ function titleToTwoLines(title: string) {
   return { line1: words.slice(0, mid).join(" "), line2: words.slice(mid).join(" ") };
 }
 
+function matchesHomeSearch(e: EventItem, venueName: string, q: string) {
+  if (!q) return true;
+  const query = q.trim().toLowerCase();
+  return (
+    e.title.toLowerCase().includes(query) ||
+    venueName.toLowerCase().includes(query) ||
+    (e.vibeTags || []).join(" ").toLowerCase().includes(query) ||
+    (e.audienceTags || []).join(" ").toLowerCase().includes(query)
+  );
+}
+
 export default function Home() {
   const router = useRouter();
   const [q, setQ] = useState("");
   const [activeTab, setActiveTab] = useState<TabKey>("home");
 
-  // Events come from Firestore when configured, else the bundled data.
-  const [events, setEvents] = useState<EventItem[]>(EVENTS);
+  // Events + venues come from Firestore only (no bundled demo fallback).
+  const [events, setEvents] = useState<EventItem[]>([]);
+  const [venues, setVenues] = useState<Venue[]>([]);
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
     let alive = true;
-    fetchEvents().then((rows) => {
-      if (alive) setEvents(rows);
-    });
+    Promise.all([fetchEvents(), fetchVenues()])
+      .then(([rows, venueRows]) => {
+        if (!alive) return;
+        setEvents(rows);
+        setVenues(venueRows);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (alive) setLoading(false);
+      });
     return () => {
       alive = false;
     };
   }, []);
 
+  const qNorm = q.trim().toLowerCase();
+
+  // Search filters the catalog in place (events + venues).
+  const visibleEvents = useMemo(
+    () => events.filter((e) => matchesHomeSearch(e, getVenueNameFromEvent(e, venues), qNorm)),
+    [events, venues, qNorm]
+  );
+
+  const visibleVenues = useMemo(
+    () => (qNorm ? venues.filter((v) => v.name.toLowerCase().includes(qNorm)) : venues),
+    [venues, qNorm]
+  );
+
   // ✅ Spotlight events list for horizontal scroll
   const spotlightEvents = useMemo(
-    () => events.filter((e) => e.category === "spotlight"),
-    [events]
+    () => visibleEvents.filter((e) => e.category === "spotlight"),
+    [visibleEvents]
   );
 
   // keep your single "featured" for the header row text (unchanged UI)
-  const featured = useMemo(() => pickFeatured(events), [events]);
+  const featured = useMemo(() => pickFeatured(visibleEvents), [visibleEvents]);
 
-  const topVenues = useMemo(() => (VENUES as any[]).slice(0, 3), []);
+  const topVenues = useMemo(() => visibleVenues.slice(0, 3), [visibleVenues]);
 
   // all featured events for the vertical menu
   const featuredEvents = useMemo(
-    () => events.filter((e) => e.category === "featured"),
-    [events]
-  );
-
-  // Use the first spotlight for the big title formatting (same look)
-  const spotlightForTitle = useMemo(
-    () => spotlightEvents[0] ?? pickSpotlight(events),
-    [spotlightEvents, events]
-  );
-
-  const spotlightVenue = useMemo(
-    () => getVenueNameFromEvent(spotlightForTitle),
-    [spotlightForTitle]
-  );
-
-  const featuredVenue = useMemo(() => getVenueNameFromEvent(featured), [featured]);
-
-  const spotTitle = useMemo(
-    () => titleToTwoLines(spotlightForTitle.title),
-    [spotlightForTitle.title]
+    () => visibleEvents.filter((e) => e.category === "featured"),
+    [visibleEvents]
   );
 
   function go(tab: TabKey) {
     setActiveTab(tab);
     router.replace(`/(tabs)/${tab}`);
   }
+
+  function openEvent(id: string) {
+    router.push({ pathname: "/detail", params: { id, kind: "event" } });
+  }
+
+  function openVenue(name: string) {
+    router.push({ pathname: "/(tabs)/events", params: { venue: name } });
+  }
+
+  function openSearchInEvents() {
+    router.push({ pathname: "/(tabs)/events", params: { q: q.trim() } });
+  }
+
+  const nothingFound = !loading && qNorm.length > 0 && visibleEvents.length === 0 && visibleVenues.length === 0;
 
   return (
     <ImageBackground
@@ -141,8 +175,17 @@ export default function Home() {
               placeholderTextColor="rgba(255,255,255,0.55)"
               style={styles.searchInput}
               returnKeyType="search"
+              onSubmitEditing={openSearchInEvents}
             />
           </View>
+
+          {/* See full search results in Events (only while searching) */}
+          {!!qNorm && (
+            <Pressable onPress={openSearchInEvents} style={styles.seeResultsRow}>
+              <Text style={styles.seeResultsText}>See all results in Events</Text>
+              <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.75)" />
+            </Pressable>
+          )}
 
           {/* Top tabs pill group */}
           <View style={styles.tabsPill}>
@@ -162,142 +205,158 @@ export default function Home() {
             })}
           </View>
 
-          {/* Spotlight list (vertical stack, like the mock) */}
-          <View style={styles.spotlightListWrap}>
-            {(spotlightEvents.length ? spotlightEvents : [spotlightForTitle]).map((item) => {
-              const venue = getVenueNameFromEvent(item);
-              const t = titleToTwoLines(item.title);
+          {loading ? (
+            <Text style={styles.emptyText}>Loading…</Text>
+          ) : events.length === 0 ? (
+            <Text style={styles.emptyText}>No events yet — check back soon.</Text>
+          ) : nothingFound ? (
+            <Text style={styles.emptyText}>No matches for “{q.trim()}”.</Text>
+          ) : (
+            <>
+              {/* Spotlight list (vertical stack, like the mock) */}
+              <View style={styles.spotlightListWrap}>
+                {spotlightEvents.map((item) => {
+                  const venue = getVenueNameFromEvent(item, venues);
+                  const t = titleToTwoLines(item.title);
 
-              return (
-                <Pressable
-                  key={item.id}
-                  onPress={() => router.replace("/(tabs)/events")}
-                  style={[styles.cardOuter, styles.spotlightCardOuter]}
-                >
-                    <ImageBackground
-                      source={require("../../assets/backgrounds/home-bg.jpg")}
-                      resizeMode="cover"
-                      style={styles.heroCard}
-                      imageStyle={styles.heroImageStyle}
+                  return (
+                    <Pressable
+                      key={item.id}
+                      onPress={() => openEvent(item.id)}
+                      style={[styles.cardOuter, styles.spotlightCardOuter]}
                     >
-                      <LinearGradient
-                        colors={["rgba(0,0,0,0.10)", "rgba(0,0,0,0.65)"]}
-                        style={StyleSheet.absoluteFill}
-                      />
+                        <ImageBackground
+                          source={require("../../assets/backgrounds/home-bg.jpg")}
+                          resizeMode="cover"
+                          style={styles.heroCard}
+                          imageStyle={styles.heroImageStyle}
+                        >
+                          <LinearGradient
+                            colors={["rgba(0,0,0,0.10)", "rgba(0,0,0,0.65)"]}
+                            style={StyleSheet.absoluteFill}
+                          />
 
-                      <View style={styles.heroTextWrap}>
-                        <Text style={styles.heroTitle}>
-                          {t.line1}
-                          {!!t.line2 ? "\n" : ""}
-                          {!!t.line2 ? t.line2 : ""}
-                        </Text>
+                          <View style={styles.heroTextWrap}>
+                            <Text style={styles.heroTitle}>
+                              {t.line1}
+                              {!!t.line2 ? "\n" : ""}
+                              {!!t.line2 ? t.line2 : ""}
+                            </Text>
 
-                        <Text numberOfLines={1} style={styles.heroSub}>
-                          {venue} - Spotlight
-                        </Text>
+                            <Text numberOfLines={1} style={styles.heroSub}>
+                              {venue} - Spotlight
+                            </Text>
 
-                        <View style={styles.heroMetaRow}>
-                          <Text style={styles.heroStar}>★</Text>
-                          <Text style={styles.heroMeta}>Tonight</Text>
-                        </View>
-                      </View>
-                    </ImageBackground>
-                  </Pressable>
-                );
-            })}
-          </View>
+                            <View style={styles.heroMetaRow}>
+                              <Text style={styles.heroStar}>★</Text>
+                              <Text style={styles.heroMeta}>Tonight</Text>
+                            </View>
+                          </View>
+                        </ImageBackground>
+                      </Pressable>
+                    );
+                })}
+              </View>
 
-          {/* Top Venues */}
-          <Text style={styles.sectionLabel}>Top Venues:</Text>
+              {/* Top Venues (only when venues exist) */}
+              {topVenues.length > 0 && (
+                <>
+                  <Text style={styles.sectionLabel}>Top Venues:</Text>
 
-          <FlatList
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            data={topVenues}
-            keyExtractor={(v, i) => String((v as any)?.id ?? (v as any)?.name ?? i)}
-            contentContainerStyle={styles.venuesRow}
-            renderItem={({ item, index }) => {
-              const name = (item as any)?.name ?? "Venue";
-              const icon =
-                index === 0 ? "wine-outline" : index === 1 ? "triangle-outline" : "business-outline";
+                  <FlatList
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    data={topVenues}
+                    keyExtractor={(v, i) => String((v as any)?.id ?? (v as any)?.name ?? i)}
+                    contentContainerStyle={styles.venuesRow}
+                    renderItem={({ item, index }) => {
+                      const name = (item as any)?.name ?? "Venue";
+                      const icon =
+                        index === 0 ? "wine-outline" : index === 1 ? "triangle-outline" : "business-outline";
 
-              return (
-                <Pressable onPress={() => router.replace("/(tabs)/events")} style={styles.venueItem}>
-                  <LinearGradient
-                    colors={
-                      index === 0
-                        ? ["rgba(60,120,255,0.50)", "rgba(40,60,130,0.45)"]
-                        : index === 1
-                        ? ["rgba(80,220,210,0.40)", "rgba(50,120,140,0.40)"]
-                        : ["rgba(170,120,255,0.45)", "rgba(90,60,170,0.40)"]
-                    }
-                    style={styles.venueOrb}
-                  >
-                    <Ionicons name={icon as any} size={22} color="rgba(255,255,255,0.90)" />
-                  </LinearGradient>
+                      return (
+                        <Pressable onPress={() => openVenue(name)} style={styles.venueItem}>
+                          <LinearGradient
+                            colors={
+                              index === 0
+                                ? ["rgba(60,120,255,0.50)", "rgba(40,60,130,0.45)"]
+                                : index === 1
+                                ? ["rgba(80,220,210,0.40)", "rgba(50,120,140,0.40)"]
+                                : ["rgba(170,120,255,0.45)", "rgba(90,60,170,0.40)"]
+                            }
+                            style={styles.venueOrb}
+                          >
+                            <Ionicons name={icon as any} size={22} color="rgba(255,255,255,0.90)" />
+                          </LinearGradient>
 
-                  <Text numberOfLines={1} style={styles.venueName}>
-                    {name}
+                          <Text numberOfLines={1} style={styles.venueName}>
+                            {name}
+                          </Text>
+                        </Pressable>
+                      );
+                    }}
+                  />
+                </>
+              )}
+
+              {/* Featured header row (UNCHANGED UI) */}
+              {featured && (
+                <Pressable onPress={() => router.replace("/(tabs)/events")} style={styles.featureHeader}>
+                  <Text style={styles.featureHeaderLeft}>Featured:</Text>
+                  <Text numberOfLines={1} style={styles.featureHeaderRight}>
+                    {featured.title}
                   </Text>
+                  <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.65)" />
                 </Pressable>
-              );
-            }}
-          />
+              )}
 
-          {/* Featured header row (UNCHANGED UI) */}
-          <Pressable onPress={() => router.replace("/(tabs)/events")} style={styles.featureHeader}>
-            <Text style={styles.featureHeaderLeft}>Featured:</Text>
-            <Text numberOfLines={1} style={styles.featureHeaderRight}>
-              {featured.title}
-            </Text>
-            <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.65)" />
-          </Pressable>
+              {/* Featured vertical menu (UNCHANGED) */}
+              <View style={styles.featureMenuWrap}>
+                <FlatList
+                  data={featuredEvents}
+                  keyExtractor={(item) => item.id}
+                  showsVerticalScrollIndicator={false}
+                  scrollEnabled={true}
+                  nestedScrollEnabled={true}
+                  contentContainerStyle={styles.featureMenuContent}
+                  renderItem={({ item }) => {
+                    const venue = getVenueNameFromEvent(item, venues);
 
-          {/* Featured vertical menu (UNCHANGED) */}
-          <View style={styles.featureMenuWrap}>
-            <FlatList
-              data={featuredEvents}
-              keyExtractor={(item) => item.id}
-              showsVerticalScrollIndicator={false}
-              scrollEnabled={true}
-              nestedScrollEnabled={true}
-              contentContainerStyle={styles.featureMenuContent}
-              renderItem={({ item }) => {
-                const venue = getVenueNameFromEvent(item);
+                    return (
+                      <Pressable onPress={() => openEvent(item.id)} style={styles.cardOuter}>
+                        <ImageBackground
+                          source={require("../../assets/backgrounds/home-bg.jpg")}
+                          resizeMode="cover"
+                          style={styles.featureCard}
+                          imageStyle={styles.featureImageStyle}
+                        >
+                          <LinearGradient
+                            colors={["rgba(0,0,0,0.15)", "rgba(0,0,0,0.70)"]}
+                            style={StyleSheet.absoluteFill}
+                          />
 
-                return (
-                  <Pressable onPress={() => router.replace("/(tabs)/events")} style={styles.cardOuter}>
-                    <ImageBackground
-                      source={require("../../assets/backgrounds/home-bg.jpg")}
-                      resizeMode="cover"
-                      style={styles.featureCard}
-                      imageStyle={styles.featureImageStyle}
-                    >
-                      <LinearGradient
-                        colors={["rgba(0,0,0,0.15)", "rgba(0,0,0,0.70)"]}
-                        style={StyleSheet.absoluteFill}
-                      />
+                          <View style={styles.featureBottomRow}>
+                            <View style={{ flex: 1, paddingRight: 10 }}>
+                              <Text numberOfLines={1} style={styles.featureTitle}>
+                                {item.title}
+                              </Text>
+                              <Text numberOfLines={1} style={styles.featureSub}>
+                                {venue}
+                              </Text>
+                            </View>
 
-                      <View style={styles.featureBottomRow}>
-                        <View style={{ flex: 1, paddingRight: 10 }}>
-                          <Text numberOfLines={1} style={styles.featureTitle}>
-                            {item.title}
-                          </Text>
-                          <Text numberOfLines={1} style={styles.featureSub}>
-                            {venue}
-                          </Text>
-                        </View>
-
-                        <View style={styles.badge}>
-                          <Text style={styles.badgeText}>FEATURED</Text>
-                        </View>
-                      </View>
-                    </ImageBackground>
-                  </Pressable>
-                );
-              }}
-            />
-          </View>
+                            <View style={styles.badge}>
+                              <Text style={styles.badgeText}>FEATURED</Text>
+                            </View>
+                          </View>
+                        </ImageBackground>
+                      </Pressable>
+                    );
+                  }}
+                />
+              </View>
+            </>
+          )}
 
           {/* bottom breathing room so it “moves” like the mock */}
           <View style={{ height: 26 }} />
@@ -334,6 +393,28 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 16,
     color: "rgba(255,255,255,0.92)",
+  },
+
+  // "See all results in Events" row (only while searching)
+  seeResultsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 6,
+    marginBottom: 6,
+  },
+  seeResultsText: {
+    color: "rgba(255,255,255,0.85)",
+    fontWeight: "800",
+    fontSize: 14,
+  },
+
+  emptyText: {
+    marginTop: 24,
+    color: "rgba(255,255,255,0.75)",
+    fontSize: 15,
+    fontWeight: "700",
+    textAlign: "center",
   },
 
   // Tabs group (single pill container like the mock)

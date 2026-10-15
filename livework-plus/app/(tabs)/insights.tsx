@@ -1,7 +1,12 @@
-// Livework+ Insights — Monfun lives here (Funnel + Revenue overviews,
-// recreated from the supplied mockup). Values come from Supabase when
-// configured, else the demo fallback in lib/data.ts.
-import React, { useEffect, useState } from "react";
+// Livework+ Insights — Monfun lives here (Phase 5).
+// Funnels are real `funnels` rows (name + backend status), each pressable
+// to the phase-a-ui Funnels tab. Revenue is verified-only
+// (revenue_events amount > 0) with a real 7/30/90-day picker. The fake
+// The fake demo revenue figure, demo funnels, and fake 8.5 relationship score are deleted.
+// The Relationship card is an honest empty state (no scoring model yet).
+// Requires phase-a-ui Auth (<AuthProvider> in app/_layout.tsx) and the
+// phase-a-ui Funnels tab at /(tabs)/funnels.
+import React, { useCallback, useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -9,124 +14,203 @@ import {
   ScrollView,
   Pressable,
   SafeAreaView,
+  ActivityIndicator,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import Sparkline from "../../components/Sparkline";
-import Ring from "../../components/Ring";
 import { THEME, FUNNEL_ACCENTS } from "../../lib/theme";
 import {
   fetchFunnels,
   fetchRevenue,
   formatMoney,
-  DEMO_RELATIONSHIP,
-  type FunnelCard,
+  type FunnelSummary,
+  type RevenueSummary,
 } from "../../lib/data";
+import { useAuth } from "../../lib/auth";
 
-function FunnelTile({ f }: { f: FunnelCard }) {
-  const accent = FUNNEL_ACCENTS[f.key];
+const RANGE_OPTIONS = [7, 30, 90];
+
+function StatusBadge({ status }: { status: string }) {
+  const s = status.toUpperCase();
+  const color =
+    s === "ACTIVE"
+      ? THEME.green
+      : s === "VALIDATED" || s === "READY"
+        ? THEME.blue
+        : s === "PAUSED" || s === "APPROVAL_REQUIRED"
+          ? THEME.orange
+          : THEME.textMuted;
   return (
-    <View style={styles.funnelTile}>
-      <View style={[styles.funnelIcon, { backgroundColor: `${accent.color}26` }]}>
-        <Ionicons name={accent.icon as any} size={22} color={accent.color} />
-      </View>
-      <Text style={styles.funnelTitle}>{f.title}</Text>
-      <Text style={styles.funnelValue}>{f.value}</Text>
-      <Text style={styles.funnelLabel}>{f.label}</Text>
-      <View style={styles.funnelBarTrack}>
-        <View style={[styles.funnelBarFill, { width: `${f.pct}%`, backgroundColor: accent.bar }]} />
-      </View>
-      <Text style={styles.funnelPct}>{f.pct}%</Text>
+    <View style={[styles.statusBadge, { borderColor: color }]}>
+      <Text style={[styles.statusText, { color }]}>{s}</Text>
     </View>
   );
 }
 
 export default function InsightsScreen() {
   const router = useRouter();
-  const [funnels, setFunnels] = useState<FunnelCard[]>([]);
-  const [revenue, setRevenue] = useState({ total: 0, changePct: 0, spark: [] as number[] });
+  const { session, loading: authLoading } = useAuth();
+  const [funnels, setFunnels] = useState<FunnelSummary[]>([]);
+  const [revenue, setRevenue] = useState<RevenueSummary>({ total: 0, changeLabel: null, spark: [] });
+  const [rangeDays, setRangeDays] = useState(30);
+  const [rangePickerOpen, setRangePickerOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    const [f, r] = await Promise.all([fetchFunnels(), fetchRevenue(rangeDays)]);
+    if (f.error) setError(f.error);
+    if (r.error) setError((prev) => prev ?? r.error);
+    setFunnels(f.funnels);
+    setRevenue(r.revenue);
+    setLoading(false);
+  }, [rangeDays]);
 
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      const [f, r] = await Promise.all([fetchFunnels(), fetchRevenue()]);
-      if (alive) {
-        setFunnels(f);
-        setRevenue(r);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
+    if (session) void refresh();
+    else setLoading(false);
+  }, [session, refresh]);
+
+  if (authLoading) {
+    return (
+      <SafeAreaView style={styles.root}>
+        <ActivityIndicator color={THEME.purpleBright} size="large" style={{ marginTop: 40 }} />
+      </SafeAreaView>
+    );
+  }
+
+  if (!session) {
+    return (
+      <SafeAreaView style={styles.root}>
+        <View style={styles.center}>
+          <Text style={styles.centerTitle}>Sign in to see Insights</Text>
+          <Text style={styles.centerSub}>Insights shows your real funnels and verified revenue. Sign in to continue.</Text>
+          <Pressable style={styles.centerBtn} onPress={() => router.push("/(auth)/login")}>
+            <Text style={styles.centerBtnText}>Sign in</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.root}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-        {/* Funnel Overview */}
+        {/* Funnel Overview — real funnels */}
         <View style={styles.card}>
           <View style={styles.cardHeader}>
             <View>
               <Text style={styles.cardTitle}>Funnel Overview</Text>
               <Text style={styles.cardSub}>Track all your funnels in one place.</Text>
             </View>
-            <Pressable onPress={() => {}}>
+            <Pressable onPress={() => router.push("/(tabs)/funnels")}>
               <Text style={styles.viewAll}>View All Funnels ›</Text>
             </Pressable>
           </View>
 
-          <View style={styles.funnelGrid}>
-            {funnels.map((f) => (
-              <FunnelTile key={f.key} f={f} />
-            ))}
-          </View>
+          {loading ? (
+            <ActivityIndicator color={THEME.purpleBright} />
+          ) : funnels.length === 0 ? (
+            <Text style={styles.empty}>No funnels yet.</Text>
+          ) : (
+            <View style={styles.funnelGrid}>
+              {funnels.map((f, i) => {
+                const accents = Object.values(FUNNEL_ACCENTS)[i % Object.values(FUNNEL_ACCENTS).length];
+                return (
+                  <Pressable
+                    key={f.id}
+                    style={styles.funnelTile}
+                    onPress={() => router.push("/(tabs)/funnels")}
+                  >
+                    <View style={[styles.funnelIcon, { backgroundColor: `${accents.color}26` }]}>
+                      <Ionicons name={accents.icon as never} size={22} color={accents.color} />
+                    </View>
+                    <Text style={styles.funnelTitle} numberOfLines={2}>{f.name}</Text>
+                    <StatusBadge status={f.status} />
+                  </Pressable>
+                );
+              })}
+            </View>
+          )}
         </View>
 
-        {/* Revenue Overview */}
+        {/* Revenue Overview — verified revenue only */}
         <View style={styles.card}>
           <View style={styles.cardHeader}>
             <View>
               <Text style={styles.cardTitle}>Revenue Overview</Text>
-              <Text style={styles.cardSub}>All revenue across your funnels.</Text>
+              <Text style={styles.cardSub}>Verified revenue across your funnels.</Text>
             </View>
-            <Pressable style={styles.rangeBtn} onPress={() => {}}>
-              <Text style={styles.rangeText}>Last 30 Days ⌄</Text>
+            <Pressable style={styles.rangeBtn} onPress={() => setRangePickerOpen((v) => !v)}>
+              <Text style={styles.rangeText}>Last {rangeDays} Days ⌄</Text>
             </Pressable>
           </View>
 
-          <View style={styles.revenueRow}>
-            <View>
-              <Text style={styles.revenueLabel}>Total Revenue</Text>
-              <Text style={styles.revenueTotal}>{formatMoney(revenue.total)}</Text>
-              <Text style={styles.revenueDelta}>↑ {revenue.changePct}%</Text>
-              <Text style={styles.revenueDeltaSub}>vs last 30 days</Text>
+          {rangePickerOpen && (
+            <View style={styles.picker}>
+              {RANGE_OPTIONS.map((d) => (
+                <Pressable
+                  key={d}
+                  style={styles.pickerRow}
+                  onPress={() => {
+                    setRangeDays(d);
+                    setRangePickerOpen(false);
+                  }}
+                >
+                  <Text style={[styles.pickerText, rangeDays === d && styles.pickerTextActive]}>
+                    Last {d} Days
+                  </Text>
+                  {rangeDays === d && <Text style={styles.pickerCheck}>✓</Text>}
+                </Pressable>
+              ))}
             </View>
-            <Sparkline points={revenue.spark.length ? revenue.spark : [1, 2, 3]} width={170} height={60} />
-          </View>
-        </View>
+          )}
 
-        {/* Relationship Score */}
-        <View style={styles.card}>
-          <View style={styles.relRow}>
-            <Ring pct={85} size={84} center="8.5" sub="/10" />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.relTitle}>Relationship Score ✨</Text>
-              <Text style={styles.relSub}>
-                Your overall relationship health across all connections.
-              </Text>
-              <View style={styles.strongBadge}>
-                <Text style={styles.strongText}>{DEMO_RELATIONSHIP.strength}</Text>
+          {loading ? (
+            <ActivityIndicator color={THEME.purpleBright} />
+          ) : (
+            <>
+              <View style={styles.revenueRow}>
+                <View>
+                  <Text style={styles.revenueLabel}>Total Revenue</Text>
+                  <Text style={styles.revenueTotal}>{formatMoney(revenue.total)}</Text>
+                  {!!revenue.changeLabel && (
+                    <Text style={styles.revenueDelta}>{revenue.changeLabel}</Text>
+                  )}
+                  {revenue.total === 0 && (
+                    <Text style={styles.revenueDeltaSub}>No verified revenue in this window.</Text>
+                  )}
+                </View>
+                {revenue.spark.some((p) => p > 0) ? (
+                  <Sparkline points={revenue.spark} width={170} height={60} />
+                ) : null}
               </View>
-              <Text style={styles.relHint}>{DEMO_RELATIONSHIP.hint}</Text>
-            </View>
-            <Pressable
-              style={styles.insightsBtn}
-              onPress={() => router.push("/(tabs)/insights")}
-            >
-              <Text style={styles.insightsText}>View Insights ›</Text>
+              <Text style={styles.revenueNote}>
+                Verified revenue only — amount-0 rows are tracking, never revenue.
+              </Text>
+            </>
+          )}
+        </View>
+
+        {/* Relationship Score — no scoring model exists yet */}
+        <View style={styles.card}>
+          <Text style={styles.relTitle}>Relationship Score</Text>
+          <Text style={styles.relSub}>
+            Not calculated yet. Scoring needs the connections data model (not yet built).
+          </Text>
+        </View>
+
+        {!!error && (
+          <View style={[styles.card, styles.errorCard]}>
+            <Text style={styles.errorText}>{error}</Text>
+            <Pressable onPress={() => void refresh()}>
+              <Text style={styles.retryText}>Retry</Text>
             </Pressable>
           </View>
-        </View>
+        )}
 
         <View style={{ height: 12 }} />
       </ScrollView>
@@ -137,6 +221,11 @@ export default function InsightsScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: THEME.bg },
   content: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 8, gap: 16 },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 24, gap: 12 },
+  centerTitle: { color: "#fff", fontSize: 20, fontWeight: "900", textAlign: "center" },
+  centerSub: { color: THEME.textMuted, fontSize: 14, textAlign: "center", lineHeight: 20 },
+  centerBtn: { backgroundColor: THEME.purpleDeep, borderRadius: 999, paddingHorizontal: 24, paddingVertical: 12, marginTop: 8 },
+  centerBtnText: { color: "#fff", fontSize: 15, fontWeight: "800" },
   card: {
     backgroundColor: THEME.card,
     borderRadius: THEME.radius,
@@ -168,6 +257,7 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.06)",
     padding: 12,
     alignItems: "center",
+    gap: 6,
   },
   funnelIcon: {
     width: 44,
@@ -175,21 +265,11 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 8,
+    marginBottom: 2,
   },
   funnelTitle: { color: "#fff", fontSize: 12, fontWeight: "800", textAlign: "center" },
-  funnelValue: { color: "#fff", fontSize: 20, fontWeight: "900", marginTop: 4 },
-  funnelLabel: { color: THEME.textMuted, fontSize: 11, marginTop: 2 },
-  funnelBarTrack: {
-    marginTop: 10,
-    width: "100%",
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: "rgba(255,255,255,0.1)",
-    overflow: "hidden",
-  },
-  funnelBarFill: { height: "100%", borderRadius: 3 },
-  funnelPct: { color: THEME.textMuted, fontSize: 11, fontWeight: "800", marginTop: 6 },
+  statusBadge: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3 },
+  statusText: { fontSize: 10, fontWeight: "900" },
   rangeBtn: {
     backgroundColor: "rgba(255,255,255,0.07)",
     borderRadius: 999,
@@ -197,6 +277,22 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   rangeText: { color: THEME.textMuted, fontSize: 11, fontWeight: "800" },
+  picker: {
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderRadius: 12,
+    overflow: "hidden",
+    marginBottom: 12,
+  },
+  pickerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  pickerText: { color: THEME.textMuted, fontSize: 13, fontWeight: "700" },
+  pickerTextActive: { color: "#fff" },
+  pickerCheck: { color: THEME.green, fontSize: 13, fontWeight: "900" },
   revenueRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -206,20 +302,12 @@ const styles = StyleSheet.create({
   revenueLabel: { color: THEME.textMuted, fontSize: 12 },
   revenueTotal: { color: "#fff", fontSize: 26, fontWeight: "900", marginTop: 2 },
   revenueDelta: { color: THEME.green, fontSize: 13, fontWeight: "800", marginTop: 4 },
-  revenueDeltaSub: { color: THEME.textFaint, fontSize: 11 },
-  relRow: { flexDirection: "row", alignItems: "center", gap: 14 },
+  revenueDeltaSub: { color: THEME.textFaint, fontSize: 11, marginTop: 4 },
+  revenueNote: { color: THEME.textFaint, fontSize: 11, marginTop: 10, lineHeight: 15 },
   relTitle: { color: "#fff", fontSize: 15, fontWeight: "900" },
-  relSub: { color: THEME.textMuted, fontSize: 12, marginTop: 4, lineHeight: 16 },
-  strongBadge: {
-    alignSelf: "flex-start",
-    backgroundColor: "rgba(139,92,246,0.25)",
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    marginTop: 8,
-  },
-  strongText: { color: THEME.purpleBright, fontSize: 11, fontWeight: "900" },
-  relHint: { color: THEME.textFaint, fontSize: 11, marginTop: 4 },
-  insightsBtn: { alignSelf: "flex-start" },
-  insightsText: { color: THEME.purpleBright, fontSize: 12, fontWeight: "800" },
+  relSub: { color: THEME.textMuted, fontSize: 12, marginTop: 6, lineHeight: 17 },
+  empty: { color: THEME.textMuted, fontSize: 13 },
+  errorCard: { borderColor: "rgba(236,72,153,0.5)" },
+  errorText: { color: THEME.pink, fontSize: 13, lineHeight: 18 },
+  retryText: { color: THEME.purpleBright, fontSize: 13, fontWeight: "800", marginTop: 8 },
 });

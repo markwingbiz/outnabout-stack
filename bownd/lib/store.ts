@@ -1,10 +1,20 @@
-// app/lib/store.ts
+// bownd/lib/store.ts
 // Firestore-backed data layer for Bownd.
 //
-// Every read falls back to the bundled local data when Firestore is
-// unavailable, empty, or unconfigured, so the app works offline and
-// before the database is seeded. Writes require a configured backend
-// (and a signed-in user where the security rules demand one).
+// Phase 6 fix notes (see FIX-PLAN.md):
+// - NO demo fallback: when Firestore is empty, unavailable, or
+//   unconfigured, reads return []. Screens show an honest empty state
+//   ("No events yet") instead of presenting bundled demo data as real.
+// - The one-time demo seed (seedEventsIfEmpty) is DELETED. Bundled
+//   data must never be written into Firestore as if it were real.
+// - Points use Firestore increment() (atomic) instead of
+//   read-modify-write. Redemption points + history are written in one
+//   writeBatch so they cannot half-apply.
+// - getFavorites strips the `event:` / `venue:` doc-id prefix so
+//   FavoriteItem.id is always the bare event/venue id (previously the
+//   prefixed doc id leaked into FavoriteItem.id, breaking detail links).
+// - EventItem / Venue types live here now (data/events.ts + data/venues.ts
+//   are deleted — nothing may import bundled demo data at runtime).
 import {
   collection,
   doc,
@@ -14,13 +24,12 @@ import {
   deleteDoc,
   serverTimestamp,
   writeBatch,
+  increment,
 } from "firebase/firestore";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Crypto from "expo-crypto";
 
 import { db } from "./firebase";
-import { EVENTS, type EventItem } from "../data/events";
-import { VENUES, type Venue } from "../data/venues";
 import { createRedemption, validateAndRedeem } from "./redemptions";
 import type { PersonaProfile } from "./personaStore";
 
@@ -41,6 +50,24 @@ export function tierFor(points: number): Tier {
 // Types
 // ---------------------------------------------------------------------------
 
+export type EventItem = {
+  id: string;
+  title: string;
+  venueId: string; // Firestore venue doc id, or a venue name for legacy docs
+  startISO: string;
+  category: "spotlight" | "featured" | "standard";
+  vibeTags: string[];
+  audienceTags: string[];
+  priceLabel: string;
+};
+
+export type Venue = {
+  id: string;
+  name: string;
+  lat: number;
+  lng: number;
+};
+
 export type UserProfile = {
   uid: string;
   email: string | null;
@@ -52,7 +79,7 @@ export type UserProfile = {
 };
 
 export type FavoriteItem = {
-  id: string;
+  id: string; // bare event/venue id — never the `kind:id` doc id
   kind: "event" | "venue";
   title: string;
   subtitle: string;
@@ -123,67 +150,28 @@ function toVenue(id: string, data: any): Venue {
 }
 
 // ---------------------------------------------------------------------------
-// Events & venues
+// Events & venues — Firestore only. Empty/unconfigured/error => [].
 // ---------------------------------------------------------------------------
 
 export async function fetchEvents(): Promise<EventItem[]> {
-  if (!db) return EVENTS;
+  if (!db) return [];
   try {
     const snap = await getDocs(collection(db, "events"));
-    if (snap.empty) return EVENTS;
+    if (snap.empty) return [];
     return snap.docs.map((d) => toEventItem(d.id, d.data()));
   } catch {
-    return EVENTS;
+    return [];
   }
 }
 
 export async function fetchVenues(): Promise<Venue[]> {
-  if (!db) return VENUES;
+  if (!db) return [];
   try {
     const snap = await getDocs(collection(db, "venues"));
-    if (snap.empty) return VENUES;
+    if (snap.empty) return [];
     return snap.docs.map((d) => toVenue(d.id, d.data()));
   } catch {
-    return VENUES;
-  }
-}
-
-/**
- * One-time seed of the bundled demo events/venues into Firestore.
- * No-op when already seeded, when the backend is unconfigured, or on error.
- * Called after a user signs in (seeding requires an authenticated write).
- */
-export async function seedEventsIfEmpty(): Promise<boolean> {
-  if (!db) return false;
-  try {
-    const snap = await getDocs(collection(db, "events"));
-    if (!snap.empty) return false;
-
-    const batch = writeBatch(db);
-    for (const e of EVENTS) {
-      batch.set(doc(db, "events", e.id), {
-        title: e.title,
-        venueId: e.venueId,
-        startISO: e.startISO,
-        category: e.category,
-        vibeTags: e.vibeTags,
-        audienceTags: e.audienceTags,
-        priceLabel: e.priceLabel,
-        createdAtServer: serverTimestamp(),
-      });
-    }
-    for (const v of VENUES) {
-      batch.set(doc(db, "venues", v.id), {
-        name: v.name,
-        lat: v.lat,
-        lng: v.lng,
-        createdAtServer: serverTimestamp(),
-      });
-    }
-    await batch.commit();
-    return true;
-  } catch {
-    return false;
+    return [];
   }
 }
 
@@ -246,12 +234,27 @@ export async function getPoints(uid: string): Promise<number> {
   return p?.points ?? 0;
 }
 
+/**
+ * Atomic points increment (server-side increment, no read-modify-write).
+ * Returns the new balance (re-read), or 0 if the backend is unconfigured.
+ */
 export async function addPoints(uid: string, delta: number): Promise<number> {
   if (!db) return 0;
-  const p = await getUserProfile(uid);
-  const next = (p?.points ?? 0) + delta;
-  await saveUserProfile(uid, { points: next });
-  return next;
+  try {
+    await setDoc(
+      doc(db, "users", uid),
+      {
+        points: increment(delta),
+        updatedAt: Date.now(),
+        updatedAtServer: serverTimestamp(),
+      },
+      { merge: true }
+    );
+    const p = await getUserProfile(uid);
+    return p?.points ?? 0;
+  } catch {
+    return 0;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -284,10 +287,13 @@ export async function getFavorites(uid: string | null): Promise<FavoriteItem[]> 
     if (snap.empty) return [];
     return snap.docs.map((d) => {
       const data = d.data() as any;
+      // Doc id is `kind:id`; FavoriteItem.id must be the BARE id so
+      // detail links work (previously the prefixed doc id leaked through).
+      const bareId = d.id.replace(/^(event|venue):/, "");
       return {
-        id: d.id,
+        id: bareId,
         kind: data.kind === "venue" ? "venue" : "event",
-        title: data.title ?? d.id,
+        title: data.title ?? bareId,
         subtitle: data.subtitle ?? "",
         when: data.when,
         badge: data.badge,
@@ -298,7 +304,10 @@ export async function getFavorites(uid: string | null): Promise<FavoriteItem[]> 
   }
 }
 
-/** Toggle a favorite. Returns true if the item is now favorited. */
+/**
+ * Toggle a favorite. `item.id` must be the BARE event/venue id.
+ * Returns true if the item is now favorited.
+ */
 export async function toggleFavorite(
   uid: string | null,
   item: FavoriteItem
@@ -380,9 +389,47 @@ export type RedeemResult =
     };
 
 /**
- * Validate + redeem a code exactly once (atomic status transition in
- * Firestore). Signed-in users earn points and get a history record;
- * guests can still validate without earning points.
+ * Record a successful redemption for a signed-in user: points increment
+ * + history row in ONE writeBatch (atomic — both or neither).
+ * Returns the points awarded.
+ */
+export async function recordRedemption(
+  uid: string,
+  token: string,
+  experienceId: string
+): Promise<number> {
+  if (!db) return 0;
+  const batch = writeBatch(db);
+  batch.set(
+    doc(db, "users", uid),
+    {
+      points: increment(POINTS_PER_REDEMPTION),
+      updatedAt: Date.now(),
+      updatedAtServer: serverTimestamp(),
+    },
+    { merge: true }
+  );
+  batch.set(doc(db, "users", uid, "redemptions", token), {
+    token,
+    experienceId,
+    redeemedAt: Date.now(),
+    redeemedAtServer: serverTimestamp(),
+    pointsAwarded: POINTS_PER_REDEMPTION,
+  });
+  await batch.commit();
+  return POINTS_PER_REDEMPTION;
+}
+
+/**
+ * Validate + redeem a code exactly once. The token flip itself is a
+ * Firestore transaction (see lib/redemptions.ts); points + history are
+ * then recorded in one batch. Signed-in users earn points and get a
+ * history record; guests can still validate without earning points.
+ *
+ * Edge case (fail-safe, no double-credit): if recordRedemption throws
+ * after the token flip, the token stays REDEEMED and the caller gets
+ * UNKNOWN — the user can re-scan and will see ALREADY_REDEEMED, and no
+ * points are awarded twice.
  */
 export async function redeemCode(
   input: string,
@@ -399,15 +446,7 @@ export async function redeemCode(
 
     let pointsAwarded = 0;
     if (uid) {
-      pointsAwarded = POINTS_PER_REDEMPTION;
-      await addPoints(uid, POINTS_PER_REDEMPTION);
-      await setDoc(doc(db, "users", uid, "redemptions", token), {
-        token,
-        experienceId: res.experienceId,
-        redeemedAt: Date.now(),
-        redeemedAtServer: serverTimestamp(),
-        pointsAwarded,
-      });
+      pointsAwarded = await recordRedemption(uid, token, res.experienceId);
     }
     return { ok: true, experienceId: res.experienceId, pointsAwarded };
   } catch {

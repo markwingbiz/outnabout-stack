@@ -1,73 +1,99 @@
-// Livework+ data layer (Monfun section: funnels, revenue, relationship).
-// Reads from the Supabase `outnabout-stack` schema when configured.
-// Falls back to demo values matching the supplied mockups when Supabase
-// is unconfigured or a table is empty (the tables are currently empty).
+// Livework+ data layer (Insights: funnels + verified revenue) — Phase 5.
+// Live Supabase queries ONLY. No demo funnel / revenue / relationship
+// fallbacks. Revenue is verified-only: revenue_events rows with
+// amount > 0 (amount-0 rows are tracking, never revenue).
 import { supabase } from "./supabase";
 
-export type FunnelCard = {
-  key: "lead" | "sales" | "delivery" | "retention";
-  title: string;
-  value: number;
-  label: string;
-  pct: number;
+export type FunnelSummary = {
+  id: string;
+  name: string;
+  status: string;
 };
 
-// Demo fallback — the exact numbers from the supplied Funnel Overview mockup.
-export const DEMO_FUNNELS: FunnelCard[] = [
-  { key: "lead", title: "Lead Funnel", value: 128, label: "Leads", pct: 64 },
-  { key: "sales", title: "Sales Funnel", value: 56, label: "Opportunities", pct: 48 },
-  { key: "delivery", title: "Delivery Funnel", value: 32, label: "In Progress", pct: 72 },
-  { key: "retention", title: "Retention Funnel", value: 18, label: "Active", pct: 60 },
-];
-
-export const DEMO_REVENUE = {
-  total: 248750,
-  changePct: 18.7,
-  // Demo sparkline points (0-100) matching the mockup's rising curve.
-  spark: [12, 16, 14, 22, 26, 24, 34, 38, 36, 48, 52, 50, 62, 66, 64, 76, 82, 88],
+export type RevenueSummary = {
+  /** Sum of revenue_events.amount in the window. Treated as dollars (see note). */
+  total: number;
+  /** Change vs the prior equal-length window, or null when not computable. */
+  changeLabel: string | null;
+  /** Per-day verified revenue (dollars) across the window, oldest → newest. */
+  spark: number[];
 };
 
-export const DEMO_RELATIONSHIP = {
-  score: 8.5,
-  max: 10,
-  strength: "Strong",
-  hint: "Keep building meaningful connections.",
-};
-
-export async function fetchFunnels(): Promise<FunnelCard[]> {
-  if (!supabase) return DEMO_FUNNELS;
+export async function fetchFunnels(): Promise<{ funnels: FunnelSummary[]; error: string | null }> {
+  if (!supabase) {
+    return { funnels: [], error: "Supabase is not configured." };
+  }
   try {
-    // Funnel counts come from the leads/opportunities tables when populated.
-    const [leads, opps] = await Promise.all([
-      supabase.from("leads").select("id", { count: "exact", head: true }),
-      supabase.from("opportunities").select("id", { count: "exact", head: true }),
-    ]);
-    const leadCount = leads.count ?? 0;
-    const oppCount = opps.count ?? 0;
-    if (leadCount === 0 && oppCount === 0) return DEMO_FUNNELS;
-    return [
-      { key: "lead", title: "Lead Funnel", value: leadCount, label: "Leads", pct: 64 },
-      { key: "sales", title: "Sales Funnel", value: oppCount, label: "Opportunities", pct: 48 },
-      { key: "delivery", title: "Delivery Funnel", value: 0, label: "In Progress", pct: 72 },
-      { key: "retention", title: "Retention Funnel", value: 0, label: "Active", pct: 60 },
-    ];
-  } catch {
-    return DEMO_FUNNELS;
+    const { data, error } = await supabase
+      .from("funnels")
+      .select("id, name, status")
+      .order("created_at", { ascending: true });
+    if (error) throw new Error(error.message);
+    const funnels = ((data ?? []) as Record<string, unknown>[]).map((f) => ({
+      id: String(f.id ?? ""),
+      name: String(f.name ?? "Unnamed funnel"),
+      status: String(f.status ?? "draft"),
+    }));
+    return { funnels, error: null };
+  } catch (e) {
+    return { funnels: [], error: e instanceof Error ? e.message : "Could not load funnels." };
   }
 }
 
-export async function fetchRevenue(): Promise<typeof DEMO_REVENUE> {
-  if (!supabase) return DEMO_REVENUE;
+// revenue_events.amount is treated as dollars, matching the prior display
+// code. If the table stores cents, divide by 100 here.
+export async function fetchRevenue(rangeDays: number): Promise<{ revenue: RevenueSummary; error: string | null }> {
+  const empty: RevenueSummary = { total: 0, changeLabel: null, spark: [] };
+  if (!supabase) {
+    return { revenue: empty, error: "Supabase is not configured." };
+  }
   try {
-    const { data, error } = await supabase
-      .from("revenue_events")
-      .select("amount")
-      .gte("occurred_at", new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString());
-    if (error || !data || data.length === 0) return DEMO_REVENUE;
-    const total = data.reduce((sum, r) => sum + Number(r.amount ?? 0), 0);
-    return { ...DEMO_REVENUE, total };
-  } catch {
-    return DEMO_REVENUE;
+    const now = new Date();
+    const windowStart = new Date(now.getTime() - rangeDays * 24 * 60 * 60 * 1000);
+    const priorStart = new Date(windowStart.getTime() - rangeDays * 24 * 60 * 60 * 1000);
+    const [cur, prev] = await Promise.all([
+      supabase
+        .from("revenue_events")
+        .select("amount, occurred_at")
+        .gt("amount", 0)
+        .gte("occurred_at", windowStart.toISOString())
+        .lte("occurred_at", now.toISOString()),
+      supabase
+        .from("revenue_events")
+        .select("amount")
+        .gt("amount", 0)
+        .gte("occurred_at", priorStart.toISOString())
+        .lt("occurred_at", windowStart.toISOString()),
+    ]);
+    if (cur.error) throw new Error(cur.error.message);
+    if (prev.error) throw new Error(prev.error.message);
+
+    const rows = ((cur.data ?? []) as { amount?: unknown; occurred_at?: unknown }[]).map((r) => ({
+      amount: typeof r.amount === "number" ? r.amount : 0,
+      at: typeof r.occurred_at === "string" ? new Date(r.occurred_at) : null,
+    }));
+    const total = rows.reduce((sum, r) => sum + r.amount, 0);
+    const prevTotal = ((prev.data ?? []) as { amount?: unknown }[]).reduce(
+      (sum, r) => sum + (typeof r.amount === "number" ? r.amount : 0),
+      0,
+    );
+    const changeLabel =
+      prevTotal > 0
+        ? `${total >= prevTotal ? "+" : ""}${Math.round(((total - prevTotal) / prevTotal) * 100)}% vs prior ${rangeDays} days`
+        : total > 0
+          ? "New — no prior-period revenue"
+          : null;
+
+    // Per-day buckets, oldest → newest.
+    const spark = Array.from({ length: rangeDays }, () => 0);
+    for (const r of rows) {
+      if (!r.at || Number.isNaN(r.at.getTime())) continue;
+      const idx = Math.floor((r.at.getTime() - windowStart.getTime()) / (24 * 60 * 60 * 1000));
+      if (idx >= 0 && idx < rangeDays) spark[idx] += r.amount;
+    }
+    return { revenue: { total, changeLabel, spark }, error: null };
+  } catch (e) {
+    return { revenue: empty, error: e instanceof Error ? e.message : "Could not load revenue." };
   }
 }
 

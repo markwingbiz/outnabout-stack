@@ -66,6 +66,34 @@ export default function TabsLayout() {
           tabBarIcon: ({ focused }) => <TabIcon name="settings" focused={focused} />,
         }}
       />
+      <Tabs.Screen
+        name="forge"
+        options={{
+          title: "Forge",
+          tabBarIcon: ({ focused }) => <TabIcon name="flash" focused={focused} />,
+        }}
+      />
+      <Tabs.Screen
+        name="approvals"
+        options={{
+          title: "Approvals",
+          tabBarIcon: ({ focused }) => <TabIcon name="checkmark-circle" focused={focused} />,
+        }}
+      />
+      <Tabs.Screen
+        name="funnels"
+        options={{
+          title: "Funnels",
+          tabBarIcon: ({ focused }) => <TabIcon name="filter" focused={focused} />,
+        }}
+      />
+      <Tabs.Screen
+        name="jobs"
+        options={{
+          title: "Jobs",
+          tabBarIcon: ({ focused }) => <TabIcon name="list" focused={focused} />,
+        }}
+      />
     </Tabs>
   );
 }
