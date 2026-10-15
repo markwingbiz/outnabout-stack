@@ -1,0 +1,81 @@
+// Firestore security rules for Bownd.
+// Deploy with: firebase deploy --only firestore:rules
+// Or paste into Firebase Console -> Firestore Database -> Rules.
+//
+// Phase 6 changes (see FIX-PLAN.md):
+// - events/venues writes are now DENIED from clients (allow: if false).
+//   The old "any signed-in user may write" rule existed only for the
+//   one-time demo seed, which Phase 6 deletes (demo data must never be
+//   written into Firestore). Catalog writes come from the bownd-sync
+//   service identity (server-side) and, later, an admin/venue role —
+//   never from the customer app. Reads stay public.
+// - Redemptions rules are UNCHANGED: the NEW -> REDEEMED transition
+//   with the restricted changed-keys set is the second layer of the
+//   anti-double-redemption guard (the first layer is the Firestore
+//   transaction in lib/redemptions.ts).
+//
+// Principles:
+// - Events/venues are public to read. Client writes are denied.
+// - Each user can only read/write their own user doc, favorites, and
+//   redemption history.
+// - Top-level `redemptions` tokens: any signed-in user may create a
+//   token and may flip a NEW token to REDEEMED exactly once. They may
+//   NOT edit other fields, un-redeem, or delete tokens.
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    // Public catalog (read). Client writes DENIED (Phase 6) — catalog
+    // writes come from bownd-sync (service identity) and, later, an
+    // admin/venue role. The old signed-in write allowance existed only
+    // for the deleted demo seed.
+    match /events/{id} {
+      allow read: if true;
+      allow create, update, delete: if false;
+    }
+    match /venues/{id} {
+      allow read: if true;
+      allow create, update, delete: if false;
+    }
+
+    // User profiles — owner only.
+    match /users/{uid} {
+      allow read, write: if isOwner(uid);
+
+      match /favorites/{favId} {
+        allow read, write: if isOwner(uid);
+      }
+
+      // Redemption history — owner can read + create (via the app's
+      // redeem flow). No updates/deletes.
+      match /redemptions/{token} {
+        allow read: if isOwner(uid);
+        allow create: if isOwner(uid);
+        allow update, delete: if false;
+      }
+    }
+
+    // Verifiable redemption tokens — atomic single-use.
+    match /redemptions/{token} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      // Only a NEW -> REDEEMED transition, and only the status +
+      // redemption metadata fields may change.
+      allow update: if signedIn()
+        && resource.data.status == 'NEW'
+        && request.resource.data.status == 'REDEEMED'
+        && request.resource.data.diff(resource.data).changedKeys()
+             .hasOnly(['status', 'redeemedAt', 'redeemedAtServer', 'redeemedByDevice']);
+      allow delete: if false;
+    }
+  }
+}

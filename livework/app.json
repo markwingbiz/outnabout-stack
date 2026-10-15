@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "android": {
+      "package": "com.livework.app"
+    },
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "7b6b63be-012e-4316-a39c-bee5edefbd16"
+      },
+      "router": {}
+    },
+    "ios": {
+      "bundleIdentifier": "com.livework.app",
+      "supportsTablet": true
+    },
+    "name": "Livework",
+    "newArchEnabled": true,
+    "orientation": "portrait",
+    "plugins": [
+      "expo-router",
+      "expo-font"
+    ],
+    "scheme": "livework",
+    "slug": "livework",
+    "userInterfaceStyle": "dark",
+    "version": "1.0.0",
+    "owner": "markwing"
+  }
+}

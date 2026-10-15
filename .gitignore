@@ -1,0 +1,8 @@
+# Monorepo-wide ignores (each app also has its own .gitignore)
+node_modules/
+.expo/
+.env
+*.log
+dist/
+build/
+.DS_Store
