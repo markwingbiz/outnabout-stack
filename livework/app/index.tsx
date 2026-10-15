@@ -191,6 +191,19 @@ export default function DashboardScreen() {
           <ActivityIndicator color={THEME.purple} size="large" style={{ marginTop: 24 }} />
         ) : (
           <>
+            {/* Setup — vendor has no membership or no venue yet */}
+            {(data?.needsSetup || (data && !data.hasVenue)) && (
+              <View style={[styles.card, styles.setupCard]}>
+                <Text style={styles.setupTitle}>Set up your venue</Text>
+                <Text style={styles.setupText}>
+                  Your account has no venue yet. Set one up to see your events and revenue.
+                </Text>
+                <Pressable style={styles.setupBtn} onPress={() => router.push("/setup-venue")}>
+                  <Text style={styles.setupBtnText}>Set up your venue</Text>
+                </Pressable>
+              </View>
+            )}
+
             {/* KPI cards — real counts only */}
             <View style={styles.kpiGrid}>
               <View style={styles.kpiCard}>
@@ -202,6 +215,7 @@ export default function DashboardScreen() {
                 <Text style={styles.kpiLabel}>Verified Revenue</Text>
                 <Text style={styles.kpiValue}>{formatMoney(data?.verifiedRevenue ?? 0)}</Text>
                 <Text style={styles.kpiDelta}>Verified only — projections never shown as earned</Text>
+                {!!data?.revenueScopeNote && <Text style={styles.revenueNote}>{data.revenueScopeNote}</Text>}
               </View>
             </View>
 
@@ -430,6 +444,18 @@ const styles = StyleSheet.create({
   kpiLabel: { color: THEME.textMuted, fontSize: 12, fontWeight: "700" },
   kpiValue: { color: "#fff", fontSize: 24, fontWeight: "900", marginTop: 6 },
   kpiDelta: { color: THEME.green, fontSize: 11, fontWeight: "800", marginTop: 4 },
+  revenueNote: { color: THEME.textFaint, fontSize: 11, lineHeight: 15, marginTop: 6 },
+  setupCard: { borderColor: "rgba(139,92,246,0.5)" },
+  setupTitle: { color: "#fff", fontSize: 16, fontWeight: "900" },
+  setupText: { color: THEME.textMuted, fontSize: 13, lineHeight: 18, marginTop: 6 },
+  setupBtn: {
+    backgroundColor: THEME.purple,
+    borderRadius: 10,
+    paddingVertical: 11,
+    alignItems: "center",
+    marginTop: 12,
+  },
+  setupBtnText: { color: "#fff", fontWeight: "900", fontSize: 14 },
   card: {
     backgroundColor: THEME.card,
     borderRadius: THEME.radius,
