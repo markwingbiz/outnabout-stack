@@ -3,6 +3,10 @@
 // in app/_layout.tsx (see phase-a-ui README). When Supabase is
 // unconfigured, session stays null and sign-in throws a plain error.
 // No demo login, no hardcoded credentials.
+// Phase 8 Slice 1: self-registration is removed by design — there is no
+// signUp in this provider and no sign-up UI. Operator accounts are
+// created in the Supabase dashboard. Disabling sign-ups server-side is
+// a separate Supabase dashboard step, not code.
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
@@ -12,7 +16,6 @@ export type AuthContextValue = {
   user: User | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
-  signUp: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
 };
 
@@ -53,11 +56,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       signIn: async (email: string, password: string) => {
         if (!supabase) throw new Error("Supabase is not configured.");
         const { error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
-      },
-      signUp: async (email: string, password: string) => {
-        if (!supabase) throw new Error("Supabase is not configured.");
-        const { error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
       },
       signOut: async () => {

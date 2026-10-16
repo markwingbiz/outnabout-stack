@@ -1,30 +1,68 @@
-// Livework+ root layout — Phase 5.
-// Wraps the app in phase-a-ui <AuthProvider> and registers the (auth)
-// route (phase-a-ui lib/auth.tsx + app/(auth)/login.tsx must be copied
-// into the repo for this to resolve). The (tabs) group picks up the
-// phase-a-ui Forge tabs (forge, approvals, funnels, jobs) once they are
-// copied in and registered in (tabs)/_layout.tsx (see phase-a-ui README).
-import React from "react";
-import { Stack } from "expo-router";
+// Livework+ root layout — Phase 5 + Phase 8 Slice 1 (auth hardening).
+// Wraps the app in <AuthProvider> and registers the (auth) route.
+// Phase 8 Slice 1: <AuthGate> redirects unsigned users to the login
+// screen from anywhere outside the (auth) group, so the whole app
+// (including the legacy Home / Connections / Dates tabs) requires a
+// signed-in session. The (auth) group itself stays accessible unsigned;
+// the login screen redirects signed-in users back to /(tabs), so there
+// is no redirect loop: the gate only ever pushes unsigned users toward
+// login, never away from it.
+import React, { useEffect } from "react";
+import { View, ActivityIndicator } from "react-native";
+import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { THEME } from "../lib/theme";
-import { AuthProvider } from "../lib/auth";
+import { AuthProvider, useAuth } from "../lib/auth";
+
+function AuthGate({ children }: { children: React.ReactNode }) {
+  const { session, loading } = useAuth();
+  const segments = useSegments();
+  const router = useRouter();
+  const inAuthGroup = segments[0] === "(auth)";
+
+  useEffect(() => {
+    if (loading) return;
+    if (!session && !inAuthGroup) router.replace("/(auth)/login");
+  }, [loading, session, inAuthGroup, router]);
+
+  // While the session is resolving, show a loading screen instead of
+  // flashing the tabs. While an unsigned user is being redirected,
+  // render nothing so no gated tab content flashes.
+  if (loading) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: THEME.bg,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <ActivityIndicator color={THEME.purpleBright} size="large" />
+      </View>
+    );
+  }
+  if (!session && !inAuthGroup) return null;
+  return <>{children}</>;
+}
 
 export default function RootLayout() {
   return (
     <AuthProvider>
-      <>
-        <StatusBar style="light" />
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            contentStyle: { backgroundColor: THEME.bg },
-          }}
-        >
-          <Stack.Screen name="(tabs)" />
-          <Stack.Screen name="(auth)" />
-        </Stack>
-      </>
+      <AuthGate>
+        <>
+          <StatusBar style="light" />
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: THEME.bg },
+            }}
+          >
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen name="(auth)" />
+          </Stack>
+        </>
+      </AuthGate>
     </AuthProvider>
   );
 }

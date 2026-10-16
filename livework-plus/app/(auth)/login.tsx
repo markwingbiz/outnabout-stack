@@ -1,5 +1,12 @@
-// Livework+ sign-in / register screen (email + password, Supabase Auth).
+// Livework+ sign-in screen (email + password, Supabase Auth).
 // No demo login, no hardcoded credentials. On success, returns to the tabs.
+// Phase 8 Slice 1: sign-in ONLY. The sign-up UI was removed — Livework+
+// is Mark's private command center, and open self-registration let any
+// stranger create an account. Operator accounts are created in the
+// Supabase dashboard. Disabling sign-ups server-side is a separate
+// Supabase dashboard step (Authentication → Providers → Email → turn off
+// "Allow new users to sign up") — this patch removes only the app-side
+// sign-up path.
 import React, { useEffect, useState } from "react";
 import {
   Text,
@@ -17,8 +24,7 @@ import { useAuth } from "../../lib/auth";
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { session, signIn, signUp, loading: authLoading } = useAuth();
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const { session, signIn, loading: authLoading } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -37,8 +43,7 @@ export default function LoginScreen() {
     }
     setSubmitting(true);
     try {
-      if (mode === "signin") await signIn(cleanEmail, password);
-      else await signUp(cleanEmail, password);
+      await signIn(cleanEmail, password);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Sign-in failed. Try again.");
     } finally {
@@ -53,11 +58,7 @@ export default function LoginScreen() {
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
         <Text style={styles.title}>Livework+</Text>
-        <Text style={styles.sub}>
-          {mode === "signin"
-            ? "Sign in with your operator account."
-            : "Create your operator account."}
-        </Text>
+        <Text style={styles.sub}>Sign in with your operator account.</Text>
 
         <Text style={styles.label}>Email</Text>
         <TextInput
@@ -93,31 +94,8 @@ export default function LoginScreen() {
           {submitting ? (
             <ActivityIndicator color="#fff" />
           ) : (
-            <Text style={styles.submitText}>
-              {mode === "signin" ? "Sign in" : "Create account"}
-            </Text>
+            <Text style={styles.submitText}>Sign in</Text>
           )}
-        </Pressable>
-
-        {mode === "signup" && (
-          <Text style={styles.hint}>
-            If email confirmation is enabled in Supabase Auth, check your email
-            to confirm your account before signing in.
-          </Text>
-        )}
-
-        <Pressable
-          style={styles.toggle}
-          onPress={() => {
-            setMode(mode === "signin" ? "signup" : "signin");
-            setError(null);
-          }}
-        >
-          <Text style={styles.toggleText}>
-            {mode === "signin"
-              ? "Need an account? Create one ›"
-              : "Already have an account? Sign in ›"}
-          </Text>
         </Pressable>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -150,7 +128,4 @@ const styles = StyleSheet.create({
   },
   submitBtnDisabled: { opacity: 0.5 },
   submitText: { color: "#fff", fontSize: 15, fontWeight: "800" },
-  hint: { color: THEME.textFaint, fontSize: 12, lineHeight: 16, marginTop: 8 },
-  toggle: { alignItems: "center", marginTop: 12 },
-  toggleText: { color: THEME.purpleBright, fontSize: 14, fontWeight: "800" },
 });
