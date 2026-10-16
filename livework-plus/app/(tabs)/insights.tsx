@@ -6,6 +6,9 @@
 // The Relationship card is an honest empty state (no scoring model yet).
 // Requires phase-a-ui Auth (<AuthProvider> in app/_layout.tsx) and the
 // phase-a-ui Funnels tab at /(tabs)/funnels.
+// Phase 8 Slice 1: Insights is operator-gated via <ForgeGate> (same
+// check as the Forge tabs) — a signed-in non-operator sees
+// "Forge is for operators", never funnel names or verified revenue.
 import React, { useCallback, useEffect, useState } from "react";
 import {
   View,
@@ -19,6 +22,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import Sparkline from "../../components/Sparkline";
+import ForgeGate from "../../components/ForgeGate";
 import { THEME, FUNNEL_ACCENTS } from "../../lib/theme";
 import {
   fetchFunnels,
@@ -27,7 +31,6 @@ import {
   type FunnelSummary,
   type RevenueSummary,
 } from "../../lib/data";
-import { useAuth } from "../../lib/auth";
 
 const RANGE_OPTIONS = [7, 30, 90];
 
@@ -49,8 +52,15 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export default function InsightsScreen() {
+  return (
+    <ForgeGate>
+      <InsightsContent />
+    </ForgeGate>
+  );
+}
+
+function InsightsContent() {
   const router = useRouter();
-  const { session, loading: authLoading } = useAuth();
   const [funnels, setFunnels] = useState<FunnelSummary[]>([]);
   const [revenue, setRevenue] = useState<RevenueSummary>({ total: 0, changeLabel: null, spark: [] });
   const [rangeDays, setRangeDays] = useState(30);
@@ -70,31 +80,8 @@ export default function InsightsScreen() {
   }, [rangeDays]);
 
   useEffect(() => {
-    if (session) void refresh();
-    else setLoading(false);
-  }, [session, refresh]);
-
-  if (authLoading) {
-    return (
-      <SafeAreaView style={styles.root}>
-        <ActivityIndicator color={THEME.purpleBright} size="large" style={{ marginTop: 40 }} />
-      </SafeAreaView>
-    );
-  }
-
-  if (!session) {
-    return (
-      <SafeAreaView style={styles.root}>
-        <View style={styles.center}>
-          <Text style={styles.centerTitle}>Sign in to see Insights</Text>
-          <Text style={styles.centerSub}>Insights shows your real funnels and verified revenue. Sign in to continue.</Text>
-          <Pressable style={styles.centerBtn} onPress={() => router.push("/(auth)/login")}>
-            <Text style={styles.centerBtnText}>Sign in</Text>
-          </Pressable>
-        </View>
-      </SafeAreaView>
-    );
-  }
+    void refresh();
+  }, [refresh]);
 
   return (
     <SafeAreaView style={styles.root}>
@@ -221,11 +208,6 @@ export default function InsightsScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: THEME.bg },
   content: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 8, gap: 16 },
-  center: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 24, gap: 12 },
-  centerTitle: { color: "#fff", fontSize: 20, fontWeight: "900", textAlign: "center" },
-  centerSub: { color: THEME.textMuted, fontSize: 14, textAlign: "center", lineHeight: 20 },
-  centerBtn: { backgroundColor: THEME.purpleDeep, borderRadius: 999, paddingHorizontal: 24, paddingVertical: 12, marginTop: 8 },
-  centerBtnText: { color: "#fff", fontSize: 15, fontWeight: "800" },
   card: {
     backgroundColor: THEME.card,
     borderRadius: THEME.radius,
