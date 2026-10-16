@@ -30,6 +30,11 @@ import {
   type FavoriteItem,
 } from "../lib/store";
 import { useAuth } from "../lib/auth";
+import {
+  findShowcaseEvent,
+  findShowcaseVenue,
+  isShowcaseId,
+} from "../data/showcase";
 
 function formatWhen(startISO: string) {
   const d = new Date(startISO);
@@ -67,28 +72,46 @@ export default function DetailScreen() {
     };
   }, []);
 
+  const demoEvent = useMemo(() => {
+    if (kind === "experience" || kind === "venue") return undefined;
+    if (!id || !isShowcaseId(id)) return undefined;
+    return findShowcaseEvent(id);
+  }, [id, kind]);
+
+  const demoVenue = useMemo(() => {
+    if (!id || !isShowcaseId(id)) return undefined;
+    if (kind === "venue" || id.startsWith("demo-venue-")) return findShowcaseVenue(id);
+    return undefined;
+  }, [id, kind]);
+
   const event = useMemo(
-    () => (kind === "experience" ? undefined : events.find((e) => e.id === id)),
-    [events, id, kind]
+    () =>
+      kind === "experience"
+        ? undefined
+        : (events.find((e) => e.id === id) ?? demoEvent),
+    [events, id, kind, demoEvent]
   );
 
+  const isDemo = !!demoEvent || !!demoVenue;
+
   const experience = useMemo(() => {
-    if (event) return undefined;
+    if (event || demoVenue) return undefined;
     return EXPERIENCES.find((e) => e.id === id);
-  }, [event, id]);
+  }, [event, demoVenue, id]);
 
   const venueName = useMemo(() => {
+    if (demoVenue) return demoVenue.name;
     if (!event) return "";
     const v = venues.find((x) => x.id === event.venueId || x.name === event.venueId);
-    return v?.name ?? (event.venueId || "Venue");
-  }, [event, venues]);
+    return v?.name ?? findShowcaseVenue(event.venueId)?.name ?? (event.venueId || "Venue");
+  }, [demoVenue, event, venues]);
 
   // Favorite state for whichever item is shown.
   useEffect(() => {
     let alive = true;
-    const favId = event?.id ?? experience?.id;
+    const favId = event?.id ?? demoVenue?.id ?? experience?.id;
     if (!favId) return;
-    isFavorite(user?.uid ?? null, "event", favId)
+    isFavorite(user?.uid ?? null, demoVenue ? "venue" : "event", favId)
       .then((v) => {
         if (alive) setFav(v);
       })
@@ -96,25 +119,33 @@ export default function DetailScreen() {
     return () => {
       alive = false;
     };
-  }, [event?.id, experience?.id, user?.uid]);
+  }, [event?.id, demoVenue?.id, experience?.id, demoVenue, user?.uid]);
 
   async function onToggleFav() {
-    const item: FavoriteItem | null = event
+    // Demo items: bookmark-only Save. Never any purchase/redeem action.
+    const item: FavoriteItem | null = demoVenue
       ? {
-          id: event.id,
-          kind: "event",
-          title: event.title,
-          subtitle: venueName,
-          when: formatWhen(event.startISO),
+          id: demoVenue.id,
+          kind: "venue",
+          title: demoVenue.name,
+          subtitle: "Showcase preview",
         }
-      : experience
+      : event
         ? {
-            id: experience.id,
+            id: event.id,
             kind: "event",
-            title: experience.title,
-            subtitle: experience.neighborhood,
+            title: event.title,
+            subtitle: venueName,
+            when: formatWhen(event.startISO),
           }
-        : null;
+        : experience
+          ? {
+              id: experience.id,
+              kind: "event",
+              title: experience.title,
+              subtitle: experience.neighborhood,
+            }
+          : null;
     if (!item) return;
     try {
       const nowFav = await toggleFavorite(user?.uid ?? null, item);
@@ -159,6 +190,13 @@ export default function DetailScreen() {
             </BrandCard>
           ) : event ? (
             <BrandCard>
+              {isDemo && (
+                <View style={styles.demoBadge}>
+                  <Text style={styles.demoBadgeText}>
+                    Showcase preview — not a live listing
+                  </Text>
+                </View>
+              )}
               <Text style={styles.h2}>{event.title}</Text>
               <Text style={styles.meta}>
                 {venueName} • {formatWhen(event.startISO)}
@@ -172,6 +210,25 @@ export default function DetailScreen() {
                   </View>
                 ))}
               </View>
+
+              <View style={styles.actionsRow}>
+                <Pressable onPress={onToggleFav} style={styles.actionBtn}>
+                  <Text style={styles.actionBtnText}>{fav ? "♥ Saved" : "♡ Save"}</Text>
+                </Pressable>
+                <Pressable onPress={openVenueEvents} style={[styles.actionBtn, styles.actionBtnGhost]}>
+                  <Text style={[styles.actionBtnText, styles.actionBtnGhostText]}>See venue events</Text>
+                </Pressable>
+              </View>
+            </BrandCard>
+          ) : demoVenue ? (
+            <BrandCard>
+              <View style={styles.demoBadge}>
+                <Text style={styles.demoBadgeText}>
+                  Showcase preview — not a live listing
+                </Text>
+              </View>
+              <Text style={styles.h2}>{demoVenue.name}</Text>
+              <Text style={styles.meta}>Showcase preview venue</Text>
 
               <View style={styles.actionsRow}>
                 <Pressable onPress={onToggleFav} style={styles.actionBtn}>
@@ -247,6 +304,22 @@ const styles = StyleSheet.create({
   h2: {
     color: theme.text,
     fontSize: 22,
+    fontWeight: "900",
+  },
+
+  demoBadge: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "rgba(245,195,106,0.16)",
+    borderWidth: 1,
+    borderColor: "rgba(245,195,106,0.45)",
+    marginBottom: 10,
+  },
+  demoBadgeText: {
+    color: "#f5c36a",
+    fontSize: 12,
     fontWeight: "900",
   },
 

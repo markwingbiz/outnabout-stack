@@ -59,6 +59,9 @@ export type EventItem = {
   vibeTags: string[];
   audienceTags: string[];
   priceLabel: string;
+  // Featured placement flag for paid featured placement (monetization
+  // structure, no billing). Optional: absent/false means not featured.
+  featured?: boolean;
 };
 
 export type Venue = {
@@ -66,6 +69,9 @@ export type Venue = {
   name: string;
   lat: number;
   lng: number;
+  // Featured placement flag for paid featured placement (monetization
+  // structure, no billing). Optional: absent/false means not featured.
+  featured?: boolean;
 };
 
 export type UserProfile = {
@@ -137,6 +143,7 @@ function toEventItem(id: string, data: any): EventItem {
     vibeTags: Array.isArray(data.vibeTags) ? data.vibeTags : [],
     audienceTags: Array.isArray(data.audienceTags) ? data.audienceTags : [],
     priceLabel: typeof data.priceLabel === "string" ? data.priceLabel : "",
+    featured: data.featured === true,
   };
 }
 
@@ -146,6 +153,7 @@ function toVenue(id: string, data: any): Venue {
     name: typeof data.name === "string" ? data.name : id,
     lat: typeof data.lat === "number" ? data.lat : 0,
     lng: typeof data.lng === "number" ? data.lng : 0,
+    featured: data.featured === true,
   };
 }
 
