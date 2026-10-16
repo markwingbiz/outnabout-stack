@@ -2,6 +2,11 @@
 // All Forge state changes go through the Edge Functions (forge-command,
 // forge-approve, forge-funnel, forge-cleanup). Reads use Supabase
 // PostgREST + RLS. No direct table writes from the UI for Forge state.
+// EXCEPTION (Phase 8 Slice 5): the Relationship section (Connections /
+// Dates tabs, Mark's eyes only) and Forge Suggestions are operator-only
+// private tables with no Edge Function; their screens write via direct
+// Supabase client calls gated by the operator-only RLS policies from
+// relationship-migration.sql.
 // No secrets, no hardcoded URLs except EXPO_PUBLIC_SUPABASE_URL.
 import { useEffect, useState } from "react";
 import { supabase } from "./supabase";
@@ -606,6 +611,144 @@ export type BowndMirrorStateRow = {
   last_sync_at: string | null;
   last_error: string | null;
 };
+
+// ---------- Relationship + Forge suggestions (Phase 8 Slice 5) ----------
+// Private operator-only tables (see relationship-migration.sql). The
+// Relationship section (Connections / Dates tabs) is Mark's eyes only;
+// Suggestions are Forge/worker output the operator acts on or dismisses.
+// No demo/fake rows — every row is created by Mark in the app or by a
+// worker (Phase B runtime).
+
+/** One weekly relationship check-in: feelings + mental-health notes + rating. */
+export type RelationshipCheckinRow = {
+  id: string;
+  checkin_date: string | null;
+  feelings_notes: string | null;
+  mental_health_notes: string | null;
+  rating: number | null;
+  created_at: string | null;
+};
+
+/** One planned/done date: out or thoughtful, alternating every other week. */
+export type RelationshipDateRow = {
+  id: string;
+  date_type: string | null;
+  scheduled_date: string | null;
+  title: string | null;
+  notes: string | null;
+  status: string | null;
+  created_at: string | null;
+};
+
+/** One gift idea, optionally linked to a "little things she says" note. */
+export type RelationshipGiftIdeaRow = {
+  id: string;
+  idea: string | null;
+  note_id: string | null;
+  status: string | null;
+  created_at: string | null;
+};
+
+/** One "little things she says" note. */
+export type RelationshipNoteRow = {
+  id: string;
+  content: string | null;
+  created_at: string | null;
+};
+
+/** One Forge/worker suggestion for the operator. */
+export type ForgeSuggestionRow = {
+  id: string;
+  title: string | null;
+  body: string | null;
+  category: string | null;
+  source_worker_slug: string | null;
+  status: string | null;
+  funnel_id: string | null;
+  worker_id: string | null;
+  deliverable_id: string | null;
+  created_at: string | null;
+};
+
+/** Categories for forge_suggestions (must match the migration CHECK). */
+export const SUGGESTION_CATEGORIES = ["revenue", "internet-scan", "data-scan"] as const;
+
+/** Statuses for forge_suggestions (must match the migration CHECK). */
+export const SUGGESTION_STATUSES = ["new", "acted_on", "dismissed"] as const;
+
+// ---------- Shared date / migration helpers (Phase 8 Slice 5) ----------
+
+/**
+ * True when a Supabase error means the Slice 5 tables don't exist yet
+ * (the migration hasn't been run). Screens show the friendly
+ * "run the migration" state instead of the raw error.
+ */
+export function isMissingTableError(e: unknown): boolean {
+  if (!e || typeof e !== "object") return false;
+  const err = e as { code?: unknown; message?: unknown };
+  if (err.code === "PGRST205") return true;
+  const msg = typeof err.message === "string" ? err.message : "";
+  return msg.includes("does not exist");
+}
+
+/** Parse a YYYY-MM-DD date-only string to UTC milliseconds (NaN if invalid). */
+export function parseDateOnlyMs(iso: string | null | undefined): number {
+  if (!iso) return NaN;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
+  if (!m) return NaN;
+  const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const d = new Date(ms);
+  if (
+    d.getUTCFullYear() !== Number(m[1]) ||
+    d.getUTCMonth() !== Number(m[2]) - 1 ||
+    d.getUTCDate() !== Number(m[3])
+  ) {
+    return NaN;
+  }
+  return ms;
+}
+
+/** Today's date as YYYY-MM-DD (local time). */
+export function todayISO(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** Add N days to a YYYY-MM-DD date-only string; "" if the input is invalid. */
+export function addDaysISO(iso: string, days: number): string {
+  const ms = parseDateOnlyMs(iso);
+  if (Number.isNaN(ms)) return "";
+  return new Date(ms + days * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** Whole days from today until a YYYY-MM-DD date (negative = past). NaN if invalid. */
+export function daysUntilISO(iso: string): number {
+  const ms = parseDateOnlyMs(iso);
+  if (Number.isNaN(ms)) return NaN;
+  const todayMs = parseDateOnlyMs(todayISO());
+  return Math.round((ms - todayMs) / 86_400_000);
+}
+
+export type DueTone = "overdue" | "due" | "soon" | "future";
+
+/** Due label + tone for a YYYY-MM-DD due date relative to today. */
+export function dueLabel(iso: string): { label: string; tone: DueTone } {
+  const diff = daysUntilISO(iso);
+  if (Number.isNaN(diff)) return { label: "—", tone: "future" };
+  if (diff < 0) {
+    return { label: `Overdue by ${-diff} day${-diff === 1 ? "" : "s"}`, tone: "overdue" };
+  }
+  if (diff === 0) return { label: "Due today", tone: "due" };
+  if (diff <= 3) return { label: `Due in ${diff} days`, tone: "soon" };
+  return { label: `Due ${iso}`, tone: "future" };
+}
+
+/** Fixed-width rating bar, e.g. rating 8 -> "████████░░". */
+export function ratingBar(rating: number): string {
+  const filled = Math.max(0, Math.min(10, Math.round(rating)));
+  return "█".repeat(filled) + "░".repeat(10 - filled);
+}
 
 // ---------- Job retry (Phase 8 Slice 4) ----------
 
