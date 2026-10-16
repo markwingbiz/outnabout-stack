@@ -81,6 +81,7 @@ export type FunnelRow = {
   type: string | null;
   status: string | null;
   description: string | null;
+  config?: Record<string, unknown> | null;
   created_at: string | null;
   updated_at: string | null;
 };
@@ -429,5 +430,89 @@ export type DeliverableTransitionResponse = {
 export type WorkerStatusResponse = {
   worker?: WorkerRow;
   deduped?: boolean;
+  error?: string;
+};
+// ---------- Funnel detail + money-goal editing (Phase 8 Slice 3) ----------
+
+/**
+ * Canonical money rows: one per funnel — prefer the backfill_* mirror row,
+ * else the first row. Same rule as funnels.tsx `canonicalMoney`. Used by
+ * the command-center Home to sum verified revenue without double-counting
+ * funnels that have several money_funnels rows.
+ */
+export function canonicalMoneyRows(rows: MoneyFunnelRow[]): MoneyFunnelRow[] {
+  const byFunnel = new Map<string, MoneyFunnelRow[]>();
+  for (const row of rows) {
+    if (!row.funnel_id) continue;
+    const list = byFunnel.get(row.funnel_id) ?? [];
+    list.push(row);
+    byFunnel.set(row.funnel_id, list);
+  }
+  const out: MoneyFunnelRow[] = [];
+  for (const list of byFunnel.values()) {
+    const canonical = list.find((r) => (r.key ?? "").startsWith("backfill_")) ?? list[0];
+    if (canonical) out.push(canonical);
+  }
+  return out;
+}
+
+/** Assigned-worker summary from the forge-funnel `status` payload. */
+export type FunnelStatusWorker = {
+  id: string;
+  slug: string | null;
+  name: string | null;
+  status: string | null;
+  last_run_at: string | null;
+};
+
+/** Recent-job summary from the forge-funnel `status` payload. */
+export type FunnelStatusJob = {
+  id: string;
+  job_type: string | null;
+  status: string | null;
+  title: string | null;
+  created_at: string | null;
+  completed_at: string | null;
+  error_text: string | null;
+};
+
+/** Pending-approval summary from the forge-funnel `status` payload. */
+export type FunnelStatusApproval = {
+  id: string;
+  status: string | null;
+  request_type: string | null;
+  title: string | null;
+  created_at: string | null;
+  expires_at: string | null;
+};
+
+/** Money-goal progress from the forge-funnel `status` payload (cents). */
+export type FunnelMoneyGoal = {
+  revenue_model: string | null;
+  revenue_target_cents: number | null;
+  verified_revenue_cents: number;
+  spent_cents: number;
+  budget_cents: number;
+  currency: string;
+  net_cents: number;
+} | null;
+
+/** Full payload of the forge-funnel `status` action. */
+export type FunnelStatusPayload = {
+  funnel: FunnelRow;
+  money_funnels: MoneyFunnelRow[];
+  money_goal: FunnelMoneyGoal;
+  workers: FunnelStatusWorker[];
+  recent_jobs: FunnelStatusJob[];
+  pending_approvals: FunnelStatusApproval[];
+};
+
+/** Response of the forge-funnel `configure` action. */
+export type FunnelConfigureResponse = {
+  funnel_id: string;
+  money_funnel_id: string;
+  revenue_model: string;
+  revenue_target_cents: number;
+  created?: boolean;
   error?: string;
 };

@@ -4,7 +4,8 @@
 // NEVER shows projected revenue as earned — only verified revenue.
 // A funnel cannot reach READY/ACTIVE without a money goal (revenue_model
 // + target); if Validate/Activate returns missing gates, they show
-// under that funnel.
+// under that funnel. Each card links to the funnel-detail screen
+// (Phase 8 Slice 3).
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
@@ -16,6 +17,7 @@ import {
   ActivityIndicator,
   Alert,
 } from "react-native";
+import { useRouter } from "expo-router";
 import { THEME } from "../../lib/theme";
 import { supabase } from "../../lib/supabase";
 import ForgeGate from "../../components/ForgeGate";
@@ -95,6 +97,7 @@ export default function FunnelsScreen() {
 }
 
 function FunnelsContent() {
+  const router = useRouter();
   const [funnels, setFunnels] = useState<FunnelRow[]>([]);
   const [moneyRows, setMoneyRows] = useState<MoneyFunnelRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -292,6 +295,19 @@ function FunnelsContent() {
                   This funnel is in a terminal state — no actions available.
                 </Text>
               )}
+
+              {/* Detail: full record, money goal editor, workers, jobs, approvals, deliverables */}
+              <Pressable
+                style={styles.detailLink}
+                onPress={() =>
+                  router.push({
+                    pathname: "/(tabs)/funnel-detail",
+                    params: { id: funnel.id },
+                  })
+                }
+              >
+                <Text style={styles.detailLinkText}>View detail →</Text>
+              </Pressable>
             </View>
           );
         })
@@ -358,6 +374,8 @@ const styles = StyleSheet.create({
   gateTitle: { color: THEME.orange, fontSize: 12, fontWeight: "800" },
   gateLine: { color: "#fff", fontSize: 12, lineHeight: 16 },
   buttonRow: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 12 },
+  detailLink: { marginTop: 12, alignSelf: "flex-start" },
+  detailLinkText: { color: THEME.purpleBright, fontSize: 13, fontWeight: "800" },
   actionBtn: {
     backgroundColor: THEME.purpleDeep,
     borderRadius: 999,
