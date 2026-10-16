@@ -10,8 +10,10 @@
 // Slice 1: the insert MUST include tenant_id + venue_id — without
 // tenant_id the insert fails RLS (NULL fails the with_check). The venue
 // comes from the vendor's own venues (one venue → auto-attached;
-// several → a picker). events.source_ref is NOT NULL with no default,
-// so vendor-created events use "livework". events.start_ts is NOT NULL,
+// several → a picker). events.source_ref is NOT NULL, no default, and
+// UNIQUE (verified live) — so each vendor-created event gets
+// `livework:<uuid>` (see newUuid). The old constant "livework" failed
+// the unique constraint on the second event. events.start_ts is NOT NULL,
 // so a date is required.
 import React, { useCallback, useEffect, useState } from "react";
 import {
@@ -47,6 +49,20 @@ let tierSeq = 0;
 function newTier(name = "", price = ""): Tier {
   tierSeq += 1;
   return { id: `tier-${Date.now()}-${tierSeq}`, name, price };
+}
+
+// UUID v4 for source_ref. Mirrors Livework+ lib/forge.ts
+// newIdempotencyKey: prefers crypto.randomUUID, falls back to
+// Math.random bytes. Uniqueness is what events.source_ref's UNIQUE
+// constraint needs — the value is never displayed or matched on.
+function newUuid(): string {
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (c?.randomUUID) return c.randomUUID();
+  const bytes = Array.from({ length: 16 }, () => Math.floor(Math.random() * 256));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 export default function AddEventScreen() {
@@ -142,8 +158,13 @@ export default function AddEventScreen() {
         price_label: priceLabel,
         event_type: eventType,
         status: "draft",
-        // events.source_ref is NOT NULL with no default.
-        source_ref: "livework",
+        // events.source_ref is NOT NULL, no default, and UNIQUE — one
+        // `livework:<uuid>` per event, so the second event no longer
+        // fails the unique constraint the constant "livework" hit.
+        // Shape matches bownd-sync's `<origin>:<id>` refs
+        // ('bownd:<firestore-doc-id>'); publish looks events up by id,
+        // never by source_ref, so this changes nothing downstream.
+        source_ref: `livework:${newUuid()}`,
       });
       if (error) throw error;
       // Success only after the backend confirms the insert.
