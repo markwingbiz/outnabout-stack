@@ -26,13 +26,21 @@ import ForgeGate from "../../components/ForgeGate";
 import { THEME, FUNNEL_ACCENTS } from "../../lib/theme";
 import {
   fetchFunnels,
+  fetchMoneyFunnels,
   fetchRevenue,
   formatMoney,
   type FunnelSummary,
+  type MoneyFunnelSummary,
   type RevenueSummary,
 } from "../../lib/data";
 
 const RANGE_OPTIONS = [7, 30, 90];
+
+/** Money goal for a money funnel (metadata.revenue_target_cents, in cents). */
+function targetDollars(row: MoneyFunnelSummary): number | null {
+  const raw = row.metadata?.revenue_target_cents;
+  return typeof raw === "number" ? raw / 100 : null;
+}
 
 function StatusBadge({ status }: { status: string }) {
   const s = status.toUpperCase();
@@ -63,6 +71,7 @@ function InsightsContent() {
   const router = useRouter();
   const [funnels, setFunnels] = useState<FunnelSummary[]>([]);
   const [revenue, setRevenue] = useState<RevenueSummary>({ total: 0, changeLabel: null, spark: [] });
+  const [moneyFunnels, setMoneyFunnels] = useState<MoneyFunnelSummary[]>([]);
   const [rangeDays, setRangeDays] = useState(30);
   const [rangePickerOpen, setRangePickerOpen] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -71,11 +80,17 @@ function InsightsContent() {
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
-    const [f, r] = await Promise.all([fetchFunnels(), fetchRevenue(rangeDays)]);
+    const [f, r, m] = await Promise.all([
+      fetchFunnels(),
+      fetchRevenue(rangeDays),
+      fetchMoneyFunnels(),
+    ]);
     if (f.error) setError(f.error);
     if (r.error) setError((prev) => prev ?? r.error);
+    if (m.error) setError((prev) => prev ?? m.error);
     setFunnels(f.funnels);
     setRevenue(r.revenue);
+    setMoneyFunnels(m.rows);
     setLoading(false);
   }, [rangeDays]);
 
@@ -177,6 +192,75 @@ function InsightsContent() {
               </View>
               <Text style={styles.revenueNote}>
                 Verified revenue only — amount-0 rows are tracking, never revenue.
+              </Text>
+            </>
+          )}
+        </View>
+
+        {/* Revenue reconciliation — per-funnel verified totals (money_funnels)
+            against the ecosystem event-log total (revenue_events).
+            revenue_events has NO funnel_id, so per-funnel attribution from
+            the event log is impossible: the per-funnel rows below come from
+            money_funnels only. The two ledgers may differ. */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Revenue Reconciliation</Text>
+          <Text style={styles.cardSub}>
+            Per-funnel verified totals vs the ecosystem event-log total.
+          </Text>
+          {loading ? (
+            <ActivityIndicator color={THEME.purpleBright} />
+          ) : moneyFunnels.length === 0 ? (
+            <Text style={styles.empty}>No money funnels yet.</Text>
+          ) : (
+            <>
+              {(() => {
+                let verifiedSum = 0;
+                let targetSum = 0;
+                for (const row of moneyFunnels) {
+                  verifiedSum += (row.verified_revenue_cents ?? 0) / 100;
+                  targetSum += targetDollars(row) ?? 0;
+                }
+                return (
+                  <>
+                    {moneyFunnels.map((row) => {
+                      const verified = (row.verified_revenue_cents ?? 0) / 100;
+                      const target = targetDollars(row);
+                      const pct =
+                        target && target > 0 ? Math.min(100, (verified / target) * 100) : null;
+                      return (
+                        <View key={row.id} style={styles.reconRow}>
+                          <Text style={styles.reconName} numberOfLines={2}>
+                            {row.name ?? row.key ?? "Unnamed funnel"}
+                          </Text>
+                          <Text style={styles.reconNumbers}>
+                            {formatMoney(verified)} of{" "}
+                            {target !== null ? formatMoney(target) : "no target"}
+                            {pct !== null ? ` · ${pct.toFixed(1)}%` : ""}
+                          </Text>
+                        </View>
+                      );
+                    })}
+                    <View style={[styles.reconRow, styles.reconTotalRow]}>
+                      <Text style={styles.reconName}>All money funnels</Text>
+                      <Text style={styles.reconNumbers}>
+                        {formatMoney(verifiedSum)} of{" "}
+                        {targetSum > 0 ? formatMoney(targetSum) : "no targets"}
+                        {targetSum > 0
+                          ? ` · ${Math.min(100, (verifiedSum / targetSum) * 100).toFixed(1)}%`
+                          : ""}
+                      </Text>
+                    </View>
+                  </>
+                );
+              })()}
+              <Text style={styles.reconEcosystem}>
+                Ecosystem event-log total (last {rangeDays} days):{" "}
+                {formatMoney(revenue.total)}
+              </Text>
+              <Text style={styles.revenueNote}>
+                The two ledgers may differ: money_funnels verified totals are the funnel
+                ledger; revenue_events is the raw event log (windowed above). Verified
+                revenue only — nothing projected or estimated is shown as earned.
               </Text>
             </>
           )}
@@ -286,6 +370,19 @@ const styles = StyleSheet.create({
   revenueDelta: { color: THEME.green, fontSize: 13, fontWeight: "800", marginTop: 4 },
   revenueDeltaSub: { color: THEME.textFaint, fontSize: 11, marginTop: 4 },
   revenueNote: { color: THEME.textFaint, fontSize: 11, marginTop: 10, lineHeight: 15 },
+  reconRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 10,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.06)",
+  },
+  reconTotalRow: { borderBottomWidth: 0, marginTop: 4 },
+  reconName: { color: "#fff", fontSize: 13, fontWeight: "700", flex: 1 },
+  reconNumbers: { color: THEME.textMuted, fontSize: 12, textAlign: "right" },
+  reconEcosystem: { color: THEME.textMuted, fontSize: 12, marginTop: 10, fontWeight: "700" },
   relTitle: { color: "#fff", fontSize: 15, fontWeight: "900" },
   relSub: { color: THEME.textMuted, fontSize: 12, marginTop: 6, lineHeight: 17 },
   empty: { color: THEME.textMuted, fontSize: 13 },

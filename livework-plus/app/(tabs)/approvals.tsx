@@ -1,6 +1,11 @@
 // Livework+ Approvals inbox — pending approvals first, decided below.
-// Approve / Reject call forge-approve; the list refreshes after each
-// decision. Rejections ask for a reason before confirming.
+// Approve / Reject go through forge-approve via the shared decideApproval
+// helper (same path as approval-detail). Rejections ask for a reason
+// before confirming. Cards link to approval-detail for the full payload.
+//
+// Phase 8 Slice 4 (audit §5 + §12): expires_at with expiring/expired
+// highlight, human-readable requester label, detail links, 30s polling,
+// Load more decided approvals.
 import React, { useCallback, useEffect, useState } from "react";
 import {
   View,
@@ -12,21 +17,52 @@ import {
   TextInput,
   ActivityIndicator,
 } from "react-native";
+import { useRouter } from "expo-router";
 import { THEME } from "../../lib/theme";
 import { supabase } from "../../lib/supabase";
 import ForgeGate from "../../components/ForgeGate";
-import { callForge, formatDate, normalizeStatus, type ApprovalRow } from "../../lib/forge";
+import {
+  POLL_INTERVAL_MS,
+  approvalExpiryState,
+  decideApproval,
+  formatDate,
+  normalizeStatus,
+  requesterLabel,
+  usePolling,
+  type ApprovalRow,
+} from "../../lib/forge";
 
 function StatusBadge({ status }: { status: string | null | undefined }) {
   const s = normalizeStatus(status);
   const color =
-    s === "APPROVED" ? THEME.green : s === "REJECTED" ? THEME.pink : THEME.orange;
+    s === "APPROVED"
+      ? THEME.green
+      : s === "REJECTED" || s === "EXPIRED" || s === "CANCELLED"
+        ? THEME.pink
+        : THEME.orange;
   return (
     <View style={[styles.badge, { borderColor: color }]}>
       <Text style={[styles.badgeText, { color }]}>{s || "—"}</Text>
     </View>
   );
 }
+
+function ExpiryLine({ approval }: { approval: ApprovalRow }) {
+  const state = approvalExpiryState(approval);
+  return (
+    <Text style={styles.meta}>
+      Expires: {formatDate(approval.expires_at)}
+      {state === "expiring" && (
+        <Text style={styles.expiring}> · Expiring soon (under 24h)</Text>
+      )}
+      {state === "expired" && (
+        <Text style={styles.expired}> · Expired — deciding it auto-expires the request</Text>
+      )}
+    </Text>
+  );
+}
+
+const DECIDED_PAGE = 50;
 
 export default function ApprovalsScreen() {
   return (
@@ -39,6 +75,7 @@ export default function ApprovalsScreen() {
 }
 
 function ApprovalsContent() {
+  const router = useRouter();
   const [pending, setPending] = useState<ApprovalRow[]>([]);
   const [decided, setDecided] = useState<ApprovalRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,6 +85,7 @@ function ApprovalsContent() {
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState("");
   const [showDecided, setShowDecided] = useState(false);
+  const [decidedLimit, setDecidedLimit] = useState(DECIDED_PAGE);
 
   const refresh = useCallback(async () => {
     if (!supabase) {
@@ -69,7 +107,7 @@ function ApprovalsContent() {
           .select("*")
           .in("status", ["approved", "rejected"])
           .order("created_at", { ascending: false })
-          .limit(50),
+          .limit(decidedLimit),
       ]);
       if (p.error) throw new Error(p.error.message);
       if (d.error) throw new Error(d.error.message);
@@ -81,11 +119,17 @@ function ApprovalsContent() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [decidedLimit]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  usePolling(() => void refresh(), POLL_INTERVAL_MS);
+
+  function openDetail(id: string) {
+    router.push({ pathname: "/(tabs)/approval-detail", params: { id } });
+  }
 
   async function decide(
     approval: ApprovalRow,
@@ -95,11 +139,7 @@ function ApprovalsContent() {
     setActingId(approval.id);
     setError(null);
     try {
-      await callForge("forge-approve", {
-        approval_id: approval.id,
-        decision,
-        ...(reason ? { reason } : {}),
-      });
+      await decideApproval(approval.id, decision, reason);
       setRejectingId(null);
       setRejectReason("");
       await refresh();
@@ -115,7 +155,9 @@ function ApprovalsContent() {
       <View style={styles.header}>
         <Text style={styles.title}>Approvals</Text>
         <Pressable style={styles.refreshBtn} onPress={() => void refresh()} disabled={refreshing}>
-          <Text style={styles.refreshText}>{refreshing ? "Refreshing…" : "Refresh ↻"}</Text>
+          <Text style={styles.refreshText}>
+            {refreshing ? "Refreshing…" : "Refresh ↻ · auto-refreshes every 30s"}
+          </Text>
         </Pressable>
       </View>
 
@@ -142,21 +184,28 @@ function ApprovalsContent() {
               return (
                 <View key={a.id} style={styles.card}>
                   <View style={styles.rowBetween}>
-                    <Text style={styles.approvalTitle} numberOfLines={2}>
-                      {a.title || "Approval request"}
-                    </Text>
+                    <Pressable onPress={() => openDetail(a.id)} style={{ flex: 1 }}>
+                      <Text style={styles.approvalTitle} numberOfLines={2}>
+                        {a.title || "Approval request"}
+                      </Text>
+                    </Pressable>
                     <StatusBadge status={a.status} />
                   </View>
                   <Text style={styles.type}>
                     {a.request_type || a.approval_type || "general"}
+                    {a.priority ? ` · priority ${a.priority}` : ""}
                   </Text>
                   {!!(a.summary || a.description) && (
                     <Text style={styles.summary}>{a.summary || a.description}</Text>
                   )}
                   <Text style={styles.meta}>
-                    Requested by {a.requested_by ? a.requested_by.slice(0, 8) : "—"} ·{" "}
+                    Requested by {requesterLabel(a.requested_by)} ·{" "}
                     {formatDate(a.created_at)}
                   </Text>
+                  <ExpiryLine approval={a} />
+                  <Pressable onPress={() => openDetail(a.id)}>
+                    <Text style={styles.detailLink}>View detail →</Text>
+                  </Pressable>
 
                   {rejecting ? (
                     <View style={styles.rejectBox}>
@@ -226,9 +275,11 @@ function ApprovalsContent() {
             decided.map((a) => (
               <View key={a.id} style={styles.card}>
                 <View style={styles.rowBetween}>
-                  <Text style={styles.approvalTitle} numberOfLines={2}>
-                    {a.title || "Approval request"}
-                  </Text>
+                  <Pressable onPress={() => openDetail(a.id)} style={{ flex: 1 }}>
+                    <Text style={styles.approvalTitle} numberOfLines={2}>
+                      {a.title || "Approval request"}
+                    </Text>
+                  </Pressable>
                   <StatusBadge status={a.status} />
                 </View>
                 <Text style={styles.type}>
@@ -238,8 +289,19 @@ function ApprovalsContent() {
                   Decided {formatDate(a.approved_at ?? a.rejected_at ?? a.reviewed_at)}
                   {!!a.reason && ` · Reason: ${a.reason}`}
                 </Text>
+                <Pressable onPress={() => openDetail(a.id)}>
+                  <Text style={styles.detailLink}>View detail →</Text>
+                </Pressable>
               </View>
             ))}
+          {showDecided && decided.length >= decidedLimit && (
+            <Pressable
+              style={styles.loadMoreBtn}
+              onPress={() => setDecidedLimit((v) => v + DECIDED_PAGE)}
+            >
+              <Text style={styles.loadMoreText}>Load more decided</Text>
+            </Pressable>
+          )}
         </>
       )}
     </ScrollView>
@@ -284,6 +346,9 @@ const styles = StyleSheet.create({
   type: { color: THEME.purpleBright, fontSize: 12, fontWeight: "800", marginTop: 4 },
   summary: { color: THEME.textMuted, fontSize: 13, lineHeight: 18, marginTop: 6 },
   meta: { color: THEME.textFaint, fontSize: 12, marginTop: 8 },
+  expiring: { color: THEME.orange, fontWeight: "800" },
+  expired: { color: THEME.pink, fontWeight: "800" },
+  detailLink: { color: THEME.purpleBright, fontSize: 12, fontWeight: "800", marginTop: 6 },
   badge: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3 },
   badgeText: { fontSize: 10, fontWeight: "900" },
   buttonRow: { flexDirection: "row", gap: 10, marginTop: 12 },
@@ -311,4 +376,12 @@ const styles = StyleSheet.create({
   },
   decidedToggle: { paddingVertical: 6 },
   decidedToggleText: { color: THEME.purpleBright, fontSize: 14, fontWeight: "800" },
+  loadMoreBtn: {
+    alignSelf: "center",
+    backgroundColor: "rgba(255,255,255,0.07)",
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  loadMoreText: { color: THEME.purpleBright, fontSize: 12, fontWeight: "800" },
 });

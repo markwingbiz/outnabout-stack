@@ -1,7 +1,15 @@
 // Livework+ Forge chat — the operator interface to the Forge backend.
 // Everything shown here comes from live Supabase queries (forge_threads,
-// forge_jobs, forge_messages, tasks, approvals). No canned responses,
-// no fake data, no simulated execution.
+// forge_jobs, tasks, approvals). No canned responses, no fake data,
+// no simulated execution.
+//
+// Phase 8 Slice 4 (audit §1 + §12):
+// - Execution-paused banner (Phase B not built; no live provider check).
+// - Composer sends via forge-command, then navigates to the thread detail
+//   (per-thread transcript + per-thread composer live there).
+// - Thread rows link to thread detail; the inline expand is gone (it had
+//   no composer and duplicated the detail screen).
+// - 30s polling + Load more threads. Polling never touches composer input.
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
@@ -13,17 +21,20 @@ import {
   TextInput,
   ActivityIndicator,
 } from "react-native";
+import { useRouter } from "expo-router";
 import { THEME } from "../../lib/theme";
 import { supabase } from "../../lib/supabase";
 import ForgeGate from "../../components/ForgeGate";
+import ExecutionPausedBanner from "../../components/ExecutionPausedBanner";
 import {
+  POLL_INTERVAL_MS,
   callForge,
   formatDate,
   newIdempotencyKey,
   normalizeStatus,
+  usePolling,
   type ApprovalRow,
   type ForgeJobRow,
-  type ForgeMessageRow,
   type ForgeTaskRow,
   type ForgeThreadRow,
 } from "../../lib/forge";
@@ -54,6 +65,8 @@ function StatusBadge({ status }: { status: string | null | undefined }) {
   );
 }
 
+const THREAD_PAGE = 100;
+
 export default function ForgeScreen() {
   return (
     <SafeAreaView style={styles.root}>
@@ -65,10 +78,10 @@ export default function ForgeScreen() {
 }
 
 function ForgeContent() {
+  const router = useRouter();
   const [threads, setThreads] = useState<ForgeThreadRow[]>([]);
   const [jobs, setJobs] = useState<ForgeJobRow[]>([]);
   const [tasks, setTasks] = useState<ForgeTaskRow[]>([]);
-  const [messages, setMessages] = useState<ForgeMessageRow[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<ApprovalRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -76,7 +89,7 @@ function ForgeContent() {
   const [composer, setComposer] = useState("");
   const [sending, setSending] = useState(false);
   const [sendNote, setSendNote] = useState<string | null>(null);
-  const [expandedThreadId, setExpandedThreadId] = useState<string | null>(null);
+  const [threadLimit, setThreadLimit] = useState(THREAD_PAGE);
 
   const refresh = useCallback(async () => {
     if (!supabase) {
@@ -87,12 +100,12 @@ function ForgeContent() {
     setRefreshing(true);
     setError(null);
     try {
-      const [t, j, tk, m, a] = await Promise.all([
+      const [t, j, tk, a] = await Promise.all([
         supabase
           .from("forge_threads")
           .select("*")
           .order("created_at", { ascending: false })
-          .limit(20),
+          .limit(threadLimit),
         supabase
           .from("forge_jobs")
           .select("*")
@@ -104,22 +117,16 @@ function ForgeContent() {
           .order("created_at", { ascending: false })
           .limit(200),
         supabase
-          .from("forge_messages")
-          .select("*")
-          .order("created_at", { ascending: false })
-          .limit(200),
-        supabase
           .from("approvals")
           .select("*")
           .eq("status", "pending")
           .order("created_at", { ascending: true }),
       ]);
-      const firstError = t.error ?? j.error ?? tk.error ?? m.error ?? a.error;
+      const firstError = t.error ?? j.error ?? tk.error ?? a.error;
       if (firstError) throw new Error(firstError.message);
       setThreads((t.data ?? []) as ForgeThreadRow[]);
       setJobs((j.data ?? []) as ForgeJobRow[]);
       setTasks((tk.data ?? []) as ForgeTaskRow[]);
-      setMessages((m.data ?? []) as ForgeMessageRow[]);
       setPendingApprovals((a.data ?? []) as ApprovalRow[]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not load Forge data.");
@@ -127,11 +134,13 @@ function ForgeContent() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [threadLimit]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  usePolling(() => void refresh(), POLL_INTERVAL_MS);
 
   const jobsByThread = useMemo(() => {
     const map = new Map<string, ForgeJobRow[]>();
@@ -143,34 +152,6 @@ function ForgeContent() {
     }
     return map;
   }, [jobs]);
-
-  const tasksByJob = useMemo(() => {
-    const map = new Map<string, ForgeTaskRow[]>();
-    for (const task of tasks) {
-      if (!task.forge_job_id) continue;
-      const list = map.get(task.forge_job_id) ?? [];
-      list.push(task);
-      map.set(task.forge_job_id, list);
-    }
-    for (const list of map.values()) {
-      list.sort((a, b) => (a.step_index ?? 0) - (b.step_index ?? 0));
-    }
-    return map;
-  }, [tasks]);
-
-  const messagesByThread = useMemo(() => {
-    const map = new Map<string, ForgeMessageRow[]>();
-    for (const msg of messages) {
-      if (!msg.thread_id) continue;
-      const list = map.get(msg.thread_id) ?? [];
-      list.push(msg);
-      map.set(msg.thread_id, list);
-    }
-    for (const list of map.values()) {
-      list.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
-    }
-    return map;
-  }, [messages]);
 
   async function sendCommand() {
     const text = composer.trim();
@@ -184,12 +165,17 @@ function ForgeContent() {
         idempotency_key: newIdempotencyKey(),
       });
       setComposer("");
-      setSendNote(
-        resp.deduped
-          ? "Command already sent — showing the existing job."
-          : `Command sent — job ${String(resp.job_id ?? "").slice(0, 8) || "created"}.`,
-      );
-      await refresh();
+      if (resp.thread_id) {
+        // The thread detail is where the transcript + per-thread composer live.
+        router.push({ pathname: "/(tabs)/thread-detail", params: { id: resp.thread_id } });
+      } else {
+        setSendNote(
+          resp.deduped
+            ? "Command already sent — showing the existing job."
+            : `Command sent — job ${String(resp.job_id ?? "").slice(0, 8) || "created"}.`,
+        );
+        await refresh();
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not send command.");
     } finally {
@@ -209,9 +195,13 @@ function ForgeContent() {
       <View style={styles.header}>
         <Text style={styles.title}>Forge</Text>
         <Pressable style={styles.refreshBtn} onPress={() => void refresh()} disabled={refreshing}>
-          <Text style={styles.refreshText}>{refreshing ? "Refreshing…" : "Refresh ↻"}</Text>
+          <Text style={styles.refreshText}>
+            {refreshing ? "Refreshing…" : "Refresh ↻ · auto-refreshes every 30s"}
+          </Text>
         </Pressable>
       </View>
+
+      <ExecutionPausedBanner />
 
       {/* Composer */}
       <View style={styles.card}>
@@ -254,13 +244,14 @@ function ForgeContent() {
           const threadApprovals = pendingApprovals.filter(
             (a) => a.task_id && taskIds.includes(a.task_id),
           );
-          const expanded = expandedThreadId === thread.id;
-          const threadMessages = messagesByThread.get(thread.id) ?? [];
           return (
-            <View key={thread.id} style={styles.card}>
-              <Pressable
-                onPress={() => setExpandedThreadId(expanded ? null : thread.id)}
-              >
+            <Pressable
+              key={thread.id}
+              onPress={() =>
+                router.push({ pathname: "/(tabs)/thread-detail", params: { id: thread.id } })
+              }
+            >
+              <View style={styles.card}>
                 <View style={styles.threadHeader}>
                   <Text style={styles.threadTitle} numberOfLines={2}>
                     {thread.title || "Untitled thread"}
@@ -273,87 +264,16 @@ function ForgeContent() {
                   {taskIds.length === 1 ? "task" : "tasks"} · {threadApprovals.length} pending{" "}
                   {threadApprovals.length === 1 ? "approval" : "approvals"}
                 </Text>
-                <Text style={styles.expandHint}>{expanded ? "Tap to collapse ▲" : "Tap to expand ▼"}</Text>
-              </Pressable>
-
-              {expanded && (
-                <View style={styles.expanded}>
-                  {/* Transcript */}
-                  <Text style={styles.sectionLabel}>Transcript</Text>
-                  {threadMessages.length === 0 ? (
-                    <Text style={styles.muted}>No messages in this thread yet.</Text>
-                  ) : (
-                    threadMessages.map((msg) => (
-                      <View key={msg.id} style={styles.message}>
-                        <Text style={styles.messageRole}>{msg.role.toUpperCase()}</Text>
-                        <Text style={styles.messageText}>{msg.content}</Text>
-                        <Text style={styles.messageTime}>{formatDate(msg.created_at)}</Text>
-                      </View>
-                    ))
-                  )}
-
-                  {/* Jobs + tasks */}
-                  <Text style={styles.sectionLabel}>Jobs</Text>
-                  {threadJobs.length === 0 ? (
-                    <Text style={styles.muted}>No jobs in this thread yet.</Text>
-                  ) : (
-                    threadJobs.map((job) => {
-                      const jobTasks = tasksByJob.get(job.id) ?? [];
-                      return (
-                        <View key={job.id} style={styles.jobBlock}>
-                          <View style={styles.jobHeader}>
-                            <Text style={styles.jobTitle} numberOfLines={2}>
-                              {job.title || job.job_type || "Job"}
-                            </Text>
-                            <StatusBadge status={job.status} />
-                          </View>
-                          {!!job.error_text && (
-                            <Text style={styles.jobError}>{job.error_text}</Text>
-                          )}
-                          {jobTasks.length === 0 ? (
-                            <Text style={styles.muted}>No tasks created for this job yet.</Text>
-                          ) : (
-                            jobTasks.map((task) => (
-                              <View key={task.id} style={styles.taskRow}>
-                                <Text style={styles.taskStep}>{task.step_index ?? "–"}</Text>
-                                <View style={{ flex: 1 }}>
-                                  <Text style={styles.taskTitle} numberOfLines={2}>
-                                    {task.title || task.task_type || "Task"}
-                                  </Text>
-                                  {task.approval_required ? (
-                                    <Text style={styles.approvalFlag}>
-                                      Approval required
-                                    </Text>
-                                  ) : null}
-                                </View>
-                                <StatusBadge status={task.status} />
-                              </View>
-                            ))
-                          )}
-                        </View>
-                      );
-                    })
-                  )}
-
-                  {/* Pending approvals linked to this thread */}
-                  <Text style={styles.sectionLabel}>Pending approvals</Text>
-                  {threadApprovals.length === 0 ? (
-                    <Text style={styles.muted}>No pending approvals for this thread.</Text>
-                  ) : (
-                    threadApprovals.map((a) => (
-                      <View key={a.id} style={styles.approvalRow}>
-                        <Text style={styles.approvalTitle} numberOfLines={2}>
-                          {a.title || a.request_type || "Approval"}
-                        </Text>
-                        <StatusBadge status={a.status} />
-                      </View>
-                    ))
-                  )}
-                </View>
-              )}
-            </View>
+                <Text style={styles.expandHint}>Open thread →</Text>
+              </View>
+            </Pressable>
           );
         })
+      )}
+      {threads.length >= threadLimit && (
+        <Pressable style={styles.loadMoreBtn} onPress={() => setThreadLimit((v) => v + THREAD_PAGE)}>
+          <Text style={styles.loadMoreText}>Load more threads</Text>
+        </Pressable>
       )}
     </ScrollView>
   );
@@ -414,38 +334,12 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
   badgeText: { fontSize: 10, fontWeight: "900" },
-  expanded: { marginTop: 14, gap: 10 },
-  sectionLabel: { color: "#fff", fontSize: 14, fontWeight: "800", marginTop: 6 },
-  muted: { color: THEME.textFaint, fontSize: 12 },
-  message: {
-    backgroundColor: "rgba(255,255,255,0.04)",
-    borderRadius: 12,
-    padding: 10,
+  loadMoreBtn: {
+    alignSelf: "center",
+    backgroundColor: "rgba(255,255,255,0.07)",
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
   },
-  messageRole: { color: THEME.purpleBright, fontSize: 10, fontWeight: "900" },
-  messageText: { color: "#fff", fontSize: 13, lineHeight: 18, marginTop: 3 },
-  messageTime: { color: THEME.textFaint, fontSize: 11, marginTop: 4 },
-  jobBlock: {
-    backgroundColor: "rgba(255,255,255,0.04)",
-    borderRadius: 12,
-    padding: 10,
-    gap: 8,
-  },
-  jobHeader: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 8 },
-  jobTitle: { color: "#fff", fontSize: 13, fontWeight: "800", flex: 1 },
-  jobError: { color: THEME.pink, fontSize: 12 },
-  taskRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  taskStep: { color: THEME.textFaint, fontSize: 12, width: 20, textAlign: "center" },
-  taskTitle: { color: "#fff", fontSize: 12 },
-  approvalFlag: { color: THEME.orange, fontSize: 11, fontWeight: "700" },
-  approvalRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 8,
-    backgroundColor: "rgba(255,255,255,0.04)",
-    borderRadius: 12,
-    padding: 10,
-  },
-  approvalTitle: { color: "#fff", fontSize: 13, flex: 1 },
+  loadMoreText: { color: THEME.purpleBright, fontSize: 12, fontWeight: "800" },
 });

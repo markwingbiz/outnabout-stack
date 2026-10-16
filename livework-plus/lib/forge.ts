@@ -26,6 +26,8 @@ export type ForgeJobRow = {
   title: string | null;
   detail: string | null;
   status: string;
+  /** Structural plan from forge-command (parsed_intent + steps). */
+  plan_json: unknown;
   result_json: Record<string, unknown> | null;
   error_text: string | null;
   created_at: string;
@@ -53,6 +55,9 @@ export type ForgeTaskRow = {
   step_index: number | null;
   approval_required: boolean | null;
   error_text: string | null;
+  /** Task input (forge-command writes the input/output pair). */
+  input: unknown;
+  output: unknown;
 };
 
 export type ApprovalRow = {
@@ -64,14 +69,29 @@ export type ApprovalRow = {
   title: string | null;
   summary: string | null;
   description: string | null;
+  /** Exact action + target + content (design §5.2). Shown in detail. */
+  payload: unknown;
+  details: string | null;
+  /** Approvals auto-expire 7 days after creation (design §5.2). */
+  expires_at: string | null;
+  worker_id: string | null;
+  worker_name: string | null;
+  task_name: string | null;
+  funnel_id: string | null;
+  funnel_name: string | null;
+  deliverable_id: string | null;
+  source: string | null;
+  priority: string | null;
   requested_by: string | null;
   approved_by: string | null;
   reason: string | null;
+  reviewer_notes: string | null;
+  resolution: string | null;
   created_at: string | null;
   approved_at: string | null;
   rejected_at: string | null;
   reviewed_at: string | null;
-  funnel_id: string | null;
+  decided_at: string | null;
 };
 
 export type FunnelRow = {
@@ -516,3 +536,105 @@ export type FunnelConfigureResponse = {
   created?: boolean;
   error?: string;
 };
+
+// ---------- Approvals helpers (Phase 8 Slice 4) ----------
+
+/**
+ * Human-readable requester label. forge-command / forge-funnel always set
+ * requested_by to the calling operator's auth user id, so a bare UUID
+ * fragment is never shown on its own: "Operator <short id>". Null (or a
+ * literal system marker) means the approval was system-originated.
+ */
+export function requesterLabel(requestedBy: string | null | undefined): string {
+  if (!requestedBy) return "Forge (system)";
+  const lower = requestedBy.toLowerCase();
+  if (lower === "forge" || lower === "system") return "Forge (system)";
+  return `Operator ${requestedBy.slice(0, 8)}`;
+}
+
+/** Expiry state for a pending approval: past expiry, expiring < 24h, or null. */
+export function approvalExpiryState(
+  a: Pick<ApprovalRow, "status" | "expires_at">,
+): "expired" | "expiring" | null {
+  if (normalizeStatus(a.status) !== "PENDING" || !a.expires_at) return null;
+  const ms = new Date(a.expires_at).getTime() - Date.now();
+  if (Number.isNaN(ms)) return null;
+  if (ms <= 0) return "expired";
+  if (ms <= 24 * 60 * 60 * 1000) return "expiring";
+  return null;
+}
+
+/** Decide an approval via forge-approve (shared by the inbox + detail screens). */
+export async function decideApproval(
+  approvalId: string,
+  decision: "approve" | "reject",
+  reason?: string,
+): Promise<unknown> {
+  return callForge("forge-approve", {
+    approval_id: approvalId,
+    decision,
+    ...(reason ? { reason } : {}),
+  });
+}
+
+// ---------- Audit log (Phase 8 Slice 4, design §5.3) ----------
+
+/** forge_audit_log row (operator/admin read-only; Edge Functions write). */
+export type AuditLogRow = {
+  id: string;
+  actor_user_id: string | null;
+  actor_type: string | null;
+  action: string | null;
+  entity_type: string | null;
+  entity_id: string | null;
+  before: unknown;
+  after: unknown;
+  metadata: unknown;
+  created_at: string | null;
+};
+
+/** Actor types recorded in forge_audit_log. */
+export const AUDIT_ACTOR_TYPES = ["user", "forge", "worker", "system", "cron"] as const;
+
+// ---------- Bownd mirror state (Phase 8 Slice 4, design §7.2) ----------
+
+/** One bownd_mirror_state row per Firestore collection. */
+export type BowndMirrorStateRow = {
+  collection: string | null;
+  last_seen_update_at: string | null;
+  last_doc_id: string | null;
+  last_sync_at: string | null;
+  last_error: string | null;
+};
+
+// ---------- Job retry (Phase 8 Slice 4) ----------
+
+/** Response of the forge-job-admin `retry` action. */
+export type JobRetryResponse = {
+  job?: ForgeJobRow;
+  original_job_id?: string;
+  task_ids?: string[];
+  approval_ids?: string[];
+  deduped?: boolean;
+  error?: string;
+};
+
+// ---------- Polling (Phase 8 Slice 4, audit §12) ----------
+
+/**
+ * Short-interval polling for live-status screens (Forge / Jobs / Approvals
+ * + detail screens). Polling is used instead of Supabase realtime
+ * subscriptions because it works without any publication / REPLICA IDENTITY
+ * setup; manual Refresh is always retained alongside it. The callback must
+ * only update list state — never local input state (composer text).
+ */
+export function usePolling(callback: () => void, ms: number, enabled = true): void {
+  useEffect(() => {
+    if (!enabled) return;
+    const timer = setInterval(callback, ms);
+    return () => clearInterval(timer);
+  }, [callback, ms, enabled]);
+}
+
+/** Poll interval for Forge / Jobs / Approvals list + detail screens. */
+export const POLL_INTERVAL_MS = 30_000;
