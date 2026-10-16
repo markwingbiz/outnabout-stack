@@ -35,6 +35,7 @@ import { THEME } from "../lib/theme";
 import { supabase, supabaseConfigured } from "../lib/supabase";
 import { useAuth } from "../lib/auth";
 import { getUserTenantIds, getUserVenues } from "../lib/tenant";
+import { describeError } from "../lib/errors";
 import VenueForm, { type VenueFormValues } from "../components/VenueForm";
 
 export default function SetupVenueScreen() {
@@ -133,7 +134,7 @@ export default function SetupVenueScreen() {
         { text: "OK", onPress: () => router.replace("/") },
       ]);
     } catch (e: unknown) {
-      Alert.alert("Could not set up venue", e instanceof Error ? e.message : "Try again.");
+      Alert.alert("Could not set up venue", describeError(e));
     } finally {
       setBusy(false);
     }

@@ -27,6 +27,7 @@ import { THEME } from "../lib/theme";
 import { supabase, supabaseConfigured } from "../lib/supabase";
 import { useAuth } from "../lib/auth";
 import { getUserTenantIds, getUserVenues, type TenantVenue } from "../lib/tenant";
+import { describeError } from "../lib/errors";
 import VenueForm, { type VenueFormValues } from "../components/VenueForm";
 
 export default function VenueFormScreen() {
@@ -116,7 +117,7 @@ export default function VenueFormScreen() {
         ]);
       }
     } catch (e: unknown) {
-      Alert.alert("Could not save venue", e instanceof Error ? e.message : "Try again.");
+      Alert.alert("Could not save venue", describeError(e));
     } finally {
       setBusy(false);
     }
