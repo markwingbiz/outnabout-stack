@@ -108,6 +108,9 @@ export default function TabsLayout() {
           tabBarIcon: ({ focused }) => <TabIcon name="document-text" focused={focused} />,
         }}
       />
+      {/* Funnel detail (Phase 8 Slice 3): reachable from the Funnels list,
+          hidden from the tab bar. */}
+      <Tabs.Screen name="funnel-detail" options={{ href: null }} />
     </Tabs>
   );
 }
