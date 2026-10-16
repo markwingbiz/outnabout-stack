@@ -59,13 +59,18 @@ export default function TabsLayout() {
           tabBarIcon: ({ focused }) => <TabIcon name="home" focused={focused} />,
         }}
       />
+      {/* Phase 8 Slice 5: Connections is the relationship-maintenance side
+          (check-ins + gift ideas + little things she says). Same route,
+          repurposed content. */}
       <Tabs.Screen
         name="connections"
         options={{
-          title: "Connections",
-          tabBarIcon: ({ focused }) => <TabIcon name="people" focused={focused} />,
+          title: "Connection",
+          tabBarIcon: ({ focused }) => <TabIcon name="heart" focused={focused} />,
         }}
       />
+      {/* Phase 8 Slice 5: Dates is the date-planning side (out + thoughtful
+          dates, alternating every other week). Same route, repurposed content. */}
       <Tabs.Screen
         name="dates"
         options={{
@@ -142,6 +147,15 @@ export default function TabsLayout() {
         options={{
           title: "Bownd",
           tabBarIcon: ({ focused }) => <TabIcon name="storefront" focused={focused} />,
+        }}
+      />
+      {/* Phase 8 Slice 5: Forge Suggestions (revenue / internet-scan /
+          data-scan), operator-gated. */}
+      <Tabs.Screen
+        name="suggestions"
+        options={{
+          title: "Suggestions",
+          tabBarIcon: ({ focused }) => <TabIcon name="bulb" focused={focused} />,
         }}
       />
       {/* Funnel detail (Phase 8 Slice 3): reachable from the Funnels list,

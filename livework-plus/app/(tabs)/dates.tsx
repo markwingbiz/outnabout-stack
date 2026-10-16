@@ -1,9 +1,16 @@
-// Livework+ Dates — Date Planning (Phase 5).
-// Every action has a real handler backed by on-device storage
-// (AsyncStorage, via lib/local-store.ts) — labeled "Saved on this device".
-// Success is shown only after the storage write resolves. Nothing here
-// claims server sync. Ideas are editorial suggestions, not fake data.
-import React, { useCallback, useEffect, useState } from "react";
+// Livework+ Dates — the date-planning side of the Relationship section
+// (Phase 8 Slice 5). Replaces the old dating-app date planning entirely:
+// no AsyncStorage saved ideas, no budget, no matching, no editorial
+// date-idea list. Contents: out dates + thoughtful dates, alternating
+// every other week (2 weeks apart), with next-date-due indicator,
+// list + add form (type, scheduled date, plan, status planned/done, notes).
+//
+// Private — operator-gated (ForgeGate) and Mark's eyes only. All rows are
+// created by Mark in this app; nothing is seeded. Writes go through
+// direct Supabase client calls gated by the operator-only RLS policies
+// from relationship-migration.sql. If the migration hasn't been run yet,
+// the screen shows the friendly "run the migration" state, never crashes.
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -12,544 +19,408 @@ import {
   Pressable,
   SafeAreaView,
   TextInput,
-  Alert,
   ActivityIndicator,
 } from "react-native";
-import { LinearGradient } from "expo-linear-gradient";
-import { Ionicons } from "@expo/vector-icons";
-import TopTabs from "../../components/TopTabs";
 import { THEME } from "../../lib/theme";
+import { supabase } from "../../lib/supabase";
+import ForgeGate from "../../components/ForgeGate";
 import {
-  addSavedIdea,
-  addScheduledDate,
-  loadBudget,
-  loadSavedIdeas,
-  loadScheduledDates,
-  saveBudget,
-  type SavedIdea,
-  type ScheduledDate,
-} from "../../lib/local-store";
+  POLL_INTERVAL_MS,
+  addDaysISO,
+  dueLabel,
+  formatDate,
+  isMissingTableError,
+  parseDateOnlyMs,
+  todayISO,
+  usePolling,
+  type DueTone,
+  type RelationshipDateRow,
+} from "../../lib/forge";
 
-type Idea = { icon: string; title: string; sub: string; tint: string };
+type DateType = "out" | "thoughtful";
 
-const IDEAS: Idea[] = [
-  { icon: "restaurant", title: "Dinner and walk", sub: "Enjoy a great meal and a scenic stroll.", tint: "#8B5CF6" },
-  { icon: "cafe", title: "Coffee and bookstore", sub: "Good coffee, great books, better conversation.", tint: "#38BDF8" },
-  { icon: "film", title: "At-home movie night", sub: "Pick a classic, make snacks, and unwind together.", tint: "#F59E0B" },
-];
+function dueColor(tone: DueTone): string {
+  return tone === "overdue"
+    ? THEME.pink
+    : tone === "due"
+      ? THEME.orange
+      : tone === "soon"
+        ? THEME.orange
+        : THEME.green;
+}
 
-const RECOMMENDATION: Idea = {
-  icon: "business",
-  title: "Rooftop dinner with city view",
-  sub: "A rooftop table with a city view — good for a first or anniversary date.",
-  tint: "#EC4899",
-};
+function dateTypeLabel(t: string | null | undefined): string {
+  return t === "thoughtful" ? "Thoughtful date" : "Out date";
+}
 
 export default function DatesScreen() {
-  const [expandedTitle, setExpandedTitle] = useState<string | null>(null);
-  const [savedIdeas, setSavedIdeas] = useState<SavedIdea[]>([]);
-  const [scheduled, setScheduled] = useState<ScheduledDate[]>([]);
-  const [budget, setBudget] = useState("");
-  const [showSchedule, setShowSchedule] = useState(false);
-  const [showBudget, setShowBudget] = useState(false);
-  const [showSaved, setShowSaved] = useState(false);
-  const [schedTitle, setSchedTitle] = useState("");
-  const [schedDate, setSchedDate] = useState("");
-  const [schedNote, setSchedNote] = useState("");
-  const [budgetInput, setBudgetInput] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [loadingSaved, setLoadingSaved] = useState(false);
+  return (
+    <SafeAreaView style={styles.root}>
+      <ForgeGate>
+        <DatesContent />
+      </ForgeGate>
+    </SafeAreaView>
+  );
+}
 
-  const refreshSaved = useCallback(async () => {
-    setLoadingSaved(true);
+function DatesContent() {
+  const [dates, setDates] = useState<RelationshipDateRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [migrationMissing, setMigrationMissing] = useState(false);
+
+  const [showForm, setShowForm] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const [dateType, setDateType] = useState<DateType>("out");
+  const [scheduledDate, setScheduledDate] = useState(todayISO());
+  const [title, setTitle] = useState("");
+  const [notes, setNotes] = useState("");
+
+  const refresh = useCallback(async () => {
+    if (!supabase) {
+      setError("Supabase is not configured.");
+      setLoading(false);
+      return;
+    }
+    setRefreshing(true);
+    setError(null);
     try {
-      const [ideas, dates, b] = await Promise.all([loadSavedIdeas(), loadScheduledDates(), loadBudget()]);
-      setSavedIdeas(ideas);
-      setScheduled(dates);
-      setBudget(b);
-      setBudgetInput(b);
+      const { data, error: qError } = await supabase
+        .from("relationship_dates")
+        .select("*")
+        .order("scheduled_date", { ascending: false })
+        .limit(100);
+      if (qError) throw qError;
+      setDates((data ?? []) as RelationshipDateRow[]);
+      setMigrationMissing(false);
+    } catch (e) {
+      if (isMissingTableError(e)) {
+        setMigrationMissing(true);
+      } else {
+        setError(e instanceof Error ? e.message : "Could not load dates.");
+      }
     } finally {
-      setLoadingSaved(false);
+      setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
   useEffect(() => {
-    void refreshSaved();
-  }, [refreshSaved]);
+    void refresh();
+  }, [refresh]);
 
-  const isSaved = (title: string) => savedIdeas.some((i) => i.title === title);
+  usePolling(() => void refresh(), POLL_INTERVAL_MS);
 
-  async function saveIdea(idea: { title: string; sub: string }) {
-    if (isSaved(idea.title)) return;
-    setSaving(true);
-    try {
-      const next = await addSavedIdea(idea);
-      setSavedIdeas(next);
-    } catch {
-      Alert.alert("Could not save", "The idea was not saved. Try again.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function onScheduleSave() {
-    if (!schedTitle.trim() || !schedDate.trim()) {
-      Alert.alert("Missing details", "Enter an idea and a date.");
-      return;
-    }
-    setSaving(true);
-    try {
-      const next = await addScheduledDate({
-        title: schedTitle.trim(),
-        dateText: schedDate.trim(),
-        note: schedNote.trim(),
-      });
-      setScheduled(next);
-      setShowSchedule(false);
-      setSchedTitle("");
-      setSchedDate("");
-      setSchedNote("");
-    } catch {
-      Alert.alert("Could not save", "The date was not saved. Try again.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function onBudgetSave() {
-    setSaving(true);
-    try {
-      await saveBudget(budgetInput.trim());
-      setBudget(budgetInput.trim());
-      setShowBudget(false);
-    } catch {
-      Alert.alert("Could not save", "The budget was not saved. Try again.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  function onSaveIdeaAction() {
-    const idea = IDEAS.find((i) => i.title === expandedTitle) ?? null;
-    if (!idea) {
-      Alert.alert("Select an idea first", "Tap an idea to open it, then save it.");
-      return;
-    }
-    void saveIdea(idea);
-  }
-
-  function renderIdeaRow(idea: Idea) {
-    const expanded = expandedTitle === idea.title;
-    const saved = isSaved(idea.title);
-    return (
-      <View key={idea.title}>
-        <Pressable
-          style={styles.ideaRow}
-          onPress={() => setExpandedTitle(expanded ? null : idea.title)}
-        >
-          <View style={styles.ideaPhoto}>
-            <Ionicons name={idea.icon as never} size={26} color="#fff" />
-          </View>
-          <View style={[styles.ideaIcon, { backgroundColor: `${idea.tint}30` }]}>
-            <Ionicons name={idea.icon as never} size={22} color={idea.tint} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.ideaTitle}>{idea.title}</Text>
-            <Text style={styles.ideaSub}>{idea.sub}</Text>
-          </View>
-          <Ionicons name={expanded ? "chevron-up" : "chevron-down"} size={18} color={THEME.textFaint} />
-        </Pressable>
-        {expanded && (
-          <View style={styles.expanded}>
-            <Text style={styles.expandedText}>{idea.sub}</Text>
-            <Pressable
-              style={[styles.saveBtn, saved && styles.saveBtnDone]}
-              onPress={() => void saveIdea(idea)}
-              disabled={saved || saving}
-            >
-              <Text style={styles.saveBtnText}>{saved ? "Saved ✓" : saving ? "Saving…" : "Save Idea"}</Text>
-            </Pressable>
-            <Text style={styles.deviceNote}>Saved on this device.</Text>
-          </View>
-        )}
-      </View>
+  const nextDate = useMemo(() => {
+    if (dates.length === 0) return null;
+    const sorted = [...dates].sort((a, b) =>
+      String(b.scheduled_date ?? "").localeCompare(String(a.scheduled_date ?? "")),
     );
+    const last = sorted[0];
+    if (!last?.scheduled_date) return null;
+    const due = addDaysISO(last.scheduled_date, 14);
+    if (!due) return null;
+    const nextType: DateType = last.date_type === "out" ? "thoughtful" : "out";
+    return { due, last, nextType };
+  }, [dates]);
+
+  function resetForm() {
+    setDateType("out");
+    setScheduledDate(todayISO());
+    setTitle("");
+    setNotes("");
   }
+
+  async function saveDate() {
+    if (!supabase) return;
+    setFormError(null);
+    if (Number.isNaN(parseDateOnlyMs(scheduledDate))) {
+      setFormError("Scheduled date must be YYYY-MM-DD.");
+      return;
+    }
+    if (!title.trim()) {
+      setFormError("Give the date a plan/title first.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const { error: e } = await supabase.from("relationship_dates").insert({
+        date_type: dateType,
+        scheduled_date: scheduledDate.trim(),
+        title: title.trim(),
+        notes: notes.trim() || null,
+        status: "planned",
+      });
+      if (e) throw e;
+      resetForm();
+      setShowForm(false);
+      await refresh();
+    } catch (e) {
+      if (isMissingTableError(e)) setMigrationMissing(true);
+      else setFormError(e instanceof Error ? e.message : "Could not save date.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function toggleStatus(row: RelationshipDateRow) {
+    if (!supabase) return;
+    const next = row.status === "done" ? "planned" : "done";
+    try {
+      const { error: e } = await supabase
+        .from("relationship_dates")
+        .update({ status: next })
+        .eq("id", row.id);
+      if (e) throw e;
+      await refresh();
+    } catch (e) {
+      if (isMissingTableError(e)) setMigrationMissing(true);
+      else setError(e instanceof Error ? e.message : "Could not update date.");
+    }
+  }
+
+  const nextDue = nextDate ? dueLabel(nextDate.due) : null;
 
   return (
-    <SafeAreaView style={styles.root}>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-        {/* Header */}
-        <View style={styles.header}>
-          <Text style={styles.logo}>
-            Livework<Text style={styles.logoPlus}>+</Text>
-          </Text>
-          <View style={styles.avatar}>
-            <Ionicons name="person" size={22} color="rgba(255,255,255,0.85)" />
-          </View>
+    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
+      <View style={styles.header}>
+        <Text style={styles.title}>Dates</Text>
+        <Pressable style={styles.refreshBtn} onPress={() => void refresh()} disabled={refreshing}>
+          <Text style={styles.refreshText}>{refreshing ? "Refreshing…" : "Refresh ↻"}</Text>
+        </Pressable>
+      </View>
+      <Text style={styles.sub}>
+        Out dates and thoughtful dates, alternating every other week — two dates a month, 2 weeks
+        apart.
+      </Text>
+
+      {!!formError && (
+        <View style={[styles.card, styles.errorCard]}>
+          <Text style={styles.errorText}>{formError}</Text>
         </View>
-
-        <TopTabs />
-
-        {/* Date Planning hero */}
-        <LinearGradient
-          colors={["#2B1B5E", "#1A1038", "#14102A"]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.hero}
-        >
-          <View style={{ flex: 1 }}>
-            <Text style={styles.heroTitle}>Date Planning</Text>
-            <Text style={styles.heroSub}>Curated ideas for meaningful connections</Text>
-          </View>
-          <View style={styles.heartWrap}>
-            <Ionicons name="heart" size={36} color="#EC4899" />
-          </View>
-        </LinearGradient>
-
-        {/* Date ideas */}
-        <View style={styles.group}>{IDEAS.map((idea) => renderIdeaRow(idea))}</View>
-
-        {/* Date Actions — all real, on-device */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Date Actions</Text>
-          <Text style={styles.cardSub}>Turn ideas into plans · Saved on this device</Text>
-          <View style={styles.actionGrid}>
-            <Pressable style={styles.actionBtn} onPress={() => setShowSchedule((v) => !v)}>
-              <View style={[styles.actionIcon, { backgroundColor: "#8B5CF630" }]}>
-                <Ionicons name="calendar" size={22} color="#8B5CF6" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.actionTitle}>Schedule Date</Text>
-                <Text style={styles.actionSub}>Pick a time that works</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={THEME.textFaint} />
-            </Pressable>
-            <Pressable style={styles.actionBtn} onPress={onSaveIdeaAction}>
-              <View style={[styles.actionIcon, { backgroundColor: "#EC489930" }]}>
-                <Ionicons name="bookmark" size={22} color="#EC4899" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.actionTitle}>Save Idea</Text>
-                <Text style={styles.actionSub}>Keep for later</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={THEME.textFaint} />
-            </Pressable>
-            <Pressable style={styles.actionBtn} onPress={() => setShowBudget((v) => !v)}>
-              <View style={[styles.actionIcon, { backgroundColor: "#38BDF830" }]}>
-                <Ionicons name="wallet" size={22} color="#38BDF8" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.actionTitle}>Set Budget</Text>
-                <Text style={styles.actionSub}>Plan with clarity</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={THEME.textFaint} />
-            </Pressable>
-            <Pressable
-              style={styles.actionBtn}
-              onPress={() => {
-                setShowSaved((v) => !v);
-                void refreshSaved();
-              }}
-            >
-              <View style={[styles.actionIcon, { backgroundColor: "#34D39930" }]}>
-                <Ionicons name="list" size={22} color="#34D399" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.actionTitle}>View Saved</Text>
-                <Text style={styles.actionSub}>See your ideas</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={THEME.textFaint} />
-            </Pressable>
-          </View>
-
-          {showSchedule && (
-            <View style={styles.form}>
-              <Text style={styles.formLabel}>Idea</Text>
-              <TextInput
-                value={schedTitle}
-                onChangeText={setSchedTitle}
-                placeholder="e.g. Dinner and walk"
-                placeholderTextColor={THEME.textFaint}
-                style={styles.input}
-              />
-              <Text style={styles.formLabel}>Date</Text>
-              <TextInput
-                value={schedDate}
-                onChangeText={setSchedDate}
-                placeholder="e.g. Friday, 7:00 PM"
-                placeholderTextColor={THEME.textFaint}
-                style={styles.input}
-              />
-              <Text style={styles.formLabel}>Note (optional)</Text>
-              <TextInput
-                value={schedNote}
-                onChangeText={setSchedNote}
-                placeholder="Anything to remember"
-                placeholderTextColor={THEME.textFaint}
-                style={styles.input}
-              />
-              <Pressable style={styles.saveBtn} onPress={() => void onScheduleSave()} disabled={saving}>
-                <Text style={styles.saveBtnText}>{saving ? "Saving…" : "Save Date"}</Text>
-              </Pressable>
-              <Text style={styles.deviceNote}>Saved on this device.</Text>
-            </View>
-          )}
-
-          {showBudget && (
-            <View style={styles.form}>
-              <Text style={styles.formLabel}>Monthly date budget</Text>
-              <TextInput
-                value={budgetInput}
-                onChangeText={(v) => setBudgetInput(v.replace(/[^0-9.]/g, ""))}
-                placeholder="e.g. 200"
-                placeholderTextColor={THEME.textFaint}
-                style={styles.input}
-                keyboardType="decimal-pad"
-              />
-              <Pressable style={styles.saveBtn} onPress={() => void onBudgetSave()} disabled={saving}>
-                <Text style={styles.saveBtnText}>{saving ? "Saving…" : "Save Budget"}</Text>
-              </Pressable>
-              <Text style={styles.deviceNote}>Saved on this device.</Text>
-            </View>
-          )}
-
-          {showSaved && (
-            <View style={styles.savedBox}>
-              {loadingSaved ? (
-                <ActivityIndicator color={THEME.purpleBright} />
-              ) : (
-                <>
-                  <Text style={styles.savedHeading}>Saved ideas</Text>
-                  {savedIdeas.length === 0 ? (
-                    <Text style={styles.savedEmpty}>Nothing saved yet.</Text>
-                  ) : (
-                    savedIdeas.map((i) => (
-                      <Text key={i.title} style={styles.savedLine}>
-                        • {i.title}
-                      </Text>
-                    ))
-                  )}
-                  <Text style={[styles.savedHeading, { marginTop: 12 }]}>Scheduled dates</Text>
-                  {scheduled.length === 0 ? (
-                    <Text style={styles.savedEmpty}>Nothing scheduled yet.</Text>
-                  ) : (
-                    scheduled.map((d, idx) => (
-                      <Text key={`${d.title}-${idx}`} style={styles.savedLine}>
-                        • {d.title} — {d.dateText}
-                        {d.note ? ` (${d.note})` : ""}
-                      </Text>
-                    ))
-                  )}
-                  <Text style={[styles.savedHeading, { marginTop: 12 }]}>Budget</Text>
-                  <Text style={styles.savedLine}>{budget ? `$${budget} / month` : "No budget set."}</Text>
-                  <Text style={styles.deviceNote}>Saved on this device.</Text>
-                </>
-              )}
-            </View>
-          )}
-        </View>
-
-        {/* Recommended */}
-        <View style={styles.recoCard}>
-          <View style={styles.recoPhoto}>
-            <Ionicons name="business" size={26} color="#fff" />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.recoLabel}>Recommended for you</Text>
-            <Text style={styles.recoTitle}>{RECOMMENDATION.title}</Text>
-          </View>
-          <Pressable
-            style={styles.viewBtn}
-            onPress={() => setExpandedTitle(expandedTitle === RECOMMENDATION.title ? null : RECOMMENDATION.title)}
-          >
-            <Text style={styles.viewText}>{expandedTitle === RECOMMENDATION.title ? "Hide" : "View"}</Text>
+      )}
+      {!!error && (
+        <View style={[styles.card, styles.errorCard]}>
+          <Text style={styles.errorText}>{error}</Text>
+          <Pressable onPress={() => void refresh()}>
+            <Text style={styles.retryText}>Retry</Text>
           </Pressable>
         </View>
-        {expandedTitle === RECOMMENDATION.title && (
-          <View style={[styles.card, { marginTop: 10 }]}>
-            <Text style={styles.expandedText}>{RECOMMENDATION.sub}</Text>
-            <Pressable
-              style={[styles.saveBtn, isSaved(RECOMMENDATION.title) && styles.saveBtnDone]}
-              onPress={() => void saveIdea(RECOMMENDATION)}
-              disabled={isSaved(RECOMMENDATION.title) || saving}
-            >
-              <Text style={styles.saveBtnText}>
-                {isSaved(RECOMMENDATION.title) ? "Saved ✓" : saving ? "Saving…" : "Save Idea"}
-              </Text>
-            </Pressable>
-            <Text style={styles.deviceNote}>Saved on this device.</Text>
-          </View>
-        )}
+      )}
 
-        <View style={{ height: 12 }} />
-      </ScrollView>
-    </SafeAreaView>
+      {migrationMissing ? (
+        <View style={styles.card}>
+          <Text style={styles.migrationTitle}>Run the Slice 5 migration</Text>
+          <Text style={styles.migrationText}>
+            The relationship tables don&apos;t exist yet. Run relationship-migration.sql in the
+            Supabase SQL Editor, then pull to refresh. Nothing is lost — this screen only reads
+            and writes those tables.
+          </Text>
+          <Pressable style={styles.addBtn} onPress={() => void refresh()}>
+            <Text style={styles.addBtnText}>Check again</Text>
+          </Pressable>
+        </View>
+      ) : loading ? (
+        <ActivityIndicator color={THEME.purpleBright} size="large" style={{ marginTop: 24 }} />
+      ) : (
+        <>
+          {/* Next date due */}
+          <View style={styles.card}>
+            <Text style={styles.sectionLabel}>Next date due</Text>
+            {nextDate && nextDue ? (
+              <>
+                <Text style={[styles.dueText, { color: dueColor(nextDue.tone) }]}>
+                  {nextDue.label} — {dateTypeLabel(nextDate.nextType)}
+                </Text>
+                <Text style={styles.meta}>
+                  Last date {nextDate.last.scheduled_date} · {dateTypeLabel(nextDate.last.date_type)} ·{" "}
+                  {nextDate.last.title || "untitled"}
+                </Text>
+              </>
+            ) : (
+              <Text style={styles.muted}>No dates yet — schedule your first date below.</Text>
+            )}
+          </View>
+
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>All dates</Text>
+            <Pressable style={styles.addBtn} onPress={() => setShowForm((v) => !v)}>
+              <Text style={styles.addBtnText}>{showForm ? "Cancel" : "+ Plan a date"}</Text>
+            </Pressable>
+          </View>
+          {showForm && (
+            <View style={styles.card}>
+              <Text style={styles.fieldLabel}>Type</Text>
+              <View style={styles.chips}>
+                {(["out", "thoughtful"] as const).map((t) => (
+                  <Pressable
+                    key={t}
+                    style={[styles.chip, dateType === t && styles.chipActive]}
+                    onPress={() => setDateType(t)}
+                  >
+                    <Text style={[styles.chipText, dateType === t && styles.chipTextActive]}>
+                      {dateTypeLabel(t)}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+              <Text style={styles.fieldLabel}>Scheduled date (YYYY-MM-DD)</Text>
+              <TextInput
+                style={styles.input}
+                value={scheduledDate}
+                onChangeText={setScheduledDate}
+                placeholder="2026-10-24"
+                placeholderTextColor={THEME.textFaint}
+                autoCapitalize="none"
+              />
+              <Text style={styles.fieldLabel}>Plan / title</Text>
+              <TextInput
+                style={styles.input}
+                value={title}
+                onChangeText={setTitle}
+                placeholder="Dinner out, picnic, surprise at home…"
+                placeholderTextColor={THEME.textFaint}
+              />
+              <Text style={styles.fieldLabel}>Notes</Text>
+              <TextInput
+                style={[styles.input, styles.multiline]}
+                value={notes}
+                onChangeText={setNotes}
+                placeholder="What would make this one land…"
+                placeholderTextColor={THEME.textFaint}
+                multiline
+              />
+              <Pressable
+                style={[styles.saveBtn, saving && styles.saveBtnDisabled]}
+                onPress={() => void saveDate()}
+                disabled={saving}
+              >
+                <Text style={styles.saveBtnText}>{saving ? "Saving…" : "Save date"}</Text>
+              </Pressable>
+            </View>
+          )}
+          {dates.length === 0 ? (
+            <Text style={styles.empty}>No dates yet.</Text>
+          ) : (
+            dates.map((d) => (
+              <View key={d.id} style={styles.card}>
+                <View style={styles.rowBetween}>
+                  <Text style={styles.itemTitle}>{d.title || "Untitled date"}</Text>
+                  <Text style={styles.statusBadge}>{d.status === "done" ? "Done" : "Planned"}</Text>
+                </View>
+                <Text style={styles.meta}>
+                  {dateTypeLabel(d.date_type)} · {d.scheduled_date ?? "—"}
+                </Text>
+                {!!d.notes && <Text style={styles.itemBody}>{d.notes}</Text>}
+                <Text style={styles.meta}>Added {formatDate(d.created_at)}</Text>
+                <Pressable style={styles.smallBtn} onPress={() => void toggleStatus(d)}>
+                  <Text style={styles.smallBtnText}>
+                    {d.status === "done" ? "Mark as planned" : "Mark as done"}
+                  </Text>
+                </Pressable>
+              </View>
+            ))
+          )}
+        </>
+      )}
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: THEME.bg },
-  content: { paddingHorizontal: 18, paddingTop: 10, paddingBottom: 8 },
+  content: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 24, gap: 14 },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: 18,
+    gap: 10,
   },
-  logo: { color: "#fff", fontSize: 30, fontWeight: "900", letterSpacing: -0.5 },
-  logoPlus: { color: THEME.purpleBright },
-  avatar: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: "#3B2A63",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderColor: "rgba(168,85,247,0.5)",
-  },
-  hero: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    borderRadius: THEME.radius,
-    padding: 18,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: "rgba(168,85,247,0.25)",
-  },
-  heroTitle: { color: "#fff", fontSize: 24, fontWeight: "900" },
-  heroSub: { color: THEME.textMuted, fontSize: 13, marginTop: 6, lineHeight: 18 },
-  heartWrap: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: "rgba(236,72,153,0.16)",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "rgba(236,72,153,0.4)",
-  },
-  group: {
-    backgroundColor: THEME.card,
-    borderRadius: THEME.radius,
-    borderWidth: 1,
-    borderColor: THEME.cardBorder,
-    overflow: "hidden",
-    marginBottom: 16,
-  },
-  ideaRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    padding: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(255,255,255,0.05)",
-  },
-  ideaPhoto: {
-    width: 64,
-    height: 64,
-    borderRadius: 14,
-    backgroundColor: "#3B2A63",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  ideaIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  ideaTitle: { color: "#fff", fontSize: 15, fontWeight: "800" },
-  ideaSub: { color: THEME.textMuted, fontSize: 12, marginTop: 3, lineHeight: 16 },
-  expanded: { paddingHorizontal: 12, paddingBottom: 12, gap: 8 },
-  expandedText: { color: THEME.textMuted, fontSize: 13, lineHeight: 18 },
-  saveBtn: {
-    backgroundColor: THEME.purpleDeep,
+  title: { color: "#fff", fontSize: 26, fontWeight: "900", flex: 1 },
+  refreshBtn: {
+    backgroundColor: "rgba(255,255,255,0.07)",
     borderRadius: 999,
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    alignSelf: "flex-start",
+    paddingHorizontal: 12,
+    paddingVertical: 7,
   },
-  saveBtnDone: { backgroundColor: "rgba(52,211,153,0.25)" },
-  saveBtnText: { color: "#fff", fontSize: 13, fontWeight: "800" },
-  deviceNote: { color: THEME.textFaint, fontSize: 11, marginTop: 2 },
+  refreshText: { color: THEME.textMuted, fontSize: 12, fontWeight: "800" },
+  sub: { color: THEME.textMuted, fontSize: 12, lineHeight: 17 },
   card: {
     backgroundColor: THEME.card,
     borderRadius: THEME.radius,
     borderWidth: 1,
     borderColor: THEME.cardBorder,
-    padding: 16,
-    marginBottom: 16,
+    padding: 14,
+    gap: 8,
   },
-  cardTitle: { color: "#fff", fontSize: 18, fontWeight: "900" },
-  cardSub: { color: THEME.textMuted, fontSize: 12, marginTop: 3, marginBottom: 14 },
-  actionGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
-  actionBtn: {
-    width: "48%",
-    flexGrow: 1,
+  errorCard: { borderColor: "rgba(236,72,153,0.5)" },
+  errorText: { color: THEME.pink, fontSize: 13, lineHeight: 18 },
+  retryText: { color: THEME.purpleBright, fontSize: 13, fontWeight: "800", marginTop: 8 },
+  migrationTitle: { color: "#fff", fontSize: 16, fontWeight: "800" },
+  migrationText: { color: THEME.textMuted, fontSize: 13, lineHeight: 19 },
+  sectionLabel: { color: "#fff", fontSize: 14, fontWeight: "800" },
+  sectionHeader: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
-    backgroundColor: "rgba(139,92,246,0.12)",
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: "rgba(139,92,246,0.25)",
-    padding: 12,
+    justifyContent: "space-between",
+    marginTop: 6,
   },
-  actionIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  actionTitle: { color: "#fff", fontSize: 13, fontWeight: "800" },
-  actionSub: { color: THEME.textMuted, fontSize: 11, marginTop: 2 },
-  form: { marginTop: 16, gap: 8, borderTopWidth: 1, borderTopColor: "rgba(255,255,255,0.08)", paddingTop: 14 },
-  formLabel: { color: THEME.textMuted, fontSize: 12, fontWeight: "700" },
-  input: {
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.1)",
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    height: 48,
-    color: "#fff",
-    fontSize: 15,
-  },
-  savedBox: { marginTop: 16, borderTopWidth: 1, borderTopColor: "rgba(255,255,255,0.08)", paddingTop: 14, gap: 4 },
-  savedHeading: { color: "#fff", fontSize: 13, fontWeight: "800" },
-  savedEmpty: { color: THEME.textMuted, fontSize: 12 },
-  savedLine: { color: THEME.textMuted, fontSize: 12, lineHeight: 17 },
-  recoCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    backgroundColor: THEME.card,
-    borderRadius: THEME.radius,
-    borderWidth: 1,
-    borderColor: THEME.cardBorder,
-    padding: 12,
-  },
-  recoPhoto: {
-    width: 72,
-    height: 56,
-    borderRadius: 12,
-    backgroundColor: "#3B2A63",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  recoLabel: { color: THEME.purpleBright, fontSize: 12, fontWeight: "800" },
-  recoTitle: { color: "#fff", fontSize: 14, fontWeight: "800", marginTop: 3 },
-  viewBtn: {
-    borderWidth: 1,
-    borderColor: THEME.purpleBright,
+  sectionTitle: { color: "#fff", fontSize: 18, fontWeight: "900" },
+  addBtn: {
+    backgroundColor: THEME.purpleDeep,
     borderRadius: 999,
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     paddingVertical: 8,
   },
-  viewText: { color: THEME.purpleBright, fontWeight: "800", fontSize: 13 },
+  addBtnText: { color: "#fff", fontSize: 12, fontWeight: "800" },
+  dueText: { fontSize: 18, fontWeight: "900" },
+  meta: { color: THEME.textMuted, fontSize: 12 },
+  muted: { color: THEME.textFaint, fontSize: 12 },
+  empty: { color: THEME.textMuted, fontSize: 14, textAlign: "center", marginTop: 8 },
+  fieldLabel: { color: "#fff", fontSize: 13, fontWeight: "800" },
+  input: {
+    color: "#fff",
+    fontSize: 14,
+    borderWidth: 1,
+    borderColor: THEME.cardBorder,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: "rgba(255,255,255,0.04)",
+  },
+  multiline: { minHeight: 64, textAlignVertical: "top" },
+  chips: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  chip: {
+    borderWidth: 1,
+    borderColor: THEME.cardBorder,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  chipActive: { borderColor: THEME.purpleBright, backgroundColor: "rgba(168,85,247,0.18)" },
+  chipText: { color: THEME.textMuted, fontSize: 12, fontWeight: "800" },
+  chipTextActive: { color: "#fff" },
+  saveBtn: {
+    backgroundColor: THEME.purpleDeep,
+    borderRadius: 999,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    alignSelf: "flex-start",
+  },
+  saveBtnDisabled: { opacity: 0.5 },
+  saveBtnText: { color: "#fff", fontSize: 13, fontWeight: "800" },
+  rowBetween: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  itemTitle: { color: "#fff", fontSize: 15, fontWeight: "800", flex: 1 },
+  itemBody: { color: "#fff", fontSize: 13, lineHeight: 19 },
+  statusBadge: { color: THEME.textMuted, fontSize: 12, fontWeight: "800" },
+  smallBtn: { alignSelf: "flex-start" },
+  smallBtnText: { color: THEME.purpleBright, fontSize: 12, fontWeight: "800" },
 });
