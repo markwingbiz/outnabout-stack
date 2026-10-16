@@ -266,3 +266,168 @@ export function extractGateFailures(resp: FunnelActionResponse): string[] {
   if (resp.error) return [resp.error];
   return [];
 }
+
+// ---------- Workers + Deliverables (Phase 8 Slice 2) ----------
+
+/**
+ * Post-Phase-A cutoff: the Deliverables screen shows only deliverables
+ * created after Phase A merged (2026-10-14). The 6,719 Mar–May 2026
+ * historical rows stay in the DB untouched and out of live views, per
+ * Mark's standing decision. No runtime existed before Phase A that
+ * could have written a deliverable, so this cutoff excludes only history.
+ */
+export const PHASE_A_CUTOFF_ISO = "2026-10-14T00:00:00Z";
+
+/** Worker registry row (design §4.1). JSONB columns stay `unknown` — use the as* helpers. */
+export type WorkerRow = {
+  id: string;
+  slug: string | null;
+  name: string | null;
+  role: string | null;
+  short_role: string | null;
+  description: string | null;
+  category: string | null;
+  capabilities: unknown;
+  input_schema: unknown;
+  output_schema: unknown;
+  tools: unknown;
+  queue_name: string | null;
+  max_attempts: number | null;
+  timeout_seconds: number | null;
+  contract_version: string | null;
+  model: string | null;
+  temperature: number | null;
+  system_prompt: string | null;
+  config: unknown;
+  requires_approval_for: unknown;
+  status: string | null;
+  last_run_at: string | null;
+  metadata: unknown;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+/** Deliverable row (design §3). status: draft|ready|approved|published|rejected. */
+export type DeliverableRow = {
+  id: string;
+  task_id: string | null;
+  funnel_id: string | null;
+  worker_id: string | null;
+  worker_name: string | null;
+  deliverable_type: string | null;
+  title: string | null;
+  summary: string | null;
+  content: string | null;
+  content_json: unknown;
+  status: string | null;
+  approval_id: string | null;
+  metadata: unknown;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+// ---------- JSONB narrowing helpers (unknown -> safe values) ----------
+
+/** Unknown -> string array (jsonb arrays of intent/tool/action strings). */
+export function asStringArray(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((x): x is string => typeof x === "string");
+}
+
+/** Unknown -> record (jsonb objects like metadata / config / content_json). */
+export function asRecord(v: unknown): Record<string, unknown> {
+  return isRecord(v) ? v : {};
+}
+
+/** Unknown -> display string. Objects/arrays become compact JSON. */
+export function asDisplayString(v: unknown): string {
+  if (v == null) return "—";
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return "—";
+  }
+}
+
+/** Pretty JSON for content_json / metadata blocks. Falls back to a plain string. */
+export function asPrettyJson(v: unknown): string {
+  if (v == null) return "—";
+  if (typeof v === "string") return v;
+  try {
+    return JSON.stringify(v, null, 2);
+  } catch {
+    return asDisplayString(v);
+  }
+}
+
+// ---------- Worker contract (design §4.1 / §3.2) ----------
+
+/**
+ * Contract-complete per the dispatch eligibility rule (§3.2): slug,
+ * input_schema, output_schema, and a non-empty tools array are present.
+ * queue_name is shown separately in the checklist (the funnel-gate check
+ * also requires it) but does not gate eligibility per §3.2.
+ */
+export function workerContractComplete(w: WorkerRow): boolean {
+  return (
+    Boolean(w.slug) &&
+    w.input_schema != null &&
+    w.output_schema != null &&
+    asStringArray(w.tools).length > 0
+  );
+}
+
+/** Dispatch-eligible: status 'active' AND contract complete. */
+export function workerIsEligible(w: WorkerRow): boolean {
+  return normalizeStatus(w.status) === "ACTIVE" && workerContractComplete(w);
+}
+
+/** Contract checklist lines for the worker detail view. */
+export function workerContractChecklist(w: WorkerRow): { label: string; ok: boolean }[] {
+  return [
+    { label: "slug", ok: Boolean(w.slug) },
+    { label: "input_schema", ok: w.input_schema != null },
+    { label: "output_schema", ok: w.output_schema != null },
+    { label: "tools (non-empty)", ok: asStringArray(w.tools).length > 0 },
+    { label: "queue_name", ok: Boolean(w.queue_name) },
+    { label: "max_attempts", ok: w.max_attempts != null },
+    { label: "timeout_seconds", ok: w.timeout_seconds != null },
+  ];
+}
+
+// ---------- Deliverable transitions (design §5.1) ----------
+
+export type DeliverableTransition = "approve" | "publish" | "reject";
+
+/** Which transitions the current status allows. */
+export function transitionsForDeliverable(
+  status: string | null | undefined,
+): { transition: DeliverableTransition; label: string }[] {
+  switch (normalizeStatus(status)) {
+    case "READY":
+      return [
+        { transition: "approve", label: "Approve" },
+        { transition: "reject", label: "Reject" },
+      ];
+    case "APPROVED":
+      return [{ transition: "publish", label: "Publish" }];
+    case "DRAFT":
+      return [{ transition: "reject", label: "Reject" }];
+    default:
+      return []; // PUBLISHED / REJECTED are terminal
+  }
+}
+
+export type DeliverableTransitionResponse = {
+  deliverable?: DeliverableRow;
+  deduped?: boolean;
+  error?: string;
+};
+
+export type WorkerStatusResponse = {
+  worker?: WorkerRow;
+  deduped?: boolean;
+  error?: string;
+};

@@ -94,6 +94,20 @@ export default function TabsLayout() {
           tabBarIcon: ({ focused }) => <TabIcon name="list" focused={focused} />,
         }}
       />
+      <Tabs.Screen
+        name="workers"
+        options={{
+          title: "Workers",
+          tabBarIcon: ({ focused }) => <TabIcon name="construct" focused={focused} />,
+        }}
+      />
+      <Tabs.Screen
+        name="deliverables"
+        options={{
+          title: "Deliverables",
+          tabBarIcon: ({ focused }) => <TabIcon name="document-text" focused={focused} />,
+        }}
+      />
     </Tabs>
   );
 }
