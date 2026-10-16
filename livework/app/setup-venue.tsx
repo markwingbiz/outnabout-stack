@@ -4,6 +4,10 @@
 // membership + venue for this vendor. It never lists, offers, or lets the
 // user pick an existing tenant.
 //
+// Slice 2: the form UI lives in components/VenueForm.tsx, shared with
+// venue-form.tsx (venues screen). This screen keeps its 3-step submit
+// logic (tenant → membership → venue); only the fields moved.
+//
 // NOTE — requires the self-onboarding RLS policies (see
 // phase-7-slice-1/onboarding-rls.sql, NOT applied): tenants and
 // tenant_users inserts are admin-only in the current RLS, so steps 1–2
@@ -22,7 +26,6 @@ import {
   ScrollView,
   Pressable,
   SafeAreaView,
-  TextInput,
   Alert,
   ActivityIndicator,
 } from "react-native";
@@ -32,27 +35,13 @@ import { THEME } from "../lib/theme";
 import { supabase, supabaseConfigured } from "../lib/supabase";
 import { useAuth } from "../lib/auth";
 import { getUserTenantIds, getUserVenues } from "../lib/tenant";
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <View style={styles.field}>
-      <Text style={styles.label}>{label}</Text>
-      {children}
-    </View>
-  );
-}
+import VenueForm, { type VenueFormValues } from "../components/VenueForm";
 
 export default function SetupVenueScreen() {
   const router = useRouter();
   const { session, loading: authLoading } = useAuth();
   const [checking, setChecking] = useState(true);
   const [checkError, setCheckError] = useState<string | null>(null);
-  const [name, setName] = useState("");
-  const [address, setAddress] = useState("");
-  const [city, setCity] = useState("");
-  const [state, setState] = useState("");
-  const [phone, setPhone] = useState("");
-  const [website, setWebsite] = useState("");
   const [busy, setBusy] = useState(false);
 
   // If the vendor already has a venue, they do not need this screen.
@@ -81,7 +70,8 @@ export default function SetupVenueScreen() {
     };
   }, [authLoading, session, router]);
 
-  async function onSubmit() {
+  async function onSubmit(values: VenueFormValues) {
+    const { name, address, city, state, phone, website } = values;
     if (!name.trim()) {
       Alert.alert("Missing venue name", "Enter your venue name.");
       return;
@@ -199,72 +189,7 @@ export default function SetupVenueScreen() {
           Tell us about your venue. We&apos;ll create your venue profile — your events and revenue live under it.
         </Text>
 
-        <Field label="Venue Name *">
-          <TextInput
-            value={name}
-            onChangeText={setName}
-            placeholder="e.g. The Brickhouse"
-            placeholderTextColor={THEME.textFaint}
-            style={styles.input}
-          />
-        </Field>
-
-        <Field label="Address">
-          <TextInput
-            value={address}
-            onChangeText={setAddress}
-            placeholder="Street address"
-            placeholderTextColor={THEME.textFaint}
-            style={styles.input}
-          />
-        </Field>
-
-        <Field label="City">
-          <TextInput
-            value={city}
-            onChangeText={setCity}
-            placeholder="City"
-            placeholderTextColor={THEME.textFaint}
-            style={styles.input}
-          />
-        </Field>
-
-        <Field label="State">
-          <TextInput
-            value={state}
-            onChangeText={setState}
-            placeholder="State"
-            placeholderTextColor={THEME.textFaint}
-            style={styles.input}
-          />
-        </Field>
-
-        <Field label="Phone">
-          <TextInput
-            value={phone}
-            onChangeText={setPhone}
-            placeholder="Phone"
-            placeholderTextColor={THEME.textFaint}
-            style={styles.input}
-            keyboardType="phone-pad"
-          />
-        </Field>
-
-        <Field label="Website">
-          <TextInput
-            value={website}
-            onChangeText={setWebsite}
-            placeholder="https://…"
-            placeholderTextColor={THEME.textFaint}
-            style={styles.input}
-            keyboardType="url"
-            autoCapitalize="none"
-          />
-        </Field>
-
-        <Pressable style={[styles.saveBtn, busy && { opacity: 0.7 }]} onPress={onSubmit} disabled={busy}>
-          <Text style={styles.saveText}>{busy ? "Setting up…" : "Create my venue"}</Text>
-        </Pressable>
+        <VenueForm submitLabel="Create my venue" busy={busy} onSubmit={(values) => void onSubmit(values)} />
       </ScrollView>
     </SafeAreaView>
   );
@@ -286,25 +211,4 @@ const styles = StyleSheet.create({
   },
   title: { color: "#fff", fontSize: 20, fontWeight: "900" },
   intro: { color: THEME.textMuted, fontSize: 14, lineHeight: 20, marginBottom: 18 },
-  field: { marginBottom: 14 },
-  label: { color: THEME.textMuted, fontSize: 13, fontWeight: "700", marginBottom: 8 },
-  input: {
-    backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.cardBorder,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    height: 50,
-    color: "#fff",
-    fontSize: 15,
-  },
-  saveBtn: {
-    backgroundColor: THEME.purple,
-    borderRadius: 12,
-    height: 52,
-    alignItems: "center",
-    justifyContent: "center",
-    marginTop: 6,
-  },
-  saveText: { color: "#fff", fontWeight: "900", fontSize: 16 },
 });
