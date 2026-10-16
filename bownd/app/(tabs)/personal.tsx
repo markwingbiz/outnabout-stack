@@ -1,20 +1,27 @@
 // app/(tabs)/personal.tsx
-// Phase 6 fix notes (see FIX-PLAN.md):
-// - REMOVED demoAdventures: guests no longer see 3 fake adventures
-//   ("Jazz + Dessert Hop", "Downtown Lights", "Family Fun Run") presented
-//   as "Recent Adventures". Guests see a sign-in prompt; signed-in users
-//   see real redemption history (or an honest empty state).
-// - Favorite venue tiles navigate to /(tabs)/events filtered to that
-//   venue. Favorite event tiles navigate to /detail. Previously both
-//   had onPress={() => {}} (dead).
-// - Adventure rows are redemption-history records, not navigable
-//   content: they are now plain rows (no onPress, no chevron) instead
-//   of dead pressables with a misleading chevron.
-// - Change Persona points at the canonical /(tabs)/persona route
-//   (the root /persona duplicate is deleted in Phase 6).
-// - Rewards "Redeem" button relabeled "Show QR": it scrolls to the QR
-//   section; it never redeemed anything, and the old label implied it
-//   did. Visual design is otherwise UNCHANGED.
+// Bownd recreate restyle (Personal screen) — visual restyle only.
+// Behavior preserved from the pre-restyle file (see notes below):
+// - Guests never see demo adventures: signed-in users see real redemption
+//   history, guests see a sign-in prompt (never fake demo adventures).
+// - Favorite venue tiles navigate to /(tabs)/events filtered to that venue.
+//   Favorite event tiles navigate to /detail. Previously both were dead.
+// - Adventure rows are redemption-history records, not navigable content:
+//   plain rows (no onPress, no chevron).
+// - "Change Persona" points at the canonical /(tabs)/persona route.
+// - Rewards "Show QR" scrolls to the QR section; it never redeems anything.
+//   The old "Redeem" label implied it did, so the label says what it does.
+// - All points / tokens / QR values come from the real backend
+//   (profile, lib/store generateQrToken, lib/store redeemCode).
+//   No mockup example values are hardcoded anywhere in this file.
+// - Tabs adapted to the mockup set All | QR | Rewards | Venue:
+//   All shows every section; QR shows QR only; Rewards shows Rewards only;
+//   Venue shows the venue-related sections (Favorite Venues + Favorite
+//   Events). Favorite Events and Adventures content is unchanged and still
+//   reachable under All. Home / Events navigation moved to SegmentedTabs
+//   (top) and BottomNav (bottom), same destinations as the old pills.
+// - Gear icon: no dedicated settings route exists in this app, so the gear
+//   reuses the existing /(tabs)/persona route (the file's settings-adjacent
+//   destination) instead of inventing a new route.
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
   View,
@@ -44,8 +51,25 @@ import {
   type FavoriteItem,
   type RedemptionHistoryItem,
 } from "../../lib/store";
+import {
+  SearchBar,
+  SegmentedTabs,
+  BottomNav,
+  TagPill,
+  PhotoCard,
+  rc,
+  rr,
+  rs,
+  rtype,
+  rshadow,
+  type TabKey,
+} from "../ui/recreate";
 
 const { width: SCREEN_W } = Dimensions.get("window");
+
+const VENUE_GRADIENT: [string, string] = ["#7C3AED", "#4F46E5"];
+const EVENT_GRADIENT: [string, string] = ["#F6A58A", "#7C3AED"];
+const PROFILE_GRADIENT: [string, string, string] = ["#7C3AED", "#A855F7", "#F6A58A"];
 
 type FavoriteVenue = { id: string; name: string; neighborhood?: string; badge?: string };
 type FavoriteEvent = { id: string; title: string; venue: string; when: string; badge?: string };
@@ -56,14 +80,9 @@ export default function PersonalScreen() {
   const scrollRef = useRef<ScrollView>(null);
   const { user, profile, signOut, refreshProfile } = useAuth();
 
-  // ✅ Top search + pills
   const [searchText, setSearchText] = useState("");
-  // NOTE:
-  // - "events" pill now routes to Events page
-  // - "favs" pill does what the old "events" pill did (opens Favorite Events section)
-  const [activePill, setActivePill] = useState<"all" | "home" | "qr" | "rewards" | "venues" | "favs" | "adventures">(
-    "all"
-  );
+  // Mockup tabs: All | QR | Rewards | Venue.
+  const [activePill, setActivePill] = useState<"all" | "qr" | "rewards" | "venue">("all");
 
   // collapsible sections
   const [rewardsOpen, setRewardsOpen] = useState(true);
@@ -149,7 +168,7 @@ export default function PersonalScreen() {
     [user, history]
   );
 
-  // ✅ Search filtering (no UI changes, only filters data)
+  // Search filtering (filters data only).
   const q = searchText.trim().toLowerCase();
 
   const filteredVenues = useMemo(() => {
@@ -232,21 +251,19 @@ export default function PersonalScreen() {
     router.push("/scan");
   }
 
-  // ✅ Pills behavior
-  function applyPill(next: typeof activePill) {
-    // Home pill routes home (personal page only logic)
-    if (next === "home") {
+  function goToTab(t: TabKey) {
+    if (t === "home") {
       router.replace("/(tabs)");
       return;
     }
-
-    // Events pill routes to Events page
-    if (next === "events" as any) {
-      // (kept for safety if someone passes "events" manually)
+    if (t === "events") {
       router.replace("/(tabs)/events");
       return;
     }
+    scrollRef.current?.scrollTo({ y: 0, animated: true });
+  }
 
+  function applyPill(next: typeof activePill) {
     setActivePill(next);
 
     if (next === "all") {
@@ -258,9 +275,10 @@ export default function PersonalScreen() {
     } else {
       setQrOpen(next === "qr");
       setRewardsOpen(next === "rewards");
-      setVenuesOpen(next === "venues");
-      setEventsOpen(next === "favs"); // ✅ "Favs" controls Favorite Events section
-      setAdventuresOpen(next === "adventures");
+      // Venue tab shows the venue-related sections.
+      setVenuesOpen(next === "venue");
+      setEventsOpen(next === "venue");
+      setAdventuresOpen(false);
     }
 
     requestAnimationFrame(() => {
@@ -268,311 +286,326 @@ export default function PersonalScreen() {
     });
   }
 
-  // ✅ route handler for Events pill (keeps pill row clean)
-  function goToEvents() {
-    router.replace("/(tabs)/events");
-  }
-
   return (
     <View style={styles.root}>
-      {/* Hero */}
-      <LinearGradient
-        colors={["#6A35FF", "#B46CFF", "#FFD57A"]}
-        start={{ x: 0.1, y: 0.0 }}
-        end={{ x: 0.9, y: 1.0 }}
-        style={styles.hero}
-      >
-        <SafeAreaView style={styles.safe}>
+      <SafeAreaView style={styles.safe}>
+        <ScrollView
+          ref={scrollRef}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Header */}
           <View style={styles.headerRow}>
             <View>
               <Text style={styles.heroTitle}>Personal</Text>
-              <Text style={styles.heroSubtitle}>Rewards • Favorites • Adventures</Text>
+              <Text style={styles.heroSubtitle}>Rewards · Favorites · Adventures</Text>
+            </View>
+            <Pressable
+              style={styles.gearBtn}
+              onPress={() => router.push("/(tabs)/persona")}
+              accessibilityLabel="Settings"
+              accessibilityRole="button"
+            >
+              <Ionicons name="settings-outline" size={22} color="#fff" />
+            </Pressable>
+          </View>
+
+          <View style={styles.searchWrap}>
+            <SearchBar
+              value={searchText}
+              onChangeText={setSearchText}
+              placeholder="Search rewards, venues, events..."
+            />
+          </View>
+
+          <View style={styles.segWrap}>
+            <SegmentedTabs active="personal" onSelect={goToTab} />
+          </View>
+
+          {/* Profile: violet-to-peach gradient panel, concentric glow circles,
+              dark avatar circle with person silhouette, real backend points. */}
+          <LinearGradient
+            colors={PROFILE_GRADIENT}
+            start={{ x: 0.1, y: 0.0 }}
+            end={{ x: 0.9, y: 1.0 }}
+            style={styles.profilePanel}
+          >
+            <View style={styles.glowOuter}>
+              <View style={styles.glowMid}>
+                <View style={styles.avatar}>
+                  <Ionicons name="person" size={42} color="#FFFFFF" />
+                </View>
+              </View>
+            </View>
+
+            <Text style={styles.heroBigStat}>{points} pts</Text>
+            <Text style={styles.heroSmallStat}>Next tier at {nextTierAt}</Text>
+            <View style={styles.tierRow}>
+              <TagPill label={tier} />
             </View>
 
             <Pressable style={styles.changePersonaBtn} onPress={() => router.push("/(tabs)/persona")}>
               <Ionicons name="sparkles-outline" size={16} color="#fff" />
               <Text style={styles.changePersonaText}>Change Persona</Text>
             </Pressable>
-          </View>
 
-          <View style={styles.illustrationWrap}>
-            <View style={styles.orb} />
-            <View style={styles.avatarRing}>
-              <View style={styles.avatarInner}>
-                <Ionicons name="person" size={42} color="#FFFFFF" />
-              </View>
-            </View>
-
-            <Text style={styles.heroBigStat}>{points} pts</Text>
-            <Text style={styles.heroSmallStat}>Next tier at {nextTierAt}</Text>
             {user ? (
-              <Pressable onPress={() => signOut()} style={{ marginTop: 8, padding: 6 }}>
-                <Text style={{ color: "rgba(255,255,255,0.9)", fontWeight: "800", fontSize: 12 }}>
-                  Sign out
-                </Text>
+              <Pressable onPress={() => signOut()} style={styles.authLink}>
+                <Text style={styles.authLinkText}>Sign out</Text>
               </Pressable>
             ) : (
-              <Pressable onPress={() => router.push("/(auth)/login")} style={{ marginTop: 8, padding: 6 }}>
-                <Text style={{ color: "rgba(255,255,255,0.9)", fontWeight: "800", fontSize: 12 }}>
-                  Sign in to save rewards →
-                </Text>
+              <Pressable onPress={() => router.push("/(auth)/login")} style={styles.authLink}>
+                <Text style={styles.authLinkText}>Sign in to save rewards →</Text>
               </Pressable>
             )}
-          </View>
-        </SafeAreaView>
-      </LinearGradient>
+          </LinearGradient>
 
-      {/* White sheet */}
-      <View style={styles.sheet}>
-        <ScrollView ref={scrollRef} contentContainerStyle={styles.sheetContent} showsVerticalScrollIndicator={false}>
-          {/* ✅ Top Search Bar + Pills */}
-          <View style={styles.topToolsWrap}>
-            <View style={styles.searchWrap}>
-              <Ionicons name="search-outline" size={18} color="#6F6F6F" />
-              <TextInput
-                value={searchText}
-                onChangeText={setSearchText}
-                placeholder="Search rewards, venues, events..."
-                placeholderTextColor="#9A9A9A"
-                style={styles.searchInput}
-                returnKeyType="search"
-                clearButtonMode="while-editing"
+          {/* Lower panel: light off-white / pale-lavender, overlapping gradient. */}
+          <View style={styles.lightPanel}>
+            {/* Tabs: All (selected) | QR | Rewards | Venue */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.tabsRow}
+            >
+              <TabPill label="All" active={activePill === "all"} onPress={() => applyPill("all")} />
+              <TabPill label="QR" active={activePill === "qr"} onPress={() => applyPill("qr")} />
+              <TabPill
+                label="Rewards"
+                active={activePill === "rewards"}
+                onPress={() => applyPill("rewards")}
               />
-              {!!searchText && (
-                <Pressable onPress={() => setSearchText("")} hitSlop={10} style={styles.clearBtn}>
-                  <Ionicons name="close-circle" size={18} color="#9A9A9A" />
-                </Pressable>
-              )}
-            </View>
-
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillsRow}>
-              <Pill label="Home" active={activePill === "home"} onPress={() => applyPill("home")} />
-
-{/* 👇 swapped */}
-<Pill label="Events" active={false} onPress={goToEvents} />
-<Pill label="All" active={activePill === "all"} onPress={() => applyPill("all")} />
-
-<Pill label="QR" active={activePill === "qr"} onPress={() => applyPill("qr")} />
-<Pill label="Rewards" active={activePill === "rewards"} onPress={() => applyPill("rewards")} />
-<Pill label="Venues" active={activePill === "venues"} onPress={() => applyPill("venues")} />
-<Pill label="Favs" active={activePill === "favs"} onPress={() => applyPill("favs")} />
-<Pill label="Adventures" active={activePill === "adventures"} onPress={() => applyPill("adventures")} />
-
+              <TabPill
+                label="Venue"
+                active={activePill === "venue"}
+                onPress={() => applyPill("venue")}
+              />
+              <Ionicons
+                name="chevron-forward"
+                size={16}
+                color={rc.lightPanelSub}
+                style={styles.tabsChevron}
+              />
             </ScrollView>
-          </View>
 
-          {/* QR */}
-          <SectionHeader title="QR Codes" open={qrOpen} onPress={() => setQrOpen((s) => !s)} />
-          {qrOpen && (
-            <View style={styles.qrCard}>
-              <Text style={styles.qrHint}>Generate a code to show a venue, or redeem a code from a venue.</Text>
+            {/* QR */}
+            <SectionHeader title="QR Codes" open={qrOpen} onPress={() => setQrOpen((s) => !s)} />
+            {qrOpen && (
+              <View style={styles.card}>
+                <Text style={styles.qrHint}>
+                  Generate a code to show a venue, or redeem a code from a venue.
+                </Text>
 
-              {/* Generator */}
-              <View style={styles.qrBlock}>
-                <View style={styles.qrTopRow}>
-                  <Text style={styles.qrBlockTitle}>Your QR Token</Text>
-                  <Pressable style={styles.smallBtn} onPress={onGenerateQr}>
-                    <Ionicons name="refresh-outline" size={16} color="#fff" />
-                    <Text style={styles.smallBtnText}>New</Text>
-                  </Pressable>
-                </View>
-
-                <View style={styles.qrToken}>
-                  <Text style={styles.qrTokenText} numberOfLines={1}>
-                    {generatedCode || "—"}
-                  </Text>
-                </View>
-
-                <View style={styles.qrFake}>
-                  {qrValue ? (
-                    <View style={styles.qrBox}>
-                      <QRCode value={qrValue} size={160} />
-                    </View>
-                  ) : (
-                    <>
-                      <Ionicons name="qr-code-outline" size={80} color="rgba(0,0,0,0.55)" />
-                      <Text style={styles.qrFakeText}>
-                        {user ? "Tap New to generate your code" : "Sign in to generate a code"}
-                      </Text>
-                    </>
-                  )}
-                </View>
-              </View>
-
-              {/* Redeemer */}
-              <View style={styles.qrBlock}>
-                <Text style={styles.qrBlockTitle}>Redeem a Code</Text>
-                <View style={styles.redeemRow}>
-                  <TextInput
-                    value={redeemInput}
-                    onChangeText={setRedeemInput}
-                    placeholder="Paste or type code"
-                    placeholderTextColor="#9A9A9A"
-                    style={styles.redeemInput}
-                    autoCapitalize="characters"
-                  />
-                  <Pressable style={styles.redeemBtn} onPress={onRedeem}>
-                    <Text style={styles.redeemBtnText}>Redeem</Text>
-                  </Pressable>
-                </View>
-
-                <Pressable style={styles.scanBtn} onPress={onOpenScanner}>
-                  <Ionicons name="scan-outline" size={18} color="#fff" />
-                  <Text style={styles.scanBtnText}>Open Camera Scanner</Text>
-                </Pressable>
-              </View>
-            </View>
-          )}
-
-          {/* Rewards */}
-          <SectionHeader title="Rewards" open={rewardsOpen} onPress={() => setRewardsOpen((s) => !s)} />
-          {rewardsOpen && (
-            <View style={styles.rewardsCard}>
-              <View style={styles.rewardsTopRow}>
+                {/* Generator */}
                 <View>
-                  <Text style={styles.rewardsPoints}>{points} points</Text>
-                  <Text style={styles.rewardsHint}>Earn points by redeeming offers + going on adventures.</Text>
+                  <View style={styles.qrTopRow}>
+                    <Text style={styles.qrBlockTitle}>Your QR Token</Text>
+                    <Pressable style={styles.newBtn} onPress={onGenerateQr}>
+                      <Ionicons name="refresh-outline" size={16} color="#fff" />
+                      <Text style={styles.newBtnText}>New</Text>
+                    </Pressable>
+                  </View>
+
+                  <View style={styles.qrToken}>
+                    <Text style={styles.qrTokenText} numberOfLines={1}>
+                      {generatedCode || "—"}
+                    </Text>
+                  </View>
+
+                  <View style={styles.qrDisplay}>
+                    {qrValue ? (
+                      <View style={styles.qrBox}>
+                        <QRCode value={qrValue} size={160} />
+                      </View>
+                    ) : (
+                      <>
+                        <Ionicons name="qr-code-outline" size={80} color="rgba(0,0,0,0.55)" />
+                        <Text style={styles.qrEmptyText}>
+                          {user ? "Tap New to generate your code" : "Sign in to generate a code"}
+                        </Text>
+                      </>
+                    )}
+                  </View>
                 </View>
 
-                {/* Scrolls to the QR section. Label says what it does —
-                    the old "Redeem" label implied it redeemed something. */}
-                <Pressable style={styles.claimBtn} onPress={() => applyPill("qr")}>
-                  <Text style={styles.claimBtnText}>Show QR</Text>
-                </Pressable>
-              </View>
+                {/* Redeemer */}
+                <View>
+                  <Text style={styles.qrBlockTitle}>Redeem a Code</Text>
+                  <View style={styles.redeemRow}>
+                    <TextInput
+                      value={redeemInput}
+                      onChangeText={setRedeemInput}
+                      placeholder="Paste or type code"
+                      placeholderTextColor="#9A9A9A"
+                      style={styles.redeemInput}
+                      autoCapitalize="characters"
+                    />
+                    <Pressable onPress={onRedeem}>
+                      <LinearGradient
+                        colors={[rc.indigo, rc.violet]}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 0 }}
+                        style={styles.redeemBtn}
+                      >
+                        <Text style={styles.redeemBtnText}>Redeem</Text>
+                      </LinearGradient>
+                    </Pressable>
+                  </View>
 
-              <View style={styles.progressTrack}>
-                <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+                  <Pressable style={styles.scanBtn} onPress={onOpenScanner}>
+                    <Ionicons name="scan-outline" size={18} color="#fff" />
+                    <Text style={styles.scanBtnText}>Open Camera Scanner</Text>
+                  </Pressable>
+                </View>
               </View>
+            )}
 
-              <View style={styles.rewardsMetaRow}>
-                <Text style={styles.metaText}>Current: {tier}</Text>
-                <Text style={styles.metaText}>Next: {tier === "VIP" ? "Max" : "VIP"}</Text>
-              </View>
-            </View>
-          )}
-
-          {/* Favorite Venues */}
-          <SectionHeader title="Favorite Venues" open={venuesOpen} onPress={() => setVenuesOpen((s) => !s)} />
-          {venuesOpen && (
-            <FlatList
-              data={filteredVenues}
-              keyExtractor={(item) => item.id}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.hListPad}
-              renderItem={({ item }) => (
-                <Pressable
-                  style={styles.tile}
-                  onPress={() => router.push({ pathname: "/(tabs)/events", params: { venue: item.name } })}
-                >
-                  <LinearGradient
-                    colors={["#A56CFF", "#6A35FF", "#2D6BFF"]}
-                    start={{ x: 0.0, y: 0.0 }}
-                    end={{ x: 1.0, y: 1.0 }}
-                    style={styles.tileBg}
-                  >
-                    <Text style={styles.tileBadge}>{item.badge ?? "Favorite"}</Text>
-                    <Text style={styles.tileTitle} numberOfLines={2}>
-                      {item.name}
-                    </Text>
-                    <Text style={styles.tileSub} numberOfLines={1}>
-                      {item.neighborhood ?? "Kansas City"}
-                    </Text>
-                  </LinearGradient>
-                </Pressable>
-              )}
+            {/* Rewards */}
+            <SectionHeader
+              title="Rewards"
+              open={rewardsOpen}
+              onPress={() => setRewardsOpen((s) => !s)}
             />
-          )}
+            {rewardsOpen && (
+              <View style={styles.card}>
+                <View style={styles.rewardsTopRow}>
+                  <View>
+                    <Text style={styles.rewardsPoints}>{points} points</Text>
+                    <Text style={styles.rewardsHint}>
+                      Earn points by redeeming offers + going on adventures.
+                    </Text>
+                  </View>
 
-          {/* Favorite Events */}
-          <SectionHeader title="Favorite Events" open={eventsOpen} onPress={() => setEventsOpen((s) => !s)} />
-          {eventsOpen && (
-            <FlatList
-              data={filteredEvents}
-              keyExtractor={(item) => item.id}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.hListPad}
-              renderItem={({ item }) => (
-                <Pressable
-                  style={[styles.tile, { width: Math.min(240, SCREEN_W * 0.62) }]}
-                  onPress={() => router.push({ pathname: "/detail", params: { id: item.id, kind: "event" } })}
-                >
-                  <LinearGradient
-                    colors={["#FFD57A", "#B46CFF", "#6A35FF"]}
-                    start={{ x: 0.0, y: 0.1 }}
-                    end={{ x: 1.0, y: 1.0 }}
-                    style={styles.tileBg}
-                  >
-                    <View style={styles.eventBadgeRow}>
-                      <Text style={styles.tileBadge}>{item.badge ?? "Saved"}</Text>
+                  {/* Scrolls to the QR section. Label says what it does —
+                      the old "Redeem" label implied it redeemed something. */}
+                  <Pressable style={styles.claimBtn} onPress={() => applyPill("qr")}>
+                    <Text style={styles.claimBtnText}>Show QR</Text>
+                  </Pressable>
+                </View>
+
+                <View style={styles.progressTrack}>
+                  <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+                </View>
+
+                <View style={styles.rewardsMetaRow}>
+                  <Text style={styles.metaText}>Current: {tier}</Text>
+                  <Text style={styles.metaText}>Next: {tier === "VIP" ? "Max" : "VIP"}</Text>
+                </View>
+              </View>
+            )}
+
+            {/* Favorite Venues */}
+            <SectionHeader
+              title="Favorite Venues"
+              open={venuesOpen}
+              onPress={() => setVenuesOpen((s) => !s)}
+            />
+            {venuesOpen && (
+              <FlatList
+                data={filteredVenues}
+                keyExtractor={(item) => item.id}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.hListPad}
+                renderItem={({ item }) => (
+                  <View style={styles.favItemWrap}>
+                    <PhotoCard
+                      title={item.name}
+                      subtitle={item.neighborhood ?? "Kansas City"}
+                      badge={item.badge ?? "Favorite"}
+                      gradient={VENUE_GRADIENT}
+                      height={150}
+                      onPress={() =>
+                        router.push({ pathname: "/(tabs)/events", params: { venue: item.name } })
+                      }
+                    />
+                  </View>
+                )}
+              />
+            )}
+
+            {/* Favorite Events */}
+            <SectionHeader
+              title="Favorite Events"
+              open={eventsOpen}
+              onPress={() => setEventsOpen((s) => !s)}
+            />
+            {eventsOpen && (
+              <FlatList
+                data={filteredEvents}
+                keyExtractor={(item) => item.id}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.hListPad}
+                renderItem={({ item }) => (
+                  <View style={styles.favEventWrap}>
+                    <PhotoCard
+                      title={item.title}
+                      subtitle={item.when ? `${item.venue} · ${item.when}` : item.venue}
+                      badge={item.badge ?? "Saved"}
+                      gradient={EVENT_GRADIENT}
+                      height={150}
+                      onPress={() =>
+                        router.push({ pathname: "/detail", params: { id: item.id, kind: "event" } })
+                      }
+                    />
+                  </View>
+                )}
+              />
+            )}
+
+            {/* Recent Adventures — real redemption history only. */}
+            <SectionHeader
+              title="Recent Adventures"
+              open={adventuresOpen}
+              onPress={() => setAdventuresOpen((s) => !s)}
+            />
+            {adventuresOpen && (
+              <View style={styles.listWrap}>
+                {!user && (
+                  <Text style={styles.emptyText}>Sign in to see your adventures.</Text>
+                )}
+                {user && filteredAdventures.length === 0 && (
+                  <Text style={styles.emptyText}>
+                    No adventures yet — redeem an offer to start earning.
+                  </Text>
+                )}
+                {/* History records are display-only (not navigable content),
+                    so rows are plain Views with no chevron — previously dead
+                    pressables with a misleading chevron. */}
+                {filteredAdventures.map((a) => (
+                  <View key={a.id} style={styles.rowCard}>
+                    <View style={styles.rowLeft}>
+                      <LinearGradient
+                        colors={["#6A35FF", "#B46CFF", "#FFD57A"]}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={styles.rowIcon}
+                      >
+                        <Ionicons name="sparkles" size={18} color="#FFFFFF" />
+                      </LinearGradient>
                     </View>
 
-                    <Text style={styles.tileTitle} numberOfLines={2}>
-                      {item.title}
-                    </Text>
-
-                    <Text style={styles.tileSub} numberOfLines={1}>
-                      {item.venue}
-                    </Text>
-
-                    <Text style={styles.eventWhen} numberOfLines={1}>
-                      {item.when}
-                    </Text>
-                  </LinearGradient>
-                </Pressable>
-              )}
-            />
-          )}
-
-          {/* Recent Adventures — real redemption history only. */}
-          <SectionHeader title="Recent Adventures" open={adventuresOpen} onPress={() => setAdventuresOpen((s) => !s)} />
-          {adventuresOpen && (
-            <View style={styles.listWrap}>
-              {!user && (
-                <Text style={{ fontSize: 13, color: "#6F6F6F", fontWeight: "800", padding: 4 }}>
-                  Sign in to see your adventures.
-                </Text>
-              )}
-              {user && filteredAdventures.length === 0 && (
-                <Text style={{ fontSize: 13, color: "#6F6F6F", fontWeight: "800", padding: 4 }}>
-                  No adventures yet — redeem an offer to start earning.
-                </Text>
-              )}
-              {/* History records are display-only (not navigable content),
-                  so rows are plain Views with no chevron — previously dead
-                  pressables with a misleading chevron. */}
-              {filteredAdventures.map((a) => (
-                <View key={a.id} style={styles.rowCard}>
-                  <View style={styles.rowLeft}>
-                    <LinearGradient
-                      colors={["#6A35FF", "#B46CFF", "#FFD57A"]}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 1 }}
-                      style={styles.rowIcon}
-                    >
-                      <Ionicons name="sparkles" size={18} color="#FFFFFF" />
-                    </LinearGradient>
+                    <View style={styles.rowMid}>
+                      <Text style={styles.rowTitle} numberOfLines={1}>
+                        {a.title}
+                      </Text>
+                      <Text style={styles.rowSub} numberOfLines={1}>
+                        {a.subtitle}
+                      </Text>
+                      <Text style={styles.rowMeta}>{a.dateLabel}</Text>
+                    </View>
                   </View>
+                ))}
+              </View>
+            )}
 
-                  <View style={styles.rowMid}>
-                    <Text style={styles.rowTitle} numberOfLines={1}>
-                      {a.title}
-                    </Text>
-                    <Text style={styles.rowSub} numberOfLines={1}>
-                      {a.subtitle}
-                    </Text>
-                    <Text style={styles.rowMeta}>{a.dateLabel}</Text>
-                  </View>
-                </View>
-              ))}
-            </View>
-          )}
-
-          <View style={{ height: 26 }} />
+            <View style={{ height: 10 }} />
+          </View>
         </ScrollView>
-      </View>
+      </SafeAreaView>
+
+      <BottomNav active="personal" onSelect={goToTab} />
     </View>
   );
 }
@@ -581,125 +614,133 @@ function SectionHeader({ title, open, onPress }: { title: string; open: boolean;
   return (
     <Pressable style={styles.sectionHeader} onPress={onPress}>
       <Text style={styles.sectionTitle}>{title}</Text>
-      <Ionicons name={open ? "chevron-down" : "chevron-forward"} size={18} color="#9A9A9A" />
+      <Ionicons
+        name={open ? "chevron-down" : "chevron-forward"}
+        size={18}
+        color={rc.lightPanelSub}
+      />
     </Pressable>
   );
 }
 
-function Pill({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+/** Light-panel tab pill: selected = dark pill per the mockup. Built with
+ *  shared rc tokens; FilterPill (dark-theme) is unreadable on this surface. */
+function TabPill({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
   return (
-    <Pressable onPress={onPress} style={[styles.pill, active && styles.pillActive]}>
-      <Text style={[styles.pillText, active && styles.pillTextActive]}>{label}</Text>
+    <Pressable onPress={onPress} style={[styles.tabPill, active && styles.tabPillActive]}>
+      <Text style={[styles.tabPillText, active && styles.tabPillTextActive]}>{label}</Text>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#0B0B12" },
-
-  hero: {
-    height: 320,
-    borderBottomLeftRadius: 28,
-    borderBottomRightRadius: 28,
-    overflow: "hidden",
-  },
-  safe: { flex: 1, paddingHorizontal: 18, paddingTop: 6 },
+  root: { flex: 1, backgroundColor: rc.bg },
+  safe: { flex: 1 },
+  scrollContent: { paddingHorizontal: rs.page, paddingTop: 8, paddingBottom: 16 },
 
   headerRow: {
     flexDirection: "row",
     alignItems: "flex-start",
     justifyContent: "space-between",
     paddingTop: 10,
+    marginBottom: 16,
     gap: 12,
   },
-  heroTitle: { color: "#fff", fontSize: 30, fontWeight: "900" },
-  heroSubtitle: { color: "rgba(255,255,255,0.88)", fontSize: 12, marginTop: 6, fontWeight: "700" },
-
-  changePersonaBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.18)",
+  heroTitle: { ...rtype.display, color: "#fff" },
+  heroSubtitle: { ...rtype.small, color: rc.subtext, marginTop: 4 },
+  gearBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: rc.surface,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.22)",
-    marginLeft: -39,
-  },
-  changePersonaText: { color: "#fff", fontWeight: "900", fontSize: 12 },
-
-  illustrationWrap: { flex: 1, alignItems: "center", justifyContent: "center", paddingBottom: 16 },
-  orb: {
-    position: "absolute",
-    width: 240,
-    height: 240,
-    borderRadius: 120,
-    backgroundColor: "rgba(255,255,255,0.18)",
-    transform: [{ translateY: 8 }],
-  },
-  avatarRing: {
-    width: 98,
-    height: 98,
-    borderRadius: 49,
-    backgroundColor: "rgba(255,255,255,0.25)",
+    borderColor: rc.border,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 10,
   },
-  avatarInner: {
-    width: 82,
-    height: 82,
-    borderRadius: 41,
-    backgroundColor: "rgba(30,30,45,0.35)",
+
+  searchWrap: { marginBottom: 12 },
+  segWrap: { marginBottom: 16 },
+
+  // Profile gradient panel
+  profilePanel: {
+    borderRadius: rr.panel,
+    overflow: "hidden",
+    padding: 20,
+    paddingBottom: 48,
+    alignItems: "center",
+    ...rshadow.card,
+  },
+  glowOuter: {
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    backgroundColor: "rgba(255,255,255,0.10)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+  },
+  glowMid: {
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    backgroundColor: "rgba(255,255,255,0.12)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  avatar: {
+    width: 92,
+    height: 92,
+    borderRadius: 46,
+    backgroundColor: "#1E1B2E",
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.35)",
   },
-  heroBigStat: { color: "#fff", fontSize: 26, fontWeight: "900", marginTop: 4 },
-  heroSmallStat: { color: "rgba(255,255,255,0.9)", fontSize: 12, marginTop: 4, fontWeight: "800" },
-
-  sheet: {
-    flex: 1,
-    marginTop: -34,
-    backgroundColor: "#fff",
-    borderTopLeftRadius: 26,
-    borderTopRightRadius: 26,
-    overflow: "hidden",
-  },
-  sheetContent: { paddingHorizontal: 18, paddingTop: 14 },
-
-  // top search + pills
-  topToolsWrap: { gap: 10, marginBottom: 6 },
-  searchWrap: {
-    height: 46,
-    borderRadius: 14,
-    backgroundColor: "#F7F7FB",
-    paddingHorizontal: 12,
-    borderWidth: 1,
-    borderColor: "rgba(0,0,0,0.06)",
+  heroBigStat: { color: "#fff", fontSize: 30, fontWeight: "900", marginTop: 4 },
+  heroSmallStat: { color: "rgba(255,255,255,0.85)", fontSize: 13, marginTop: 4, fontWeight: "700" },
+  tierRow: { marginTop: 10 },
+  changePersonaBtn: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
-  },
-  searchInput: { flex: 1, height: "100%", fontWeight: "800", color: "#1B1B1B" },
-  clearBtn: { paddingLeft: 2 },
-
-  pillsRow: { paddingVertical: 2, gap: 10, paddingRight: 8 },
-  pill: {
-    height: 34,
-    paddingHorizontal: 12,
-    borderRadius: 999,
-    backgroundColor: "#F7F7FB",
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: rr.pill,
+    backgroundColor: "rgba(255,255,255,0.18)",
     borderWidth: 1,
-    borderColor: "rgba(0,0,0,0.06)",
+    borderColor: "rgba(255,255,255,0.25)",
+    marginTop: 14,
+  },
+  changePersonaText: { color: "#fff", fontWeight: "800", fontSize: 13 },
+  authLink: { marginTop: 10, padding: 6 },
+  authLinkText: { color: "rgba(255,255,255,0.9)", fontWeight: "800", fontSize: 12 },
+
+  // Lower light panel overlapping the gradient
+  lightPanel: {
+    marginTop: -28,
+    backgroundColor: rc.lightPanel,
+    borderRadius: rr.panel,
+    padding: 16,
+    ...rshadow.card,
+  },
+
+  tabsRow: { gap: 8, paddingBottom: 4, marginBottom: 4, alignItems: "center" },
+  tabPill: {
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderRadius: rr.pill,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: rc.lightBorder,
     alignItems: "center",
     justifyContent: "center",
   },
-  pillActive: { backgroundColor: "#2D6BFF", borderColor: "rgba(45,107,255,0.25)" },
-  pillText: { fontWeight: "900", fontSize: 12, color: "#1B1B1B" },
-  pillTextActive: { color: "#fff" },
+  tabPillActive: { backgroundColor: "#1E1B2E", borderColor: "#1E1B2E" },
+  tabPillText: { fontSize: 13, fontWeight: "700", color: rc.lightPanelText },
+  tabPillTextActive: { color: "#fff" },
+  tabsChevron: { marginLeft: 2 },
 
   sectionHeader: {
     paddingVertical: 12,
@@ -707,59 +748,52 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
-  sectionTitle: { fontSize: 16, fontWeight: "900", color: "#1B1B1B" },
+  sectionTitle: { ...rtype.section, color: rc.lightPanelText },
 
-  // QR
-  qrCard: {
-    backgroundColor: "#F7F7FB",
-    borderRadius: 18,
+  // Cards on the light panel
+  card: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: rr.card,
     padding: 14,
     borderWidth: 1,
-    borderColor: "rgba(0,0,0,0.06)",
+    borderColor: rc.lightBorder,
     marginBottom: 8,
     gap: 12,
   },
-  qrHint: { fontSize: 12, color: "#6F6F6F", fontWeight: "700", lineHeight: 16 },
-  qrBlock: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 16,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: "rgba(0,0,0,0.06)",
-  },
+  qrHint: { ...rtype.small, color: rc.lightPanelSub },
   qrTopRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  qrBlockTitle: { fontSize: 13, fontWeight: "900", color: "#1B1B1B" },
-  smallBtn: {
+  qrBlockTitle: { fontSize: 14, fontWeight: "800", color: rc.lightPanelText },
+  newBtn: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: "#2D6BFF",
-    paddingHorizontal: 10,
+    backgroundColor: rc.violet,
+    paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 12,
+    borderRadius: rr.pill,
   },
-  smallBtnText: { color: "#fff", fontWeight: "900", fontSize: 12 },
+  newBtnText: { color: "#fff", fontWeight: "800", fontSize: 12 },
 
   qrToken: {
     marginTop: 10,
-    borderRadius: 14,
-    backgroundColor: "#F7F7FB",
+    borderRadius: rr.cardSm,
+    backgroundColor: rc.lightPanel,
     paddingVertical: 10,
     paddingHorizontal: 12,
   },
-  qrTokenText: { fontWeight: "900", color: "#1B1B1B" },
+  qrTokenText: { fontWeight: "800", color: rc.lightPanelText },
 
-  qrFake: {
+  qrDisplay: {
     marginTop: 12,
-    height: 150,
-    borderRadius: 16,
-    backgroundColor: "#F7F7FB",
+    minHeight: 170,
+    borderRadius: rr.cardSm,
+    backgroundColor: rc.lightPanel,
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
+    padding: 12,
   },
-  qrFakeText: { fontSize: 11, color: "#9A9A9A", fontWeight: "800" },
-
+  qrEmptyText: { fontSize: 12, color: rc.lightPanelSub, fontWeight: "600", textAlign: "center" },
   qrBox: {
     padding: 10,
     borderRadius: 12,
@@ -771,93 +805,73 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 46,
     borderRadius: 14,
-    backgroundColor: "#F7F7FB",
+    backgroundColor: rc.lightPanel,
     paddingHorizontal: 12,
     borderWidth: 1,
-    borderColor: "rgba(0,0,0,0.06)",
-    fontWeight: "800",
-    color: "#1B1B1B",
+    borderColor: rc.lightBorder,
+    fontWeight: "700",
+    color: rc.lightPanelText,
   },
   redeemBtn: {
     height: 46,
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
     borderRadius: 14,
-    backgroundColor: "#6A35FF",
     alignItems: "center",
     justifyContent: "center",
   },
-  redeemBtnText: { color: "#fff", fontWeight: "900", fontSize: 12 },
+  redeemBtnText: { color: "#fff", fontWeight: "800", fontSize: 13 },
 
   scanBtn: {
     marginTop: 10,
     height: 46,
     borderRadius: 14,
-    backgroundColor: "#2D6BFF",
+    backgroundColor: rc.indigo,
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
     gap: 8,
   },
-  scanBtnText: { color: "#fff", fontWeight: "900", fontSize: 12 },
+  scanBtnText: { color: "#fff", fontWeight: "800", fontSize: 13 },
 
   // Rewards
-  rewardsCard: {
-    backgroundColor: "#F7F7FB",
-    borderRadius: 18,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: "rgba(0,0,0,0.06)",
-    marginBottom: 8,
-  },
   rewardsTopRow: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 12 },
-  rewardsPoints: { fontSize: 18, fontWeight: "900", color: "#141414" },
-  rewardsHint: { marginTop: 6, fontSize: 12, color: "#6F6F6F", maxWidth: 230, lineHeight: 16 },
-  claimBtn: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 14, backgroundColor: "#2D6BFF" },
-  claimBtnText: { color: "#fff", fontWeight: "900", fontSize: 12 },
+  rewardsPoints: { fontSize: 20, fontWeight: "800", color: rc.lightPanelText },
+  rewardsHint: { ...rtype.small, color: rc.lightPanelSub, marginTop: 6, maxWidth: 230 },
+  claimBtn: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 14, backgroundColor: rc.indigo },
+  claimBtnText: { color: "#fff", fontWeight: "800", fontSize: 12 },
 
-  progressTrack: { marginTop: 12, height: 10, borderRadius: 10, backgroundColor: "rgba(0,0,0,0.08)", overflow: "hidden" },
-  progressFill: { height: "100%", borderRadius: 10, backgroundColor: "#6A35FF" },
-  rewardsMetaRow: { marginTop: 10, flexDirection: "row", justifyContent: "space-between" },
-  metaText: { fontSize: 12, color: "#6F6F6F", fontWeight: "800" },
-
-  // lists
-  hListPad: { paddingBottom: 6, paddingTop: 2, paddingRight: 8, gap: 12 },
-  tile: { width: Math.min(200, SCREEN_W * 0.55), height: 150, borderRadius: 18, overflow: "hidden" },
-  tileBg: { flex: 1, padding: 14, justifyContent: "flex-end" },
-  tileBadge: {
-    alignSelf: "flex-start",
-    backgroundColor: "rgba(255,255,255,0.22)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.35)",
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    color: "#fff",
-    fontWeight: "900",
-    fontSize: 11,
-    marginBottom: 10,
+  progressTrack: {
+    marginTop: 12,
+    height: 10,
+    borderRadius: 10,
+    backgroundColor: "rgba(30,27,46,0.10)",
+    overflow: "hidden",
   },
-  tileTitle: { color: "#fff", fontSize: 16, fontWeight: "900", lineHeight: 20 },
-  tileSub: { color: "rgba(255,255,255,0.9)", marginTop: 6, fontSize: 12, fontWeight: "800" },
+  progressFill: { height: "100%", borderRadius: 10, backgroundColor: rc.violet },
+  rewardsMetaRow: { marginTop: 10, flexDirection: "row", justifyContent: "space-between" },
+  metaText: { fontSize: 12, color: rc.lightPanelSub, fontWeight: "700" },
 
-  eventBadgeRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  eventWhen: { marginTop: 8, color: "rgba(255,255,255,0.95)", fontSize: 12, fontWeight: "900" },
+  // Favorites lists
+  hListPad: { paddingBottom: 6, paddingTop: 2, paddingRight: 8, gap: 12 },
+  favItemWrap: { width: Math.min(200, SCREEN_W * 0.55) },
+  favEventWrap: { width: Math.min(240, SCREEN_W * 0.62) },
 
   listWrap: { gap: 10, paddingBottom: 8 },
+  emptyText: { fontSize: 13, color: rc.lightPanelSub, fontWeight: "700", padding: 4 },
   rowCard: {
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
-    backgroundColor: "#F7F7FB",
-    borderRadius: 16,
+    backgroundColor: "#FFFFFF",
+    borderRadius: rr.cardSm,
     padding: 12,
     borderWidth: 1,
-    borderColor: "rgba(0,0,0,0.06)",
+    borderColor: rc.lightBorder,
   },
   rowLeft: { width: 36, alignItems: "center", justifyContent: "center" },
   rowIcon: { width: 32, height: 32, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   rowMid: { flex: 1 },
-  rowTitle: { fontSize: 14, fontWeight: "900", color: "#1B1B1B" },
-  rowSub: { marginTop: 3, fontSize: 12, color: "#6F6F6F", fontWeight: "800" },
-  rowMeta: { marginTop: 6, fontSize: 11, color: "#9A9A9A", fontWeight: "900" },
+  rowTitle: { fontSize: 14, fontWeight: "800", color: rc.lightPanelText },
+  rowSub: { marginTop: 3, fontSize: 12, color: rc.lightPanelSub, fontWeight: "700" },
+  rowMeta: { marginTop: 6, fontSize: 11, color: rc.lightPanelSub, fontWeight: "700" },
 });

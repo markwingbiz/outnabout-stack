@@ -1,37 +1,50 @@
 // app/(tabs)/home.tsx
-// Phase 6 fix notes (see FIX-PLAN.md):
+// Bownd recreate — Home screen restyle (see REFERENCE-ANALYSIS.md).
+// Layout + visuals use the shared design system in app/ui/recreate.tsx
+// (SearchBar, SegmentedTabs, BottomNav, PhotoCard, rc/rr/rs/rtype/rshadow).
+// Photo cards use gradient placeholders: the mockup's photos are baked into
+// the reference JPG at low resolution and cannot be extracted, so the
+// gradients stand in until real photo assets are provided. They are never
+// presented as real photos.
+// Behavior preserved from the previous version:
 // - Home search is WIRED: typing filters spotlight/featured events and
 //   venues in place (title, venue, vibe/audience tags). A "See results in
-//   Events" row navigates to /(tabs)/events with the query prefilled.
-// - Spotlight / featured cards navigate to the real detail screen
-//   (/detail?id=...&kind=event) instead of generically replacing to
-//   /(tabs)/events and losing which event was tapped.
-// - Venue orbs navigate to /(tabs)/events filtered to that venue.
+//   Events" row navigates to /(tabs)/events with the query prefilled, and
+//   submitting the search does the same.
+// - Photo cards navigate to the real detail screen (/detail?id=...&kind=event).
+// - Venue cards navigate to /(tabs)/events filtered to that venue.
 // - Events + venues come from Firestore ONLY (lib/store.ts). No bundled
 //   demo fallback: an empty catalog shows "No events yet", never demo
 //   events presented as real.
-// - Visual design is UNCHANGED: same layout, styles, and components.
+// - The "Featured:" heading renders ONCE (the mockup duplicates it; that
+//   duplication is a mockup error and is not reproduced here). Its title is
+//   the real featured event's title, never a hardcoded demo title.
 import React, { useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
   StyleSheet,
-  ImageBackground,
   SafeAreaView,
-  TextInput,
   Pressable,
   FlatList,
   StatusBar,
-  Platform,
   ScrollView,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 
 import { fetchEvents, fetchVenues, type EventItem, type Venue } from "../../lib/store";
-
-type TabKey = "home" | "events" | "personal";
+import {
+  SearchBar,
+  SegmentedTabs,
+  BottomNav,
+  PhotoCard,
+  rc,
+  rr,
+  rs,
+  rtype,
+  rshadow,
+  type TabKey,
+} from "../ui/recreate";
 
 function pickFeatured(events: EventItem[]) {
   return events.find((e) => e.category === "featured") ?? events[1] ?? events[0];
@@ -41,18 +54,12 @@ function getVenueNameFromEvent(e: EventItem, venues: Venue[]) {
   return v?.name ?? (e.venueId || "Venue");
 }
 
-function titleToTwoLines(title: string) {
-  // Helps mimic the mock’s bigger “headline” look without overflowing.
-  const parts = title.split(":");
-  if (parts.length >= 2) {
-    const left = parts[0].trim() + ":";
-    const right = parts.slice(1).join(":").trim();
-    return { line1: left, line2: right };
-  }
-  const words = title.split(" ");
-  if (words.length <= 3) return { line1: title, line2: "" };
+/** Split a venue name across two balanced lines for the small venue cards. */
+function venueLabel(name: string) {
+  const words = name.split(" ");
+  if (words.length < 2) return name;
   const mid = Math.ceil(words.length / 2);
-  return { line1: words.slice(0, mid).join(" "), line2: words.slice(mid).join(" ") };
+  return words.slice(0, mid).join(" ") + "\n" + words.slice(mid).join(" ");
 }
 
 function matchesHomeSearch(e: EventItem, venueName: string, q: string) {
@@ -65,6 +72,37 @@ function matchesHomeSearch(e: EventItem, venueName: string, q: string) {
     (e.audienceTags || []).join(" ").toLowerCase().includes(query)
   );
 }
+
+/** Badge text computed from the event's REAL data: "Tonight" when the real
+ *  start time falls on today, otherwise the real vibe/audience tags, with
+ *  the real category as a last resort. Never hardcoded per event. */
+function badgeForEvent(e: EventItem): string {
+  const start = new Date(e.startISO);
+  const now = new Date();
+  const isToday =
+    !Number.isNaN(start.getTime()) &&
+    start.getFullYear() === now.getFullYear() &&
+    start.getMonth() === now.getMonth() &&
+    start.getDate() === now.getDate();
+  if (isToday) return "★ Tonight";
+  const tags = [...(e.vibeTags || []), ...(e.audienceTags || [])].filter(Boolean);
+  if (tags.length > 0) return "★ " + tags.slice(0, 2).join(" | ");
+  if (e.category === "featured") return "★ Featured";
+  if (e.category === "spotlight") return "★ Spotlight";
+  return "★ Event";
+}
+
+// Gradient placeholders for photo cards (see header note: not real photos).
+const HERO_GRADIENTS: [string, string][] = [
+  ["#7C3AED", "#1E1B4B"],
+  ["#4F46E5", "#0E7490"],
+  ["#A855F7", "#312E81"],
+];
+const VENUE_GRADIENTS: [string, string][] = [
+  ["#3B82F6", "#1E3A8A"],
+  ["#0EA5A5", "#134E4A"],
+  ["#A855F7", "#4C1D95"],
+];
 
 export default function Home() {
   const router = useRouter();
@@ -105,22 +143,37 @@ export default function Home() {
     [venues, qNorm]
   );
 
-  // ✅ Spotlight events list for horizontal scroll
   const spotlightEvents = useMemo(
     () => visibleEvents.filter((e) => e.category === "spotlight"),
     [visibleEvents]
   );
 
-  // keep your single "featured" for the header row text (unchanged UI)
-  const featured = useMemo(() => pickFeatured(visibleEvents), [visibleEvents]);
-
-  const topVenues = useMemo(() => visibleVenues.slice(0, 3), [visibleVenues]);
-
-  // all featured events for the vertical menu
+  // all featured events
   const featuredEvents = useMemo(
     () => visibleEvents.filter((e) => e.category === "featured"),
     [visibleEvents]
   );
+
+  // Stacked hero cards: up to 3 real events, spotlight first then featured,
+  // deduplicated. Falls back to the first real visible events when nothing
+  // is tagged spotlight/featured. Never invents filler cards.
+  const heroEvents = useMemo(() => {
+    const picked: EventItem[] = [];
+    const seen = new Set<string>();
+    for (const e of [...spotlightEvents, ...featuredEvents]) {
+      if (!seen.has(e.id)) {
+        seen.add(e.id);
+        picked.push(e);
+      }
+    }
+    if (picked.length > 0) return picked.slice(0, 3);
+    return visibleEvents.slice(0, 3);
+  }, [spotlightEvents, featuredEvents, visibleEvents]);
+
+  // keep your single "featured" for the header row text
+  const featured = useMemo(() => pickFeatured(visibleEvents), [visibleEvents]);
+
+  const topVenues = useMemo(() => visibleVenues.slice(0, 3), [visibleVenues]);
 
   function go(tab: TabKey) {
     setActiveTab(tab);
@@ -142,22 +195,8 @@ export default function Home() {
   const nothingFound = !loading && qNorm.length > 0 && visibleEvents.length === 0 && visibleVenues.length === 0;
 
   return (
-    <ImageBackground
-      source={require("../../assets/backgrounds/home-bg.jpg")}
-      resizeMode="cover"
-      style={styles.bg}
-    >
+    <View style={styles.root}>
       <StatusBar translucent backgroundColor="transparent" barStyle="light-content" />
-
-      {/* Dark vignette like the mock */}
-      <LinearGradient
-        colors={[
-          "rgba(0,0,0,0.55)",
-          "rgba(0,0,0,0.35)",
-          "rgba(0,0,0,0.55)",
-        ]}
-        style={StyleSheet.absoluteFill}
-      />
 
       <SafeAreaView style={styles.safe}>
         <ScrollView
@@ -166,44 +205,25 @@ export default function Home() {
           keyboardShouldPersistTaps="handled"
         >
           {/* Search */}
-          <View style={styles.searchWrap}>
-            <Ionicons name="search" size={18} color="rgba(255,255,255,0.75)" />
-            <TextInput
-              value={q}
-              onChangeText={setQ}
-              placeholder="Explore"
-              placeholderTextColor="rgba(255,255,255,0.55)"
-              style={styles.searchInput}
-              returnKeyType="search"
-              onSubmitEditing={openSearchInEvents}
-            />
+          <SearchBar
+            value={q}
+            onChangeText={setQ}
+            placeholder="Explore"
+            onSubmit={openSearchInEvents}
+          />
+
+          {/* Top tabs */}
+          <View style={styles.tabsWrap}>
+            <SegmentedTabs active={activeTab} onSelect={go} />
           </View>
 
           {/* See full search results in Events (only while searching) */}
           {!!qNorm && (
             <Pressable onPress={openSearchInEvents} style={styles.seeResultsRow}>
               <Text style={styles.seeResultsText}>See all results in Events</Text>
-              <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.75)" />
+              <Text style={styles.chevron}>›</Text>
             </Pressable>
           )}
-
-          {/* Top tabs pill group */}
-          <View style={styles.tabsPill}>
-            {(["home", "events", "personal"] as TabKey[]).map((t) => {
-              const active = activeTab === t;
-              return (
-                <Pressable
-                  key={t}
-                  onPress={() => go(t)}
-                  style={[styles.tabBtn, active && styles.tabBtnActive]}
-                >
-                  <Text style={[styles.tabText, active && styles.tabTextActive]}>
-                    {t.charAt(0).toUpperCase() + t.slice(1)}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
 
           {loading ? (
             <Text style={styles.emptyText}>Loading…</Text>
@@ -213,50 +233,30 @@ export default function Home() {
             <Text style={styles.emptyText}>No matches for “{q.trim()}”.</Text>
           ) : (
             <>
-              {/* Spotlight list (vertical stack, like the mock) */}
-              <View style={styles.spotlightListWrap}>
-                {spotlightEvents.map((item) => {
-                  const venue = getVenueNameFromEvent(item, venues);
-                  const t = titleToTwoLines(item.title);
-
-                  return (
-                    <Pressable
-                      key={item.id}
-                      onPress={() => openEvent(item.id)}
-                      style={[styles.cardOuter, styles.spotlightCardOuter]}
-                    >
-                        <ImageBackground
-                          source={require("../../assets/backgrounds/home-bg.jpg")}
-                          resizeMode="cover"
-                          style={styles.heroCard}
-                          imageStyle={styles.heroImageStyle}
-                        >
-                          <LinearGradient
-                            colors={["rgba(0,0,0,0.10)", "rgba(0,0,0,0.65)"]}
-                            style={StyleSheet.absoluteFill}
-                          />
-
-                          <View style={styles.heroTextWrap}>
-                            <Text style={styles.heroTitle}>
-                              {t.line1}
-                              {!!t.line2 ? "\n" : ""}
-                              {!!t.line2 ? t.line2 : ""}
-                            </Text>
-
-                            <Text numberOfLines={1} style={styles.heroSub}>
-                              {venue} - Spotlight
-                            </Text>
-
-                            <View style={styles.heroMetaRow}>
-                              <Text style={styles.heroStar}>★</Text>
-                              <Text style={styles.heroMeta}>Tonight</Text>
-                            </View>
-                          </View>
-                        </ImageBackground>
-                      </Pressable>
-                    );
-                })}
+              {/* Stacked full-width photo cards (up to 3 real events) */}
+              <View style={styles.heroList}>
+                {heroEvents.map((item, index) => (
+                  <PhotoCard
+                    key={item.id}
+                    title={item.title}
+                    subtitle={getVenueNameFromEvent(item, venues)}
+                    badge={badgeForEvent(item)}
+                    gradient={HERO_GRADIENTS[index % HERO_GRADIENTS.length]}
+                    height={190}
+                    onPress={() => openEvent(item.id)}
+                  />
+                ))}
               </View>
+
+              {/* Featured header row — rendered ONCE (mockup duplicates it) */}
+              {featured && (
+                <Pressable onPress={() => router.replace("/(tabs)/events")} style={styles.featureHeader}>
+                  <Text numberOfLines={1} style={styles.featureHeaderText}>
+                    Featured: {featured.title}
+                  </Text>
+                  <Text style={styles.chevron}>›</Text>
+                </Pressable>
+              )}
 
               {/* Top Venues (only when venues exist) */}
               {topVenues.length > 0 && (
@@ -267,132 +267,51 @@ export default function Home() {
                     horizontal
                     showsHorizontalScrollIndicator={false}
                     data={topVenues}
-                    keyExtractor={(v, i) => String((v as any)?.id ?? (v as any)?.name ?? i)}
+                    keyExtractor={(v, i) => String(v?.id ?? v?.name ?? i)}
                     contentContainerStyle={styles.venuesRow}
                     renderItem={({ item, index }) => {
-                      const name = (item as any)?.name ?? "Venue";
-                      const icon =
-                        index === 0 ? "wine-outline" : index === 1 ? "triangle-outline" : "business-outline";
-
+                      const name = item?.name || "Venue";
+                      const label = venueLabel(name);
                       return (
-                        <Pressable onPress={() => openVenue(name)} style={styles.venueItem}>
-                          <LinearGradient
-                            colors={
-                              index === 0
-                                ? ["rgba(60,120,255,0.50)", "rgba(40,60,130,0.45)"]
-                                : index === 1
-                                ? ["rgba(80,220,210,0.40)", "rgba(50,120,140,0.40)"]
-                                : ["rgba(170,120,255,0.45)", "rgba(90,60,170,0.40)"]
-                            }
-                            style={styles.venueOrb}
-                          >
-                            <Ionicons name={icon as any} size={22} color="rgba(255,255,255,0.90)" />
-                          </LinearGradient>
-
-                          <Text numberOfLines={1} style={styles.venueName}>
-                            {name}
-                          </Text>
-                        </Pressable>
+                        <View style={styles.venueCardWrap}>
+                          <PhotoCard
+                            title={label}
+                            gradient={VENUE_GRADIENTS[index % VENUE_GRADIENTS.length]}
+                            height={120}
+                            onPress={() => openVenue(name)}
+                          />
+                        </View>
                       );
                     }}
                   />
                 </>
               )}
-
-              {/* Featured header row (UNCHANGED UI) */}
-              {featured && (
-                <Pressable onPress={() => router.replace("/(tabs)/events")} style={styles.featureHeader}>
-                  <Text style={styles.featureHeaderLeft}>Featured:</Text>
-                  <Text numberOfLines={1} style={styles.featureHeaderRight}>
-                    {featured.title}
-                  </Text>
-                  <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.65)" />
-                </Pressable>
-              )}
-
-              {/* Featured vertical menu (UNCHANGED) */}
-              <View style={styles.featureMenuWrap}>
-                <FlatList
-                  data={featuredEvents}
-                  keyExtractor={(item) => item.id}
-                  showsVerticalScrollIndicator={false}
-                  scrollEnabled={true}
-                  nestedScrollEnabled={true}
-                  contentContainerStyle={styles.featureMenuContent}
-                  renderItem={({ item }) => {
-                    const venue = getVenueNameFromEvent(item, venues);
-
-                    return (
-                      <Pressable onPress={() => openEvent(item.id)} style={styles.cardOuter}>
-                        <ImageBackground
-                          source={require("../../assets/backgrounds/home-bg.jpg")}
-                          resizeMode="cover"
-                          style={styles.featureCard}
-                          imageStyle={styles.featureImageStyle}
-                        >
-                          <LinearGradient
-                            colors={["rgba(0,0,0,0.15)", "rgba(0,0,0,0.70)"]}
-                            style={StyleSheet.absoluteFill}
-                          />
-
-                          <View style={styles.featureBottomRow}>
-                            <View style={{ flex: 1, paddingRight: 10 }}>
-                              <Text numberOfLines={1} style={styles.featureTitle}>
-                                {item.title}
-                              </Text>
-                              <Text numberOfLines={1} style={styles.featureSub}>
-                                {venue}
-                              </Text>
-                            </View>
-
-                            <View style={styles.badge}>
-                              <Text style={styles.badgeText}>FEATURED</Text>
-                            </View>
-                          </View>
-                        </ImageBackground>
-                      </Pressable>
-                    );
-                  }}
-                />
-              </View>
             </>
           )}
 
-          {/* bottom breathing room so it “moves” like the mock */}
+          {/* bottom breathing room */}
           <View style={{ height: 26 }} />
         </ScrollView>
+
+        <BottomNav active={activeTab} onSelect={go} />
       </SafeAreaView>
-    </ImageBackground>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  bg: { flex: 1 },
+  root: { flex: 1, backgroundColor: rc.bg },
   safe: { flex: 1 },
 
   content: {
-    paddingTop: Platform.select({ ios: 6, android: 12 }),
-    paddingHorizontal: 18,
-    paddingBottom: 28,
+    paddingTop: rs.sm,
+    paddingHorizontal: rs.page,
+    paddingBottom: rs.lg,
   },
 
-  // Search (dark glass)
-  searchWrap: {
-    height: 52,
-    borderRadius: 22,
-    paddingHorizontal: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    backgroundColor: "rgba(255,255,255,0.10)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-    marginBottom: 12,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 16,
-    color: "rgba(255,255,255,0.92)",
+  tabsWrap: {
+    marginTop: rs.md,
+    marginBottom: rs.lg,
   },
 
   // "See all results in Events" row (only while searching)
@@ -404,208 +323,63 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   seeResultsText: {
-    color: "rgba(255,255,255,0.85)",
+    color: rc.text,
     fontWeight: "800",
     fontSize: 14,
+  },
+  chevron: {
+    color: rc.muted,
+    fontSize: 20,
+    fontWeight: "700",
+    marginTop: -2,
   },
 
   emptyText: {
     marginTop: 24,
-    color: "rgba(255,255,255,0.75)",
+    color: rc.muted,
     fontSize: 15,
     fontWeight: "700",
     textAlign: "center",
   },
 
-  // Tabs group (single pill container like the mock)
-  tabsPill: {
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: "rgba(255,255,255,0.10)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-    flexDirection: "row",
-    padding: 4,
-    marginBottom: 16,
-  },
-  tabBtn: {
-    flex: 1,
-    borderRadius: 18,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  tabBtnActive: {
-    backgroundColor: "rgba(255,255,255,0.16)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-  },
-  tabText: {
-    color: "rgba(255,255,255,0.70)",
-    fontWeight: "800",
-    fontSize: 14,
-  },
-  tabTextActive: {
-    color: "rgba(255,255,255,0.95)",
+  // Stacked full-width photo cards
+  heroList: {
+    gap: rs.md,
   },
 
-  // Cards
-  cardOuter: {
-    borderRadius: 22,
-    overflow: "hidden",
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-  },
-
-  // Spotlight vertical list (stacked full-width cards, like the mock)
-  spotlightListWrap: {
-    gap: 14,
-  },
-  spotlightCardOuter: {
-    width: "100%",
-  },
-
-  heroCard: {
-    height: 190,
-    borderRadius: 22,
-    overflow: "hidden",
-    justifyContent: "flex-end",
-  },
-  heroImageStyle: {
-    borderRadius: 22,
-  },
-  heroTextWrap: {
-    padding: 16,
-  },
-  heroTitle: {
-    color: "rgba(255,255,255,0.95)",
-    fontSize: 28,
-    fontWeight: "900",
-    lineHeight: 30,
-  },
-  heroSub: {
-    marginTop: 8,
-    color: "rgba(255,255,255,0.78)",
-    fontSize: 14,
-    fontWeight: "700",
-  },
-  heroMetaRow: {
-    marginTop: 10,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  heroStar: {
-    color: "rgba(255,215,140,0.95)",
-    fontSize: 16,
-    marginTop: -1,
-  },
-  heroMeta: {
-    color: "rgba(255,255,255,0.90)",
-    fontWeight: "900",
-    fontSize: 15,
-  },
-
-  sectionLabel: {
-    marginTop: 16,
-    marginBottom: 10,
-    color: "rgba(255,255,255,0.88)",
-    fontSize: 18,
-    fontWeight: "900",
-  },
-
-  venuesRow: {
-    paddingBottom: 12,
-    gap: 18,
-  },
-  venueItem: {
-    width: 110,
-    alignItems: "center",
-  },
-  venueOrb: {
-    width: 84,
-    height: 58,
-    borderRadius: 29,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.14)",
-  },
-  venueName: {
-    marginTop: 10,
-    color: "rgba(255,255,255,0.75)",
-    fontWeight: "800",
-    fontSize: 13,
-    textAlign: "center",
-  },
-
+  // Featured header row — rendered ONCE
   featureHeader: {
-    marginTop: 4,
-    marginBottom: 12,
+    marginTop: rs.lg,
+    marginBottom: rs.sm,
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
     paddingVertical: 10,
     borderTopWidth: 1,
-    borderTopColor: "rgba(255,255,255,0.10)",
+    borderTopColor: rc.border,
   },
-  featureHeaderLeft: {
-    color: "rgba(255,255,255,0.90)",
-    fontWeight: "900",
-    fontSize: 18,
-  },
-  featureHeaderRight: {
+  featureHeaderText: {
     flex: 1,
-    color: "rgba(255,255,255,0.70)",
+    color: rc.text,
     fontWeight: "800",
-    fontSize: 16,
+    fontSize: 18,
+    lineHeight: 24,
   },
 
-  // Vertical menu container
-  featureMenuWrap: {
-    height: 340,
-  },
-  featureMenuContent: {
-    gap: 12,
-    paddingBottom: 6,
+  sectionLabel: {
+    marginTop: rs.sm,
+    marginBottom: rs.sm,
+    color: rc.text,
+    ...rtype.section,
   },
 
-  featureCard: {
-    height: 155,
-    borderRadius: 22,
-    overflow: "hidden",
-    justifyContent: "flex-end",
+  venuesRow: {
+    paddingBottom: 12,
+    gap: rs.page,
   },
-  featureImageStyle: {
-    borderRadius: 22,
-  },
-  featureBottomRow: {
-    padding: 14,
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  featureTitle: {
-    color: "rgba(255,255,255,0.92)",
-    fontWeight: "900",
-    fontSize: 20,
-  },
-  featureSub: {
-    marginTop: 4,
-    color: "rgba(255,255,255,0.72)",
-    fontWeight: "700",
-    fontSize: 13,
-  },
-
-  badge: {
-    backgroundColor: "rgba(255,255,255,0.88)",
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 14,
-  },
-  badgeText: {
-    color: "rgba(0,0,0,0.85)",
-    fontWeight: "900",
-    fontSize: 12,
-    letterSpacing: 0.4,
+  venueCardWrap: {
+    width: 160,
+    borderRadius: rr.card,
+    ...rshadow.card,
   },
 });
