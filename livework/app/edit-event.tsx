@@ -28,6 +28,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { THEME } from "../lib/theme";
 import { supabase, supabaseConfigured } from "../lib/supabase";
+import { describeError } from "../lib/errors";
 import { useAuth } from "../lib/auth";
 import { getUserTenantIds, getUserVenues, type TenantVenue } from "../lib/tenant";
 
@@ -227,7 +228,7 @@ export default function EditEventScreen() {
         { text: "OK", onPress: () => router.back() },
       ]);
     } catch (e: unknown) {
-      Alert.alert("Could not save", e instanceof Error ? e.message : "Try again.");
+      Alert.alert("Could not save", describeError(e));
     } finally {
       setBusy(false);
     }
