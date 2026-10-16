@@ -26,6 +26,7 @@ import {
   GENERAL_TIPS,
   RANGES,
   type DashboardData,
+  type DashboardEvent,
   type RangeKey,
 } from "../lib/data";
 import { useAuth } from "../lib/auth";
@@ -107,6 +108,32 @@ export default function DashboardScreen() {
     }
   }
 
+  // Delete: confirm first, then delete the vendor's own event row.
+  // RLS restricts deletes to the vendor's tenants; the list only shows
+  // the vendor's own events, so this can only delete their own rows.
+  async function onDeleteEvent(e: DashboardEvent) {
+    Alert.alert("Delete event?", `Delete "${e.title}"? This cannot be undone.`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: async () => {
+          if (!supabase) {
+            Alert.alert("Could not delete", "Supabase is not configured.");
+            return;
+          }
+          const { error } = await supabase.from("events").delete().eq("id", e.id);
+          if (error) {
+            Alert.alert("Could not delete", error.message);
+            return;
+          }
+          setExpandedId(null);
+          await refresh();
+        },
+      },
+    ]);
+  }
+
   const chartWidth = Math.max(width - 64, 240);
 
   if (authLoading) {
@@ -154,6 +181,9 @@ export default function DashboardScreen() {
         <View style={styles.headerRow}>
           <Pressable style={styles.rangeBtn} onPress={() => setRangePickerOpen((v) => !v)}>
             <Text style={styles.rangeText}>{data?.rangeLabel ?? "Next 7 days"}</Text>
+          </Pressable>
+          <Pressable style={styles.venuesBtn} onPress={() => router.push("/venues")}>
+            <Text style={styles.venuesText}>My Venues</Text>
           </Pressable>
           <Pressable style={styles.addBtn} onPress={() => router.push("/add-event")}>
             <Text style={styles.addText}>+ Add New Event</Text>
@@ -263,32 +293,52 @@ export default function DashboardScreen() {
                 (data?.events ?? []).map((e) => {
                   const expanded = expandedId === e.id;
                   return (
-                    <Pressable
-                      key={e.id}
-                      style={styles.eventRow}
-                      onPress={() => setExpandedId(expanded ? null : e.id)}
-                    >
-                      <View style={styles.eventThumb}>
-                        <Ionicons name="musical-notes" size={18} color="#fff" />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.eventTitle}>{e.title}</Text>
-                        <Text style={styles.eventDate}>{e.dateLabel}</Text>
-                        {expanded && (
-                          <View style={{ marginTop: 6, gap: 2 }}>
-                            {!!e.eventType && <Text style={styles.detailText}>Type: {e.eventType}</Text>}
-                            {!!e.priceLabel && <Text style={styles.detailText}>Tickets: {e.priceLabel}</Text>}
-                            {!!e.status && <Text style={styles.detailText}>Status: {e.status}</Text>}
-                            {!!e.description && <Text style={styles.detailText}>{e.description}</Text>}
-                          </View>
-                        )}
-                      </View>
-                      <Ionicons
-                        name={expanded ? "chevron-up" : "chevron-down"}
-                        size={16}
-                        color={THEME.textMuted}
-                      />
-                    </Pressable>
+                    // Outer View (not a Pressable) so the Edit / Delete
+                    // buttons below are siblings of the expand toggle,
+                    // never nested inside it.
+                    <View key={e.id} style={styles.eventRowWrap}>
+                      <Pressable
+                        style={styles.eventRow}
+                        onPress={() => setExpandedId(expanded ? null : e.id)}
+                      >
+                        <View style={styles.eventThumb}>
+                          <Ionicons name="musical-notes" size={18} color="#fff" />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.eventTitle}>{e.title}</Text>
+                          <Text style={styles.eventDate}>{e.dateLabel}</Text>
+                          {expanded && (
+                            <View style={{ marginTop: 6, gap: 2 }}>
+                              {!!e.eventType && <Text style={styles.detailText}>Type: {e.eventType}</Text>}
+                              {!!e.priceLabel && <Text style={styles.detailText}>Tickets: {e.priceLabel}</Text>}
+                              {!!e.status && <Text style={styles.detailText}>Status: {e.status}</Text>}
+                              {!!e.description && <Text style={styles.detailText}>{e.description}</Text>}
+                            </View>
+                          )}
+                        </View>
+                        <Ionicons
+                          name={expanded ? "chevron-up" : "chevron-down"}
+                          size={16}
+                          color={THEME.textMuted}
+                        />
+                      </Pressable>
+                      {expanded && (
+                        <View style={styles.eventActions}>
+                          <Pressable
+                            style={styles.actionBtn}
+                            onPress={() => router.push(`/edit-event?id=${e.id}`)}
+                          >
+                            <Text style={styles.actionText}>Edit</Text>
+                          </Pressable>
+                          <Pressable
+                            style={[styles.actionBtn, styles.deleteBtn]}
+                            onPress={() => void onDeleteEvent(e)}
+                          >
+                            <Text style={[styles.actionText, styles.deleteText]}>Delete</Text>
+                          </Pressable>
+                        </View>
+                      )}
+                    </View>
                   );
                 })
               )}
@@ -401,6 +451,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   rangeText: { color: THEME.textMuted, fontSize: 13, fontWeight: "700" },
+  venuesBtn: {
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+    borderRadius: 10,
+    paddingVertical: 11,
+    paddingHorizontal: 14,
+  },
+  venuesText: { color: "#fff", fontWeight: "800", fontSize: 13 },
   addBtn: {
     backgroundColor: THEME.purple,
     borderRadius: 10,
@@ -475,14 +533,29 @@ const styles = StyleSheet.create({
   legend: { color: THEME.textMuted, fontSize: 11, fontWeight: "700" },
   dayRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 6 },
   dayLabel: { color: THEME.textFaint, fontSize: 11, fontWeight: "700" },
+  eventRowWrap: {
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.05)",
+    paddingBottom: 2,
+  },
   eventRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
     paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(255,255,255,0.05)",
   },
+  eventActions: { flexDirection: "row", gap: 8, paddingBottom: 10, paddingLeft: 56 },
+  actionBtn: {
+    borderWidth: 1,
+    borderColor: THEME.cardBorder,
+    backgroundColor: THEME.card,
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    paddingVertical: 7,
+  },
+  actionText: { color: "#fff", fontSize: 13, fontWeight: "800" },
+  deleteBtn: { borderColor: "rgba(236,72,153,0.5)" },
+  deleteText: { color: "#F9A8D4" },
   eventThumb: {
     width: 44,
     height: 44,
