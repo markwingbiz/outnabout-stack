@@ -190,6 +190,16 @@ export default function DashboardScreen() {
           </Pressable>
         </View>
 
+        {/* Slice 3: redemptions + publish outbox links. */}
+        <View style={styles.headerRow}>
+          <Pressable style={styles.linkBtn} onPress={() => router.push("/redemptions")}>
+            <Text style={styles.linkText}>Redemptions</Text>
+          </Pressable>
+          <Pressable style={styles.linkBtn} onPress={() => router.push("/publish")}>
+            <Text style={styles.linkText}>Publish to Bownd</Text>
+          </Pressable>
+        </View>
+
         {rangePickerOpen && (
           <View style={styles.picker}>
             {RANGES.map((r) => (
@@ -466,6 +476,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   addText: { color: "#fff", fontWeight: "900", fontSize: 13 },
+  linkBtn: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+    borderRadius: 10,
+    paddingVertical: 11,
+    paddingHorizontal: 14,
+    alignItems: "center",
+  },
+  linkText: { color: "#fff", fontWeight: "800", fontSize: 13 },
   picker: {
     backgroundColor: THEME.card,
     borderRadius: 12,

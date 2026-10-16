@@ -11,6 +11,14 @@
 // No venue delete in this slice: deleting a venue nulls its events'
 // venue_id via the FK ON DELETE SET NULL — delete is a future decision,
 // not a silent side effect.
+//
+// Slice 3: per-venue redemption counts (exact head-counts, same pattern
+// as event counts). NO revenue figures anywhere: revenue_events has no
+// tenant_id, so per-venue revenue is impossible with the current schema
+// — do not attribute ecosystem revenue to a venue. Caveat: bownd-sync's
+// mirror does NOT populate venue_redemptions.venue_id today, so
+// redemption counts will read 0 until the Phase 9 mirror maps
+// redemptions to venues; the counts are still schema-correct.
 import React, { useCallback, useEffect, useState } from "react";
 import {
   View,
@@ -29,7 +37,7 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../lib/auth";
 import { getUserVenues, type TenantVenue } from "../lib/tenant";
 
-type VenueWithCount = TenantVenue & { eventCount: number | null };
+type VenueWithCount = TenantVenue & { eventCount: number | null; redemptionCount: number | null };
 
 function addressLine(v: TenantVenue): string {
   return [v.address, v.city, v.state].filter((p) => p && p.trim()).join(", ");
@@ -58,7 +66,20 @@ export default function VenuesScreen() {
           return count ?? 0;
         }),
       );
-      setVenues(list.map((v, i) => ({ ...v, eventCount: counts[i] })));
+      const redemptionCounts = await Promise.all(
+        list.map(async (v) => {
+          if (!supabase) return null;
+          const { count, error: countError } = await supabase
+            .from("venue_redemptions")
+            .select("id", { count: "exact", head: true })
+            .eq("venue_id", v.id);
+          if (countError) throw countError;
+          return count ?? 0;
+        }),
+      );
+      setVenues(
+        list.map((v, i) => ({ ...v, eventCount: counts[i], redemptionCount: redemptionCounts[i] })),
+      );
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Could not load your venues.");
     }
@@ -149,6 +170,13 @@ export default function VenuesScreen() {
                           ? "No events yet"
                           : `${v.eventCount} event${v.eventCount === 1 ? "" : "s"}`}
                     </Text>
+                    <Text style={styles.countSub}>
+                      {v.redemptionCount === null
+                        ? "Redemptions: —"
+                        : v.redemptionCount === 0
+                          ? "No redemptions yet"
+                          : `${v.redemptionCount} redemption${v.redemptionCount === 1 ? "" : "s"}`}
+                    </Text>
                   </View>
                   <Ionicons name="chevron-forward" size={18} color={THEME.textMuted} />
                 </View>
@@ -195,6 +223,7 @@ const styles = StyleSheet.create({
   venueName: { color: "#fff", fontSize: 16, fontWeight: "900" },
   detail: { color: THEME.textMuted, fontSize: 13, marginTop: 3, lineHeight: 18 },
   count: { color: THEME.purple, fontSize: 13, fontWeight: "800", marginTop: 8 },
+  countSub: { color: THEME.textMuted, fontSize: 13, fontWeight: "700", marginTop: 3 },
   empty: { color: THEME.textMuted, fontSize: 14, fontWeight: "700" },
   emptySub: { color: THEME.textFaint, fontSize: 13, marginTop: 6, lineHeight: 18 },
 });

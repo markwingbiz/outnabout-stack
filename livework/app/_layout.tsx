@@ -8,9 +8,9 @@
 // /setup-venue itself or from (auth). A membership-check error does not
 // redirect — the dashboard surfaces the real error instead.
 //
-// Slice 2: venues, venue-form, edit-event screens. The gate needs no
-// change: vendors without a membership are still redirected to
-// /setup-venue from these screens (they are membership-only screens).
+// Slice 3: redemptions + publish screens. The gate needs no change:
+// vendors without a membership are still redirected to /setup-venue
+// from these screens (they are membership-only screens).
 import React, { useEffect } from "react";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
@@ -59,6 +59,8 @@ export default function RootLayout() {
           <Stack.Screen name="venues" />
           <Stack.Screen name="venue-form" />
           <Stack.Screen name="edit-event" />
+          <Stack.Screen name="redemptions" />
+          <Stack.Screen name="publish" />
           <Stack.Screen name="(auth)" />
         </Stack>
       </TenantGate>
