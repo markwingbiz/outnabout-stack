@@ -1,7 +1,9 @@
-import React from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { THEME } from "../../lib/theme";
+import { supabase } from "../../lib/supabase";
+import { POLL_INTERVAL_MS, usePolling } from "../../lib/forge";
 
 function TabIcon({ name, focused }: { name: string; focused: boolean }) {
   return (
@@ -14,6 +16,25 @@ function TabIcon({ name, focused }: { name: string; focused: boolean }) {
 }
 
 export default function TabsLayout() {
+  // Pending-approval badge on the Approvals tab (Phase 8 Slice 4, §12).
+  // Count query only; a failed count leaves the badge unchanged.
+  const [pendingCount, setPendingCount] = useState(0);
+
+  const refreshPendingCount = useCallback(async () => {
+    if (!supabase) return;
+    const { count, error } = await supabase
+      .from("approvals")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "pending");
+    if (!error && typeof count === "number") setPendingCount(count);
+  }, []);
+
+  useEffect(() => {
+    void refreshPendingCount();
+  }, [refreshPendingCount]);
+
+  usePolling(() => void refreshPendingCount(), POLL_INTERVAL_MS);
+
   return (
     <Tabs
       screenOptions={{
@@ -77,6 +98,7 @@ export default function TabsLayout() {
         name="approvals"
         options={{
           title: "Approvals",
+          tabBarBadge: pendingCount > 0 ? pendingCount : undefined,
           tabBarIcon: ({ focused }) => <TabIcon name="checkmark-circle" focused={focused} />,
         }}
       />
@@ -108,9 +130,28 @@ export default function TabsLayout() {
           tabBarIcon: ({ focused }) => <TabIcon name="document-text" focused={focused} />,
         }}
       />
+      <Tabs.Screen
+        name="audit-log"
+        options={{
+          title: "Audit Log",
+          tabBarIcon: ({ focused }) => <TabIcon name="shield-check" focused={focused} />,
+        }}
+      />
+      <Tabs.Screen
+        name="bownd"
+        options={{
+          title: "Bownd",
+          tabBarIcon: ({ focused }) => <TabIcon name="storefront" focused={focused} />,
+        }}
+      />
       {/* Funnel detail (Phase 8 Slice 3): reachable from the Funnels list,
           hidden from the tab bar. */}
       <Tabs.Screen name="funnel-detail" options={{ href: null }} />
+      {/* Slice 4 detail screens: reachable from their list screens,
+          hidden from the tab bar. */}
+      <Tabs.Screen name="thread-detail" options={{ href: null }} />
+      <Tabs.Screen name="job-detail" options={{ href: null }} />
+      <Tabs.Screen name="approval-detail" options={{ href: null }} />
     </Tabs>
   );
 }

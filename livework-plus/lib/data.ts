@@ -98,5 +98,44 @@ export async function fetchRevenue(rangeDays: number): Promise<{ revenue: Revenu
 }
 
 export function formatMoney(n: number): string {
-  return "$" + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+  return "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/** money_funnels rows for the per-funnel revenue breakdown (Insights). */
+export type MoneyFunnelSummary = {
+  id: string;
+  key: string | null;
+  name: string | null;
+  funnel_id: string | null;
+  revenue_model: string | null;
+  verified_revenue_cents: number | null;
+  metadata: Record<string, unknown> | null;
+};
+
+export async function fetchMoneyFunnels(): Promise<{
+  rows: MoneyFunnelSummary[];
+  error: string | null;
+}> {
+  if (!supabase) {
+    return { rows: [], error: "Supabase is not configured." };
+  }
+  try {
+    const { data, error } = await supabase
+      .from("money_funnels")
+      .select("id, key, name, funnel_id, revenue_model, verified_revenue_cents, metadata")
+      .order("created_at", { ascending: true });
+    if (error) throw new Error(error.message);
+    const rows = ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+      id: String(r.id ?? ""),
+      key: typeof r.key === "string" ? r.key : null,
+      name: typeof r.name === "string" ? r.name : null,
+      funnel_id: typeof r.funnel_id === "string" ? r.funnel_id : null,
+      revenue_model: typeof r.revenue_model === "string" ? r.revenue_model : null,
+      verified_revenue_cents: typeof r.verified_revenue_cents === "number" ? r.verified_revenue_cents : null,
+      metadata: (r.metadata ?? null) as Record<string, unknown> | null,
+    }));
+    return { rows, error: null };
+  } catch (e) {
+    return { rows: [], error: e instanceof Error ? e.message : "Could not load money funnels." };
+  }
 }
