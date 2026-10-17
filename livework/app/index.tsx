@@ -15,7 +15,7 @@
 // forecasts, demographics, or suggestions.
 //
 // Requires phase-a-ui Auth (<AuthProvider> in app/_layout.tsx).
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -81,8 +81,6 @@ export default function DashboardScreen() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [venueCount, setVenueCount] = useState<number | null>(null);
   const [redemptionCount, setRedemptionCount] = useState<number | null>(null);
-  const scrollRef = useRef<ScrollView | null>(null);
-  const calendarY = useRef(0);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -175,6 +173,11 @@ export default function DashboardScreen() {
 
   const chartWidth = Math.max(width - 64, 240);
 
+  // A trend line needs at least 2 non-zero buckets — a single event draws
+  // a misleading steep line, so that case gets an honest sparse-data state.
+  const activityPoints = data?.activityPoints ?? [];
+  const activityNonZero = activityPoints.filter((p) => p > 0).length;
+
   if (authLoading) {
     return (
       <SafeAreaView style={styles.root}>
@@ -200,7 +203,6 @@ export default function DashboardScreen() {
   return (
     <SafeAreaView style={styles.root}>
       <ScrollView
-        ref={scrollRef}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.content}
       >
@@ -333,12 +335,12 @@ export default function DashboardScreen() {
               <View style={styles.legendRow}>
                 <Text style={styles.legend}><Text style={{ color: THEME.purple }}>●</Text> Events</Text>
               </View>
-              {(data?.activityPoints ?? []).some((p) => p > 0) ? (
+              {activityNonZero >= 2 ? (
                 <>
                   <MultiLine
                     width={chartWidth}
                     height={130}
-                    series={[{ color: THEME.purple, points: data?.activityPoints ?? [] }]}
+                    series={[{ color: THEME.purple, points: activityPoints }]}
                   />
                   <View style={styles.dayRow}>
                     {(data?.activityDays ?? []).map((d) => (
@@ -346,6 +348,10 @@ export default function DashboardScreen() {
                     ))}
                   </View>
                 </>
+              ) : activityNonZero === 1 ? (
+                <Text style={styles.empty}>
+                  Not enough data for a trend — one event in this window.
+                </Text>
               ) : (
                 <Text style={styles.empty}>No events in this window.</Text>
               )}
@@ -421,17 +427,11 @@ export default function DashboardScreen() {
               )}
             </Section>
 
-            {/* Event Calendar — real events */}
-            <View
-              onLayout={(ev) => {
-                calendarY.current = ev.nativeEvent.layout.y;
-              }}
-            >
-              <Section
-                title="Event Calendar"
-                action="View Calendar"
-                onAction={() => scrollRef.current?.scrollTo({ y: calendarY.current, animated: true })}
-              >
+            {/* Event Calendar — real events. No "View Calendar" button:
+                there is no separate calendar screen, and the calendar
+                section is already on this screen — a button that scrolls
+                to itself was a dead control. */}
+            <Section title="Event Calendar">
                 {(data?.calendar ?? []).length === 0 ? (
                   <Text style={styles.empty}>No events scheduled in this window.</Text>
                 ) : (
@@ -453,7 +453,6 @@ export default function DashboardScreen() {
                   ))
                 )}
               </Section>
-            </View>
 
             {/* Add New Event — opens the EXISTING create-event flow.
                 The form itself is unchanged (same fields/behavior);

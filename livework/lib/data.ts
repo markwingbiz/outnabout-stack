@@ -3,8 +3,10 @@
 // fake publish / payout claims. Every section returns real rows
 // or an explicit empty state (the screen renders the empty text).
 // Reads: venues (the vendor's venues, ordered by name), events
-// (the vendor's tenants only), revenue_events (verified revenue only:
-// amount > 0 — amount-0 rows are tracking, never revenue).
+// (the vendor's tenants only). revenue_events is NEVER summed for the
+// Verified Revenue headline: its rows are historical tracking rows for
+// things "created" (Mar–May 2026), not payments, and money_funnels
+// verified revenue is $0 — so the headline is honestly $0.00.
 //
 // Tenant scoping (Slice 1): events are filtered by the signed-in user's
 // tenant_id(s) AND by RLS. A user with no membership gets the honest
@@ -48,7 +50,7 @@ export type DashboardData = {
   userName: string;
   rangeLabel: string;
   eventCount: number;
-  /** Verified revenue in the matching PAST window, in dollars (see note). */
+  /** Verified revenue. Always 0 until real payments exist — never a sum of revenue_events tracking rows (see fetchDashboard). */
   verifiedRevenue: number;
   activityPoints: number[];
   activityDays: string[];
@@ -161,29 +163,15 @@ export async function fetchDashboard(range: RangeKey): Promise<DashboardData> {
     const venueName = venues[0]?.name ?? "No venue yet";
     const hasVenue = venues.length > 0;
 
-    const [eventsRes, revenueRes] = await Promise.all([
-      supabase
-        .from("events")
-        .select("id, title, description, start_ts, price_label, event_type, status")
-        .in("tenant_id", tenantIds)
-        .order("start_ts", { ascending: true })
-        // Cap: first 100 events by start_ts. No pagination in this slice;
-        // events beyond 100 are not shown (a later slice adds pagination).
-        .limit(100),
-      // Verified revenue only: amount > 0 in the past window.
-      // revenue_events.amount is in DOLLARS (confirmed). Do NOT divide by 100.
-      // NOT tenant-scoped: revenue_events has no tenant_id column, so this
-      // query cannot be filtered by tenant. The result is ecosystem-wide
-      // revenue; the dashboard labels it as such (revenueScopeNote).
-      supabase
-        .from("revenue_events")
-        .select("amount, occurred_at")
-        .gt("amount", 0)
-        .gte("occurred_at", w.revStart.toISOString())
-        .lte("occurred_at", w.revEnd.toISOString()),
-    ]);
+    const eventsRes = await supabase
+      .from("events")
+      .select("id, title, description, start_ts, price_label, event_type, status")
+      .in("tenant_id", tenantIds)
+      .order("start_ts", { ascending: true })
+      // Cap: first 100 events by start_ts. No pagination in this slice;
+      // events beyond 100 are not shown (a later slice adds pagination).
+      .limit(100);
     if (eventsRes.error) throw new Error(`events: ${eventsRes.error.message}`);
-    if (revenueRes.error) throw new Error(`revenue_events: ${revenueRes.error.message}`);
 
     const allEvents = ((eventsRes.data ?? []) as Record<string, unknown>[]).map((e) => ({
       id: String(e.id ?? ""),
@@ -251,10 +239,15 @@ export async function fetchDashboard(range: RangeKey): Promise<DashboardData> {
     }
     const calendar = [...calMap.values()].sort((a, b) => a.sortKey - b.sortKey);
 
-    const verifiedRevenue = ((revenueRes.data ?? []) as { amount?: unknown }[]).reduce(
-      (sum, r) => sum + (typeof r.amount === "number" ? r.amount : 0),
-      0,
-    );
+    // Verified revenue is ALWAYS 0 here. revenue_events rows are
+    // historical tracking rows for things "created" (Mar–May 2026, source
+    // monfun_executor), not payments, and money_funnels.verified_revenue_cents
+    // is all $0 — there is no real revenue to show. Summing revenue_events
+    // previously displayed a bogus $29,390: with no .limit()/.order() the
+    // query hit PostgREST's 1000-row cap and silently dropped 205 rows
+    // ($5,995) of a $35,385 tracking total. Never sum revenue_events
+    // for this headline.
+    const verifiedRevenue = 0;
 
     const latestEvents = inWindow.slice(0, 5).map((e) => `${e.title} · ${e.dateLabel}${e.status ? ` · ${e.status}` : ""}`);
 
@@ -281,5 +274,5 @@ export async function fetchDashboard(range: RangeKey): Promise<DashboardData> {
 }
 
 export function formatMoney(n: number): string {
-  return "$" + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+  return "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
