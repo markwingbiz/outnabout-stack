@@ -75,6 +75,15 @@ export default function DashboardScreen() {
   const { width } = useWindowDimensions();
   const { session, loading: authLoading } = useAuth();
   const [range, setRange] = useState<RangeKey>("7d");
+  // Independent per-section ranges: Event Activity and Top Performing
+  // Events each track their own window. Their chips set ONLY their own
+  // state — they never touch the global dashboard range, and neither
+  // section follows the other. The global range keeps driving the rest
+  // of the dashboard (stat cards, calendar, Recent Activity, export).
+  const [activityRange, setActivityRange] = useState<RangeKey>("7d");
+  const [topRange, setTopRange] = useState<RangeKey>("7d");
+  const [activityData, setActivityData] = useState<DashboardData | null>(null);
+  const [topData, setTopData] = useState<DashboardData | null>(null);
   const [rangePickerOpen, setRangePickerOpen] = useState(false);
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -118,6 +127,27 @@ export default function DashboardScreen() {
     if (session) void refresh();
     else setLoading(false);
   }, [session, refresh]);
+
+  // Per-section fetches: each section reuses fetchDashboard with its OWN
+  // range and renders only its own fields, so the sections are truly
+  // independent of each other and of the global range.
+  const refreshActivity = useCallback(async () => {
+    const d = await fetchDashboard(activityRange);
+    setActivityData(d);
+  }, [activityRange]);
+
+  const refreshTop = useCallback(async () => {
+    const d = await fetchDashboard(topRange);
+    setTopData(d);
+  }, [topRange]);
+
+  useEffect(() => {
+    if (session) void refreshActivity();
+  }, [session, refreshActivity]);
+
+  useEffect(() => {
+    if (session) void refreshTop();
+  }, [session, refreshTop]);
 
   async function onExport() {
     if (!data) return;
@@ -165,7 +195,11 @@ export default function DashboardScreen() {
             return;
           }
           setExpandedId(null);
+          // Delete affects the global dashboard AND both independent
+          // sections, so refetch all three.
           await refresh();
+          await refreshTop();
+          await refreshActivity();
         },
       },
     ]);
@@ -175,7 +209,9 @@ export default function DashboardScreen() {
 
   // A trend line needs at least 2 non-zero buckets — a single event draws
   // a misleading steep line, so that case gets an honest sparse-data state.
-  const activityPoints = data?.activityPoints ?? [];
+  // The chart reads ONLY the section's own fetch (activityData), never
+  // the global dashboard data.
+  const activityPoints = activityData?.activityPoints ?? [];
   const activityNonZero = activityPoints.filter((p) => p > 0).length;
 
   if (authLoading) {
@@ -326,26 +362,25 @@ export default function DashboardScreen() {
               Livework has no ticketing yet.
             </Text>
 
-            {/* Event Activity — upcoming events per bucket in the selected
-                window. The range is selectable here via chips (same
-                dashboard range the top picker drives): the chart follows
-                the selection, and the chips always show which window is
-                active. Previously the header hardcoded "Last 7 Days" and
-                tapping it silently forced the whole dashboard to 7d —
-                the chart looked stuck on 7 days and the label never
-                reflected the actual window. */}
+            {/* Event Activity — upcoming events per bucket in THIS
+                section's own window. The chips set ONLY activityRange:
+                they never touch the global dashboard range or the Top
+                Performing Events window, and the chips always show this
+                section's own active range. Previously both sections'
+                chips drove the shared range, so changing one moved
+                the other and the whole dashboard. */}
             <Section title="Event Activity">
               <View style={styles.rangeChipRow}>
                 {RANGES.map((r) => (
                   <Pressable
                     key={r.key}
-                    style={[styles.rangeChip, range === r.key && styles.rangeChipActive]}
-                    onPress={() => setRange(r.key)}
+                    style={[styles.rangeChip, activityRange === r.key && styles.rangeChipActive]}
+                    onPress={() => setActivityRange(r.key)}
                   >
                     <Text
                       style={[
                         styles.rangeChipText,
-                        range === r.key && styles.rangeChipTextActive,
+                        activityRange === r.key && styles.rangeChipTextActive,
                       ]}
                     >
                       {r.label}
@@ -354,12 +389,21 @@ export default function DashboardScreen() {
                 ))}
               </View>
               <Text style={styles.sectionNote}>
-                Upcoming events in the selected window.
+                Upcoming events in this section&apos;s window.
               </Text>
               <View style={styles.legendRow}>
                 <Text style={styles.legend}><Text style={{ color: THEME.purple }}>●</Text> Events</Text>
               </View>
-              {activityNonZero >= 2 ? (
+              {activityData === null ? (
+                <ActivityIndicator color={THEME.purple} style={{ marginVertical: 12 }} />
+              ) : !!activityData.error ? (
+                <View>
+                  <Text style={styles.errorText}>{activityData.error}</Text>
+                  <Pressable onPress={() => void refreshActivity()}>
+                    <Text style={styles.retryText}>Retry</Text>
+                  </Pressable>
+                </View>
+              ) : activityNonZero >= 2 ? (
                 <>
                   <MultiLine
                     width={chartWidth}
@@ -367,7 +411,7 @@ export default function DashboardScreen() {
                     series={[{ color: THEME.purple, points: activityPoints }]}
                   />
                   <View style={styles.dayRow}>
-                    {(data?.activityDays ?? []).map((d) => (
+                    {(activityData?.activityDays ?? []).map((d) => (
                       <Text key={d} style={styles.dayLabel}>{d.replace("May ", "")}</Text>
                     ))}
                   </View>
@@ -386,23 +430,21 @@ export default function DashboardScreen() {
                 ranked by performance: rows are soonest first, with
                 real fields only (title, date, type, price, status).
                 Edit / Delete work exactly as before. The list follows
-                the selected range (data.events is the in-window set),
-                so it gets the same honest chip row as Event Activity.
-                Previously the header hardcoded "This Month" and
-                tapping it silently forced the whole dashboard to
-                month — the label never reflected the actual window. */}
+                THIS section's own window (topData) via its own chips —
+                it never touches the global range or the Event
+                Activity window. */}
             <Section title="Top Performing Events">
               <View style={styles.rangeChipRow}>
                 {RANGES.map((r) => (
                   <Pressable
                     key={r.key}
-                    style={[styles.rangeChip, range === r.key && styles.rangeChipActive]}
-                    onPress={() => setRange(r.key)}
+                    style={[styles.rangeChip, topRange === r.key && styles.rangeChipActive]}
+                    onPress={() => setTopRange(r.key)}
                   >
                     <Text
                       style={[
                         styles.rangeChipText,
-                        range === r.key && styles.rangeChipTextActive,
+                        topRange === r.key && styles.rangeChipTextActive,
                       ]}
                     >
                       {r.label}
@@ -413,10 +455,19 @@ export default function DashboardScreen() {
               <Text style={styles.sectionNote}>
                 Your events, soonest first — performance ranking needs ticket data.
               </Text>
-              {(data?.events ?? []).length === 0 ? (
+              {topData === null ? (
+                <ActivityIndicator color={THEME.purple} style={{ marginVertical: 12 }} />
+              ) : !!topData.error ? (
+                <View>
+                  <Text style={styles.errorText}>{topData.error}</Text>
+                  <Pressable onPress={() => void refreshTop()}>
+                    <Text style={styles.retryText}>Retry</Text>
+                  </Pressable>
+                </View>
+              ) : (topData?.events ?? []).length === 0 ? (
                 <Text style={styles.empty}>No events yet.</Text>
               ) : (
-                (data?.events ?? []).map((e) => {
+                (topData?.events ?? []).map((e) => {
                   const expanded = expandedId === e.id;
                   return (
                     // Outer View (not a Pressable) so the Edit / Delete
