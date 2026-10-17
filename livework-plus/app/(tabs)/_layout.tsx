@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { THEME } from "../../lib/theme";
 import { supabase } from "../../lib/supabase";
 import { POLL_INTERVAL_MS, usePolling } from "../../lib/forge";
@@ -16,9 +17,16 @@ function TabIcon({ name, focused }: { name: string; focused: boolean }) {
 }
 
 export default function TabsLayout() {
-  // Pending-approval badge on the Approvals tab (Phase 8 Slice 4, §12).
-  // Count query only; a failed count leaves the badge unchanged.
+  // Pending-approval badge (Phase 8 Slice 4, §12). Approvals no longer
+  // has its own tab, so the badge lives on Home — the command center
+  // whose Forge sections hub links to Approvals. Count query only; a
+  // failed count leaves the badge unchanged.
   const [pendingCount, setPendingCount] = useState(0);
+
+  // Safe-area insets lift the bar above the Android system home menu /
+  // gesture bar. On devices with no bottom inset this is identical to
+  // the old 64/8 values.
+  const insets = useSafeAreaInsets();
 
   const refreshPendingCount = useCallback(async () => {
     if (!supabase) return;
@@ -43,8 +51,8 @@ export default function TabsLayout() {
           backgroundColor: "#12101F",
           borderTopColor: "rgba(255,255,255,0.08)",
           borderTopWidth: 1,
-          height: 64,
-          paddingBottom: 8,
+          height: 64 + insets.bottom,
+          paddingBottom: 8 + insets.bottom,
           paddingTop: 6,
         },
         tabBarActiveTintColor: THEME.purpleBright,
@@ -56,6 +64,7 @@ export default function TabsLayout() {
         name="index"
         options={{
           title: "Home",
+          tabBarBadge: pendingCount > 0 ? pendingCount : undefined,
           tabBarIcon: ({ focused }) => <TabIcon name="home" focused={focused} />,
         }}
       />
@@ -65,7 +74,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="connections"
         options={{
-          title: "Connection",
+          title: "Connections",
           tabBarIcon: ({ focused }) => <TabIcon name="heart" focused={focused} />,
         }}
       />
@@ -92,72 +101,21 @@ export default function TabsLayout() {
           tabBarIcon: ({ focused }) => <TabIcon name="settings" focused={focused} />,
         }}
       />
-      <Tabs.Screen
-        name="forge"
-        options={{
-          title: "Forge",
-          tabBarIcon: ({ focused }) => <TabIcon name="flash" focused={focused} />,
-        }}
-      />
-      <Tabs.Screen
-        name="approvals"
-        options={{
-          title: "Approvals",
-          tabBarBadge: pendingCount > 0 ? pendingCount : undefined,
-          tabBarIcon: ({ focused }) => <TabIcon name="checkmark-circle" focused={focused} />,
-        }}
-      />
-      <Tabs.Screen
-        name="funnels"
-        options={{
-          title: "Funnels",
-          tabBarIcon: ({ focused }) => <TabIcon name="filter" focused={focused} />,
-        }}
-      />
-      <Tabs.Screen
-        name="jobs"
-        options={{
-          title: "Jobs",
-          tabBarIcon: ({ focused }) => <TabIcon name="list" focused={focused} />,
-        }}
-      />
-      <Tabs.Screen
-        name="workers"
-        options={{
-          title: "Workers",
-          tabBarIcon: ({ focused }) => <TabIcon name="construct" focused={focused} />,
-        }}
-      />
-      <Tabs.Screen
-        name="deliverables"
-        options={{
-          title: "Deliverables",
-          tabBarIcon: ({ focused }) => <TabIcon name="document-text" focused={focused} />,
-        }}
-      />
-      <Tabs.Screen
-        name="audit-log"
-        options={{
-          title: "Audit Log",
-          tabBarIcon: ({ focused }) => <TabIcon name="shield-check" focused={focused} />,
-        }}
-      />
-      <Tabs.Screen
-        name="bownd"
-        options={{
-          title: "Bownd",
-          tabBarIcon: ({ focused }) => <TabIcon name="storefront" focused={focused} />,
-        }}
-      />
+      {/* Every other screen is reachable from Home's Forge sections hub
+          (or its own list screen) — hidden from the tab bar so the bar
+          stays at exactly 5 tabs. Routes are unchanged; deep links keep
+          working. */}
+      <Tabs.Screen name="forge" options={{ href: null }} />
+      <Tabs.Screen name="approvals" options={{ href: null }} />
+      <Tabs.Screen name="funnels" options={{ href: null }} />
+      <Tabs.Screen name="jobs" options={{ href: null }} />
+      <Tabs.Screen name="workers" options={{ href: null }} />
+      <Tabs.Screen name="deliverables" options={{ href: null }} />
+      <Tabs.Screen name="audit-log" options={{ href: null }} />
+      <Tabs.Screen name="bownd" options={{ href: null }} />
       {/* Phase 8 Slice 5: Forge Suggestions (revenue / internet-scan /
           data-scan), operator-gated. */}
-      <Tabs.Screen
-        name="suggestions"
-        options={{
-          title: "Suggestions",
-          tabBarIcon: ({ focused }) => <TabIcon name="bulb" focused={focused} />,
-        }}
-      />
+      <Tabs.Screen name="suggestions" options={{ href: null }} />
       {/* Funnel detail (Phase 8 Slice 3): reachable from the Funnels list,
           hidden from the tab bar. */}
       <Tabs.Screen name="funnel-detail" options={{ href: null }} />

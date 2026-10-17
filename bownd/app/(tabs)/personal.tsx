@@ -42,6 +42,9 @@ import {
   type RedemptionHistoryItem,
 } from "../../lib/store";
 import { BottomNav, refStyles } from "../ui/reference";
+import { MemberCode } from "../../components/ui/MemberCode";
+import { CardBackground } from "../../components/ui/CardBackground";
+import { resolveCardImage, categoryForVenueName, resolveEventCardImage } from "../../lib/placeholders";
 
 type PanelTab = "All" | "QR" | "Rewards" | "Venue";
 
@@ -283,6 +286,10 @@ export default function PersonalScreen() {
                     <Ionicons name="scan-outline" size={18} color="#fff" />
                     <Text style={styles.scanBtnText}>Open Camera Scanner</Text>
                   </TouchableOpacity>
+
+                  {/* Member Card — the signed-in member's real QR + barcode. */}
+                  <Text style={styles.memberHeading}>Member Card</Text>
+                  <MemberCode uid={user?.uid ?? null} />
                 </View>
               </>
             )}
@@ -328,15 +335,21 @@ export default function PersonalScreen() {
                         onPress={() =>
                           router.push({ pathname: "/(tabs)/events", params: { venue: item.title } })
                         }
-                        style={[styles.tile, { marginRight: 12 }]}
+                        style={[styles.tile, { padding: 0 }]}
                       >
-                        <Text style={styles.tileBadge}>{item.badge ?? "Favorite"}</Text>
-                        <Text style={styles.tileTitle} numberOfLines={2}>
-                          {item.title}
-                        </Text>
-                        <Text style={styles.tileSub} numberOfLines={1}>
-                          {item.subtitle || "Kansas City"}
-                        </Text>
+                        <CardBackground
+                          source={resolveCardImage(undefined, categoryForVenueName(item.title))}
+                          style={styles.tileBg}
+                          contentStyle={styles.tileContent}
+                        >
+                          <Text style={styles.tileBadge}>{item.badge ?? "Favorite"}</Text>
+                          <Text style={styles.tileTitle} numberOfLines={2}>
+                            {item.title}
+                          </Text>
+                          <Text style={styles.tileSub} numberOfLines={1}>
+                            {item.subtitle || "Kansas City"}
+                          </Text>
+                        </CardBackground>
                       </TouchableOpacity>
                     ))}
                   </ScrollView>
@@ -358,20 +371,26 @@ export default function PersonalScreen() {
                         onPress={() =>
                           router.push({ pathname: "/detail", params: { id: item.id, kind: "event" } })
                         }
-                        style={[styles.tile, { marginRight: 12 }]}
+                        style={[styles.tile, { padding: 0 }]}
                       >
-                        <Text style={styles.tileBadge}>{item.badge ?? "Saved"}</Text>
-                        <Text style={styles.tileTitle} numberOfLines={2}>
-                          {item.title}
-                        </Text>
-                        <Text style={styles.tileSub} numberOfLines={1}>
-                          {item.subtitle}
-                        </Text>
-                        {!!item.when && (
-                          <Text style={styles.tileWhen} numberOfLines={1}>
-                            {item.when}
+                        <CardBackground
+                          source={resolveEventCardImage(undefined)}
+                          style={styles.tileBg}
+                          contentStyle={styles.tileContent}
+                        >
+                          <Text style={styles.tileBadge}>{item.badge ?? "Saved"}</Text>
+                          <Text style={styles.tileTitle} numberOfLines={2}>
+                            {item.title}
                           </Text>
-                        )}
+                          <Text style={styles.tileSub} numberOfLines={1}>
+                            {item.subtitle}
+                          </Text>
+                          {!!item.when && (
+                            <Text style={styles.tileWhen} numberOfLines={1}>
+                              {item.when}
+                            </Text>
+                          )}
+                        </CardBackground>
                       </TouchableOpacity>
                     ))}
                   </ScrollView>
@@ -425,6 +444,7 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.35)",
   },
   authBtnText: { color: "#fff", fontWeight: "700", fontSize: 13 },
+  memberHeading: { fontSize: 18, fontWeight: "700", color: "#231e29", marginTop: 18, marginBottom: 10 },
   qrPlaceholderText: { fontSize: 12, color: "#514a5a", fontWeight: "700", marginTop: 8 },
   scanBtn: {
     marginTop: 12,
@@ -468,26 +488,26 @@ const styles = StyleSheet.create({
     height: 150,
     borderRadius: 18,
     overflow: "hidden",
-    padding: 14,
-    justifyContent: "flex-end",
-    backgroundColor: "#ffffff",
     borderWidth: 1,
     borderColor: "#d5d0df",
+    marginRight: 12,
   },
+  tileBg: { flex: 1, borderRadius: 18 },
+  tileContent: { flex: 1, padding: 14, justifyContent: "flex-end" },
   tileBadge: {
     alignSelf: "flex-start",
-    backgroundColor: "#e4e0ed",
+    backgroundColor: "rgba(0,0,0,0.45)",
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
-    color: "#221c2a",
+    color: "#ffffff",
     fontWeight: "900",
     fontSize: 11,
     marginBottom: 10,
   },
-  tileTitle: { color: "#221c2a", fontSize: 16, fontWeight: "900", lineHeight: 20 },
-  tileSub: { color: "#514a5a", marginTop: 6, fontSize: 12, fontWeight: "800" },
-  tileWhen: { marginTop: 8, color: "#221c2a", fontSize: 12, fontWeight: "900" },
+  tileTitle: { color: "#ffffff", fontSize: 16, fontWeight: "900", lineHeight: 20 },
+  tileSub: { color: "rgba(255,255,255,0.85)", marginTop: 6, fontSize: 12, fontWeight: "800" },
+  tileWhen: { marginTop: 8, color: "#ffffff", fontSize: 12, fontWeight: "900" },
   rowCard: {
     flexDirection: "row",
     alignItems: "center",

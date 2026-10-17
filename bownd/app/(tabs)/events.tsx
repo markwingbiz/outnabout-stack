@@ -36,6 +36,8 @@ import {
 } from "../../lib/store";
 import { useAuth } from "../../lib/auth";
 import { getShowcaseEvents, getShowcaseVenues } from "../../data/showcase";
+import { categoryForVenueName, resolveCardImage, resolveEventCardImage } from "../../lib/placeholders";
+import { CardBackground } from "../../components/ui/CardBackground";
 import {
   BottomNav,
   EventCard,
@@ -190,7 +192,9 @@ export default function EventsScreen() {
   const [venues, setVenues] = useState<Venue[]>([]);
   useEffect(() => {
     let alive = true;
-    Promise.all([fetchEvents(), fetchVenues()]).then(([rows, venueRows]) => {
+    // Pass the viewer's email so operator-only test items are visible
+    // only to the operator (store.ts filters for everyone else).
+    Promise.all([fetchEvents(user?.email ?? null), fetchVenues(user?.email ?? null)]).then(([rows, venueRows]) => {
       if (alive) {
         setEvents(rows);
         setVenues(venueRows);
@@ -199,7 +203,7 @@ export default function EventsScreen() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [user?.email]);
 
   // Wholesale showcase fallback: demo only when the real catalog is
   // completely empty. Never mixed with real data.
@@ -369,22 +373,28 @@ export default function EventsScreen() {
                 key={item.id}
                 onPress={() => openEvent(item.id)}
                 activeOpacity={0.86}
-                style={[refStyles.tailored, styles.tailoredCard]}
+                style={[refStyles.tailored, styles.tailoredCard, { padding: 0, overflow: "hidden" }]}
               >
-                <Text style={refStyles.micro}>{formatWhen(item.startISO)}</Text>
-                <Text style={refStyles.tailoredTitle} numberOfLines={3}>
-                  {item.title}
-                </Text>
-                <Text style={refStyles.muted}>{getVenueName(item.venueId, effVenues)}</Text>
-                <View style={refStyles.tagRow}>
-                  {uniq([...(item.vibeTags || []), ...(item.audienceTags || [])])
-                    .slice(0, 3)
-                    .map((t) => (
-                      <View key={`${item.id}_${t}`} style={refStyles.tag}>
-                        <Text style={refStyles.tagText}>{t}</Text>
-                      </View>
-                    ))}
-                </View>
+                <CardBackground
+                  source={resolveEventCardImage(item.photoUrl)}
+                  style={styles.tailoredBg}
+                  contentStyle={styles.tailoredContent}
+                >
+                  <Text style={refStyles.micro}>{formatWhen(item.startISO)}</Text>
+                  <Text style={refStyles.tailoredTitle} numberOfLines={3}>
+                    {item.title}
+                  </Text>
+                  <Text style={refStyles.muted}>{getVenueName(item.venueId, effVenues)}</Text>
+                  <View style={refStyles.tagRow}>
+                    {uniq([...(item.vibeTags || []), ...(item.audienceTags || [])])
+                      .slice(0, 3)
+                      .map((t) => (
+                        <View key={`${item.id}_${t}`} style={refStyles.tag}>
+                          <Text style={refStyles.tagText}>{t}</Text>
+                        </View>
+                      ))}
+                  </View>
+                </CardBackground>
               </TouchableOpacity>
             ))}
           </ScrollView>
@@ -404,6 +414,7 @@ export default function EventsScreen() {
               venueName={getVenueName(item.venueId, effVenues)}
               label={formatWhen(item.startISO)}
               compact
+              photoUrl={item.photoUrl}
               onPress={() => openEvent(item.id)}
             />
           ))}
@@ -421,12 +432,24 @@ export default function EventsScreen() {
                 key={name}
                 onPress={() => openVenue(name)}
                 activeOpacity={0.86}
-                style={[refStyles.tailored, styles.venueRailCard]}
+                style={[refStyles.tailored, styles.venueRailCard, { padding: 0, overflow: "hidden" }]}
               >
-                <Text style={styles.venueRailName} numberOfLines={2}>
-                  {name}
-                </Text>
-                <Text style={styles.venueRailMeta}>Tap to view</Text>
+                <CardBackground
+                  source={resolveCardImage(
+                    effVenues.find((v) => v.name === name)?.photoUrl,
+                    categoryForVenueName(name)
+                  )}
+                  style={styles.tailoredBg}
+                  contentStyle={styles.venueRailContent}
+                >
+                  <Text style={styles.venueRailName} numberOfLines={2}>
+                    {name}
+                  </Text>
+                  {effVenues.find((v) => v.name === name)?.isTest && (
+                    <Text style={styles.testBadgeText}>Test</Text>
+                  )}
+                  <Text style={styles.venueRailMeta}>Tap to view</Text>
+                </CardBackground>
               </TouchableOpacity>
             ))}
           </ScrollView>
@@ -442,13 +465,19 @@ export default function EventsScreen() {
           </Text>
         ) : (
           allEvents.map((item) => (
-            <View key={item.id} style={styles.bigRow}>
+            <CardBackground
+              key={item.id}
+              source={resolveEventCardImage(item.photoUrl)}
+              style={styles.bigRow}
+              contentStyle={styles.bigRowContent}
+            >
               <TouchableOpacity onPress={() => openEvent(item.id)} style={StyleSheet.absoluteFill} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.bigWhen}>{formatWhen(item.startISO)}</Text>
                 <Text style={styles.bigTitle} numberOfLines={2}>
                   {item.title}
                 </Text>
+                {item.isTest && <Text style={styles.testBadgeText}>Test</Text>}
                 <Text style={styles.bigVenue} numberOfLines={1}>
                   {getVenueName(item.venueId, effVenues)}
                 </Text>
@@ -470,7 +499,7 @@ export default function EventsScreen() {
                 isFav={favKeys.has(`event:${item.id}`)}
                 onToggle={() => onToggleFav(item)}
               />
-            </View>
+            </CardBackground>
           ))
         )}
       </ScrollView>
@@ -511,6 +540,12 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     fontSize: 13,
   },
+  testBadgeText: {
+    color: "#f5c36a",
+    fontWeight: "900",
+    fontSize: 11,
+    marginTop: 4,
+  },
   showcaseChip: {
     alignSelf: "flex-start",
     paddingHorizontal: 12,
@@ -537,13 +572,15 @@ const styles = StyleSheet.create({
     marginRight: 12,
     marginBottom: 0,
   },
+  tailoredBg: { flex: 1, borderRadius: 17 },
+  tailoredContent: { padding: 13 },
   venueRailCard: {
     width: 190,
     marginRight: 12,
     marginBottom: 0,
-    justifyContent: "space-between",
     minHeight: 110,
   },
+  venueRailContent: { padding: 13, justifyContent: "space-between" },
   venueRailName: {
     color: "rgba(255,255,255,0.95)",
     fontSize: 16,
@@ -565,14 +602,15 @@ const styles = StyleSheet.create({
   bigRow: {
     borderRadius: 18,
     overflow: "hidden",
-    padding: 14,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.12)",
-    backgroundColor: "rgba(0,0,0,0.20)",
+    marginBottom: 10,
+  },
+  bigRowContent: {
     flexDirection: "row",
     gap: 12,
     alignItems: "center",
-    marginBottom: 10,
+    padding: 14,
   },
   bigWhen: {
     color: "rgba(255,255,255,0.70)",

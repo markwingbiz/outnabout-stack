@@ -19,6 +19,7 @@ import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { fetchEvents, fetchVenues, type EventItem, type Venue } from "../../lib/store";
+import { useAuth } from "../../lib/auth";
 import { getShowcaseEvents, getShowcaseVenues, resolvePlaylists } from "../../data/showcase";
 import {
   BottomNav,
@@ -57,6 +58,7 @@ const VENUE_ICONS = ["wine-outline", "business-outline", "storefront-outline"] a
 export default function Home() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
   const [q, setQ] = useState("");
 
   // Events + venues come from Firestore; when BOTH are empty, the
@@ -66,7 +68,9 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     let alive = true;
-    Promise.all([fetchEvents(), fetchVenues()])
+    // Pass the viewer's email so operator-only test items are visible
+    // only to the operator (store.ts filters for everyone else).
+    Promise.all([fetchEvents(user?.email ?? null), fetchVenues(user?.email ?? null)])
       .then(([rows, venueRows]) => {
         if (!alive) return;
         setEvents(rows);
@@ -79,7 +83,7 @@ export default function Home() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [user?.email]);
 
   const qNorm = q.trim().toLowerCase();
 
@@ -179,7 +183,8 @@ export default function Home() {
                 title={item.title}
                 venueName={getVenueName(item.venueId, effVenues)}
                 label={formatWhen(item.startISO)}
-                badge="Spotlight"
+                badge={item.isTest ? "Test" : "Spotlight"}
+                photoUrl={item.photoUrl}
                 onPress={() => openEvent(item.id)}
               />
             ))}
@@ -200,6 +205,8 @@ export default function Home() {
                           title={item.event.title}
                           venueName={getVenueName(item.event.venueId, effVenues)}
                           label={formatWhen(item.event.startISO)}
+                          badge={item.event.isTest ? "Test" : undefined}
+                          photoUrl={item.event.photoUrl}
                           onPress={() => openEvent(item.event.id)}
                         />
                       </View>

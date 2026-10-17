@@ -2,9 +2,10 @@
 // Shared UI extracted from the reference preview (App.tsx): design tokens,
 // Pill, Section, EventCard, Search, TopTabs, BottomNav, plus the shared
 // formatWhen / venue-name helpers. StyleSheet values are copied exactly
-// from App.tsx. EventCard renders a LinearGradient background (App.tsx's
-// overlay gradient colors) — never a remote image, never presented as a
-// photo. All data comes from the real backend via the screens.
+// from App.tsx. EventCard renders a background image (TEMP Scene photo
+// via lib/placeholders.ts, or the listing's real photoUrl when one exists)
+// under the App.tsx overlay gradient — never a remote image, never
+// presented as a photo. All data comes from the real backend via the screens.
 import React from "react";
 import {
   View,
@@ -13,11 +14,13 @@ import {
   TouchableOpacity,
   StyleSheet,
   Dimensions,
+  ImageBackground,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 
 import type { Venue } from "../../lib/store";
+import { resolveEventCardImage } from "../../lib/placeholders";
 
 export type Tab = "Home" | "Events" | "Personal";
 export const PURPLE = "#7861d9";
@@ -120,6 +123,7 @@ export function EventCard({
   badge,
   compact = false,
   onPress,
+  photoUrl,
 }: {
   title: string;
   venueName: string;
@@ -127,6 +131,8 @@ export function EventCard({
   badge?: string;
   compact?: boolean;
   onPress: () => void;
+  /** Real photo URL when the listing has one; TEMP Scene photo otherwise. */
+  photoUrl?: string;
 }) {
   return (
     <TouchableOpacity
@@ -134,22 +140,28 @@ export function EventCard({
       activeOpacity={0.86}
       style={[refStyles.eventCard, { height: compact ? 156 : 177 }]}
     >
-      <LinearGradient
-        colors={["rgba(10,7,23,.1)", "rgba(11,8,25,.55)", "rgba(9,6,21,.94)"]}
-        locations={[0, 0.44, 1]}
-        style={refStyles.cardOverlay}
+      <ImageBackground
+        source={resolveEventCardImage(photoUrl)}
+        style={refStyles.cardImage}
+        resizeMode="cover"
       >
-        <Text style={[refStyles.eventTitle, compact && { fontSize: 19 }]} numberOfLines={3}>
-          {title}
-        </Text>
-        <Text style={refStyles.eventVenue}>
-          {venueName}
-          {badge && !compact ? ` · ${badge}` : ""}
-        </Text>
-        <Text style={refStyles.eventLabel}>
-          <Text style={{ color: "#f5c36a" }}>★</Text> {label}
-        </Text>
-      </LinearGradient>
+        <LinearGradient
+          colors={["rgba(10,7,23,.1)", "rgba(11,8,25,.55)", "rgba(9,6,21,.94)"]}
+          locations={[0, 0.44, 1]}
+          style={refStyles.cardOverlay}
+        >
+          <Text style={[refStyles.eventTitle, compact && { fontSize: 19 }]} numberOfLines={3}>
+            {title}
+          </Text>
+          <Text style={refStyles.eventVenue}>
+            {venueName}
+            {badge && !compact ? ` · ${badge}` : ""}
+          </Text>
+          <Text style={refStyles.eventLabel}>
+            <Text style={{ color: "#f5c36a" }}>★</Text> {label}
+          </Text>
+        </LinearGradient>
+      </ImageBackground>
     </TouchableOpacity>
   );
 }
@@ -315,6 +327,7 @@ export const refStyles = StyleSheet.create({
     paddingBottom: 17,
     paddingTop: 12,
   },
+  cardImage: { flex: 1 },
   eventTitle: { color: "white", fontSize: 23, fontWeight: "700", lineHeight: 27, maxWidth: "95%" },
   eventVenue: { color: "#f0eaf4", fontSize: 14, marginTop: 5 },
   eventLabel: { color: "#e7e0eb", fontSize: 14, marginTop: 8 },

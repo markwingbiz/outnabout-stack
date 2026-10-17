@@ -37,9 +37,14 @@
 //   still write the catalog.
 //
 // DEVIATIONS FROM FORGE-DESIGN.md §7 (task spec wins):
-//   - Publish request terminal status is 'done' (task spec), not
-//     'published' (design doc). Failed requests are marked 'failed'
-//     immediately (task spec) — the design doc's retry-up-to-5 is NOT
+//   - Publish request terminal status in the DB is 'published' — the
+//     live CHECK constraint on bownd_publish_requests.status only allows
+//     ('pending','processing','published','failed','cancelled'), so the
+//     old task-spec value 'done' would fail the update and leave every
+//     request stuck 'pending' (re-processed forever, duplicating
+//     Firestore docs). The API response still reports status 'done'
+//     for a completed publish; only the DB write uses 'published'.
+//   - Failed requests are marked 'failed' immediately (task spec) — the design doc's retry-up-to-5 is NOT
 //     implemented; a failed publish needs a new request (or a manual
 //     status reset to 'pending' by an operator).
 //
@@ -133,6 +138,18 @@ function asNonEmptyString(value: unknown): string | null {
 
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+}
+
+/**
+ * Test-flag read: a Supabase row is a test row when its `is_test` column
+ * is true (if the column exists — see the optional migration) OR when
+ * `metadata.is_test` is true. The flag rides in `metadata` today, so no
+ * migration is required for the flag to flow. Mirrored rows carry the
+ * flag the same way.
+ */
+function rowIsTest(row: Record<string, unknown>): boolean {
+  if (row.is_test === true) return true;
+  return asRecord(row.metadata).is_test === true;
 }
 
 /**
@@ -400,8 +417,8 @@ async function resolveFirestoreVenueRef(
     .from("bownd_publish_requests")
     .select("bownd_venue_ref")
     .eq("venue_id", supabaseVenueId)
-    .eq("status", "done")
-    .order("created_at", { ascending: false })
+    .eq("status", "published")
+    .order("requested_at", { ascending: false })
     .limit(1);
   if (error) return null;
   const rows = (data ?? []) as Array<Record<string, unknown>>;
@@ -428,6 +445,7 @@ function supabaseEventToFirestore(
     description: asNonEmptyString(row.description) ?? "",
     tenantRef,
     tenantId,
+    isTest: rowIsTest(row),
     sourceRef: `supabase:${String(row.id)}`,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
@@ -444,6 +462,7 @@ function supabaseVenueToFirestore(
     lng: typeof row.lng === "number" ? row.lng : 0,
     tenantRef,
     tenantId,
+    isTest: rowIsTest(row),
     sourceRef: `supabase:${String(row.id)}`,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
@@ -542,10 +561,10 @@ async function publishOne(
     return await fail("firestore_write_failed", err instanceof Error ? err.message : String(err));
   }
 
-  // Mark done + store the Firestore doc ref.
+  // Mark published + store the Firestore doc ref.
   const refPatch = kind === "event" ? { bownd_event_ref: docId } : { bownd_venue_ref: docId };
   try {
-    await markRequest(service, requestId, { status: "done", ...refPatch });
+    await markRequest(service, requestId, { status: "published", ...refPatch });
   } catch (err) {
     // The Firestore write already succeeded; the request row update failing
     // must not report the publish as failed (re-running would merge-write
@@ -556,7 +575,7 @@ async function publishOne(
       action: "bownd.publish.request_update_failed",
       entityType: "bownd_publish_request",
       entityId: requestId,
-      after: { status: "done", [kind === "event" ? "bownd_event_ref" : "bownd_venue_ref"]: docId },
+      after: { status: "published", [kind === "event" ? "bownd_event_ref" : "bownd_venue_ref"]: docId },
       metadata: { warning: "Firestore write succeeded; request row update failed", error: err instanceof Error ? err.message : String(err) },
     });
     return { ...base, status: "done", bownd_ref: docId, error: "warning: request row update failed after Firestore write succeeded" };
@@ -568,7 +587,7 @@ async function publishOne(
     entityType: "bownd_publish_request",
     entityId: requestId,
     before: { status: "pending" },
-    after: { status: "done", [kind === "event" ? "bownd_event_ref" : "bownd_venue_ref"]: docId },
+    after: { status: "published", [kind === "event" ? "bownd_event_ref" : "bownd_venue_ref"]: docId },
     metadata: { kind, supabase_id: supabaseId, tenant_ref: tenantRef },
   });
   return { ...base, status: "done", bownd_ref: docId };
@@ -583,7 +602,7 @@ async function runPublish(
   const requests = await fetchPendingRequests(service, limit);
   const results: PublishResult[] = [];
   for (const request of requests) {
-    // A request already marked done is never re-processed (we only
+    // A request already marked published is never re-processed (we only
     // selected pending rows, but re-check defensively).
     if (String(request.status) !== "pending") {
       results.push({ request_id: String(request.id), kind: "unknown", status: "skipped", bownd_ref: null, error: "not pending" });
@@ -714,9 +733,15 @@ function mapFirestoreEvent(
     status: asNonEmptyString(d.status) ?? "active",
     tenant_id: tenantId,
     venue_id: venueSupabaseId,
+    // Test flag: top-level `is_test` is dropped by the tolerant writer
+    // when the column does not exist yet (metadata.is_test is the
+    // durable carrier); once the optional migration adds the column,
+    // the same payload starts persisting it.
+    is_test: d.isTest === true,
     metadata: {
       bownd_doc_id: doc.id,
       bownd_tenant_ref: tenantRef,
+      is_test: d.isTest === true,
       vibe_tags: asStringArray(d.vibeTags ?? d.vibe_tags),
       audience_tags: asStringArray(d.audienceTags ?? d.audience_tags),
       category: asNonEmptyString(d.category),
@@ -736,9 +761,11 @@ function mapFirestoreVenue(
     tenant_id: tenantId,
     lat: typeof d.lat === "number" ? d.lat : null,
     lng: typeof d.lng === "number" ? d.lng : null,
+    is_test: d.isTest === true,
     metadata: {
       bownd_doc_id: doc.id,
       bownd_tenant_ref: tenantRef,
+      is_test: d.isTest === true,
     },
   };
 }
@@ -828,6 +855,15 @@ async function mirrorCollection(
     if (doc.updateTimeMillis > maxSeenMillis) {
       maxSeenMillis = doc.updateTimeMillis;
       maxSeenDocId = docId;
+    }
+    // Docs this function published carry sourceRef 'supabase:<id>' — they
+    // are canonical in Supabase already. Mirroring one back would create
+    // a DUPLICATE Supabase row (the upsert key 'bownd:<docId>' never
+    // matches the original row), so skip them. The watermark still
+    // advances past the doc (above).
+    if (typeof doc.data.sourceRef === "string" && doc.data.sourceRef.startsWith("supabase:")) {
+      bumpSkipped("supabase_origin");
+      continue;
     }
     try {
       if (collection === "events") {
