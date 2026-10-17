@@ -47,6 +47,24 @@ export function tierFor(points: number): Tier {
 }
 
 // ---------------------------------------------------------------------------
+// Operator-only test data
+// ---------------------------------------------------------------------------
+
+/**
+ * The operator's Bownd sign-in email. Test items (isTest) are visible
+ * ONLY to this account — everyone else never receives them from
+ * fetchEvents/fetchVenues. Note: Firestore rules still allow public
+ * reads of the events/venues collections, so this is an app-level gate
+ * (what the UI shows), not a security boundary — see firestore.rules
+ * hardening in the Phase 9 prep doc for the optional rules change.
+ */
+export const OPERATOR_EMAIL = "mr.marshall3@yahoo.com";
+
+export function isOperatorEmail(email: string | null | undefined): boolean {
+  return !!email && email.trim().toLowerCase() === OPERATOR_EMAIL;
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -62,6 +80,14 @@ export type EventItem = {
   // Featured placement flag for paid featured placement (monetization
   // structure, no billing). Optional: absent/false means not featured.
   featured?: boolean;
+  // Real venue-supplied photo URL. Optional: when absent, cards fall back
+  // to the TEMP abstract placeholder art (see lib/placeholders.ts) —
+  // never a hotlink, never presented as a real photo unless it is one.
+  photoUrl?: string;
+  // Operator-only test flag: true means this item is test data, visible
+  // only to the operator and labeled "Test" in the UI. Never counted
+  // in revenue/analytics (Bownd has none) and never shown to others.
+  isTest?: boolean;
 };
 
 export type Venue = {
@@ -72,6 +98,11 @@ export type Venue = {
   // Featured placement flag for paid featured placement (monetization
   // structure, no billing). Optional: absent/false means not featured.
   featured?: boolean;
+  // Real venue-supplied photo URL. Optional: when absent, cards fall back
+  // to the TEMP abstract placeholder art (see lib/placeholders.ts).
+  photoUrl?: string;
+  // Operator-only test flag — see EventItem.isTest.
+  isTest?: boolean;
 };
 
 export type UserProfile = {
@@ -144,6 +175,8 @@ function toEventItem(id: string, data: any): EventItem {
     audienceTags: Array.isArray(data.audienceTags) ? data.audienceTags : [],
     priceLabel: typeof data.priceLabel === "string" ? data.priceLabel : "",
     featured: data.featured === true,
+    photoUrl: typeof data.photoUrl === "string" ? data.photoUrl : undefined,
+    isTest: data.isTest === true,
   };
 }
 
@@ -154,6 +187,8 @@ function toVenue(id: string, data: any): Venue {
     lat: typeof data.lat === "number" ? data.lat : 0,
     lng: typeof data.lng === "number" ? data.lng : 0,
     featured: data.featured === true,
+    photoUrl: typeof data.photoUrl === "string" ? data.photoUrl : undefined,
+    isTest: data.isTest === true,
   };
 }
 
@@ -161,23 +196,26 @@ function toVenue(id: string, data: any): Venue {
 // Events & venues — Firestore only. Empty/unconfigured/error => [].
 // ---------------------------------------------------------------------------
 
-export async function fetchEvents(): Promise<EventItem[]> {
+export async function fetchEvents(viewerEmail?: string | null): Promise<EventItem[]> {
   if (!db) return [];
   try {
     const snap = await getDocs(collection(db, "events"));
     if (snap.empty) return [];
-    return snap.docs.map((d) => toEventItem(d.id, d.data()));
+    const rows = snap.docs.map((d) => toEventItem(d.id, d.data()));
+    // Operator-only test data: non-operators never receive test items.
+    return isOperatorEmail(viewerEmail) ? rows : rows.filter((r) => !r.isTest);
   } catch {
     return [];
   }
 }
 
-export async function fetchVenues(): Promise<Venue[]> {
+export async function fetchVenues(viewerEmail?: string | null): Promise<Venue[]> {
   if (!db) return [];
   try {
     const snap = await getDocs(collection(db, "venues"));
     if (snap.empty) return [];
-    return snap.docs.map((d) => toVenue(d.id, d.data()));
+    const rows = snap.docs.map((d) => toVenue(d.id, d.data()));
+    return isOperatorEmail(viewerEmail) ? rows : rows.filter((r) => !r.isTest);
   } catch {
     return [];
   }
