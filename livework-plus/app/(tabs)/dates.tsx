@@ -10,7 +10,7 @@
 // direct Supabase client calls gated by the operator-only RLS policies
 // from relationship-migration.sql. If the migration hasn't been run yet,
 // the screen shows the friendly "run the migration" state, never crashes.
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -109,6 +109,26 @@ function DatesContent() {
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+
+  // The plan-a-date form mounts at the "All dates" section, far below the
+  // fold. Tapping a template or Schedule Date used to set showForm with no
+  // visible effect, because the form opened off-screen. Scroll to the form
+  // whenever it opens so the tap visibly does something.
+  const scrollViewRef = useRef<ScrollView>(null);
+  const formAnchorY = useRef<number | null>(null);
+
+  function openForm(prefillTitle?: string) {
+    if (prefillTitle !== undefined) setTitle(prefillTitle);
+    setShowForm(true);
+  }
+
+  useEffect(() => {
+    if (showForm && formAnchorY.current !== null) {
+      const y = Math.max(0, formAnchorY.current - 12);
+      const t = setTimeout(() => scrollViewRef.current?.scrollTo({ y, animated: true }), 50);
+      return () => clearTimeout(t);
+    }
+  }, [showForm]);
 
   const [dateType, setDateType] = useState<DateType>("out");
   const [scheduledDate, setScheduledDate] = useState(todayISO());
@@ -221,7 +241,11 @@ function DatesContent() {
   const nextDue = nextDate ? dueLabel(nextDate.due) : null;
 
   return (
-    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
+    <ScrollView
+      ref={scrollViewRef}
+      showsVerticalScrollIndicator={false}
+      contentContainerStyle={styles.content}
+    >
       <View style={styles.header}>
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>Date Planning</Text>
@@ -278,8 +302,7 @@ function DatesContent() {
                 key={t.title}
                 style={styles.rowCard}
                 onPress={() => {
-                  setTitle(t.title);
-                  setShowForm(true);
+                  openForm(t.title);
                 }}
               >
                 <View style={[styles.templateIcon, { backgroundColor: `${t.color}26` }]}>
@@ -299,7 +322,7 @@ function DatesContent() {
             <Text style={styles.sectionLabel}>Date Actions</Text>
             <Text style={styles.cardSub}>Turn ideas into plans</Text>
             <View style={styles.actionGrid}>
-              <Pressable style={styles.actionCard} onPress={() => setShowForm(true)}>
+              <Pressable style={styles.actionCard} onPress={() => openForm()}>
                 <View style={[styles.actionIcon, { backgroundColor: `${THEME.purpleBright}26` }]}>
                   <Ionicons name="calendar" size={22} color={THEME.purpleBright} />
                 </View>
@@ -337,7 +360,7 @@ function DatesContent() {
                   Last date {nextDate.last.scheduled_date} · {dateTypeLabel(nextDate.last.date_type)} ·{" "}
                   {nextDate.last.title || "untitled"}
                 </Text>
-                <Pressable style={styles.smallBtn} onPress={() => setShowForm(true)}>
+                <Pressable style={styles.smallBtn} onPress={() => openForm()}>
                   <Text style={styles.smallBtnText}>Plan it →</Text>
                 </Pressable>
               </>
@@ -348,7 +371,12 @@ function DatesContent() {
             )}
           </View>
 
-          <View style={styles.sectionHeader}>
+          <View
+            style={styles.sectionHeader}
+            onLayout={(e) => {
+              formAnchorY.current = e.nativeEvent.layout.y;
+            }}
+          >
             <Text style={styles.sectionTitle}>All dates</Text>
             <Pressable style={styles.addBtn} onPress={() => setShowForm((v) => !v)}>
               <Text style={styles.addBtnText}>{showForm ? "Cancel" : "+ Plan a date"}</Text>
