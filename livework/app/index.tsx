@@ -326,12 +326,36 @@ export default function DashboardScreen() {
               Livework has no ticketing yet.
             </Text>
 
-            {/* Event Activity — real events-per-day */}
-            <Section
-              title="Event Activity"
-              action="Last 7 Days"
-              onAction={() => setRange("7d")}
-            >
+            {/* Event Activity — upcoming events per bucket in the selected
+                window. The range is selectable here via chips (same
+                dashboard range the top picker drives): the chart follows
+                the selection, and the chips always show which window is
+                active. Previously the header hardcoded "Last 7 Days" and
+                tapping it silently forced the whole dashboard to 7d —
+                the chart looked stuck on 7 days and the label never
+                reflected the actual window. */}
+            <Section title="Event Activity">
+              <View style={styles.rangeChipRow}>
+                {RANGES.map((r) => (
+                  <Pressable
+                    key={r.key}
+                    style={[styles.rangeChip, range === r.key && styles.rangeChipActive]}
+                    onPress={() => setRange(r.key)}
+                  >
+                    <Text
+                      style={[
+                        styles.rangeChipText,
+                        range === r.key && styles.rangeChipTextActive,
+                      ]}
+                    >
+                      {r.label}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+              <Text style={styles.sectionNote}>
+                Upcoming events in the selected window.
+              </Text>
               <View style={styles.legendRow}>
                 <Text style={styles.legend}><Text style={{ color: THEME.purple }}>●</Text> Events</Text>
               </View>
@@ -361,12 +385,31 @@ export default function DashboardScreen() {
                 No ticket/revenue data exists, so "top" cannot be
                 ranked by performance: rows are soonest first, with
                 real fields only (title, date, type, price, status).
-                Edit / Delete work exactly as before. */}
-            <Section
-              title="Top Performing Events"
-              action="This Month"
-              onAction={() => setRange("month")}
-            >
+                Edit / Delete work exactly as before. The list follows
+                the selected range (data.events is the in-window set),
+                so it gets the same honest chip row as Event Activity.
+                Previously the header hardcoded "This Month" and
+                tapping it silently forced the whole dashboard to
+                month — the label never reflected the actual window. */}
+            <Section title="Top Performing Events">
+              <View style={styles.rangeChipRow}>
+                {RANGES.map((r) => (
+                  <Pressable
+                    key={r.key}
+                    style={[styles.rangeChip, range === r.key && styles.rangeChipActive]}
+                    onPress={() => setRange(r.key)}
+                  >
+                    <Text
+                      style={[
+                        styles.rangeChipText,
+                        range === r.key && styles.rangeChipTextActive,
+                      ]}
+                    >
+                      {r.label}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
               <Text style={styles.sectionNote}>
                 Your events, soonest first — performance ranking needs ticket data.
               </Text>
@@ -492,8 +535,12 @@ export default function DashboardScreen() {
               <Text style={styles.empty}>Projections need historical ticket data — not available yet.</Text>
             </Section>
 
-            {/* Audience Insights — no attendee data exists */}
-            <Section title="Audience Insights" action="This Month" onAction={() => setRange("month")}>
+            {/* Audience Insights — no attendee data exists, so this is
+                an honest empty state with no range to select: the
+                old hardcoded "This Month" header action silently
+                forced the whole dashboard to month, so it was
+                removed rather than left lying about a window. */}
+            <Section title="Audience Insights">
               <Text style={styles.empty}>Audience insights need attendee data — not available yet.</Text>
             </Section>
 
@@ -653,6 +700,17 @@ const styles = StyleSheet.create({
   sectionNote: { color: THEME.textFaint, fontSize: 12, lineHeight: 16, marginBottom: 10 },
   legendRow: { flexDirection: "row", gap: 14, marginBottom: 10 },
   legend: { color: THEME.textMuted, fontSize: 11, fontWeight: "700" },
+  rangeChipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 10 },
+  rangeChip: {
+    borderWidth: 1,
+    borderColor: THEME.cardBorder,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  rangeChipActive: { borderColor: THEME.purple, backgroundColor: "rgba(139,92,246,0.18)" },
+  rangeChipText: { color: THEME.textMuted, fontSize: 12, fontWeight: "800" },
+  rangeChipTextActive: { color: "#fff" },
   dayRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 6 },
   dayLabel: { color: THEME.textFaint, fontSize: 11, fontWeight: "700" },
   eventRowWrap: {
