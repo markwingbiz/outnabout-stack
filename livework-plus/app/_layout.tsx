@@ -13,6 +13,7 @@ import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { THEME } from "../lib/theme";
 import { AuthProvider, useAuth } from "../lib/auth";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { session, loading } = useAuth();
@@ -48,7 +49,8 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 
 export default function RootLayout() {
   return (
-    <AuthProvider>
+    <SafeAreaProvider>
+      <AuthProvider>
       <AuthGate>
         <>
           <StatusBar style="light" />
@@ -64,5 +66,6 @@ export default function RootLayout() {
         </>
       </AuthGate>
     </AuthProvider>
+    </SafeAreaProvider>
   );
 }

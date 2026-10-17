@@ -1,12 +1,21 @@
-// Livework+ Home — Forge command center (Phase 8 Slice 3).
-// Replaces the dating-app "Control Center". Operator dashboard: quick stats
-// (funnels by status, jobs running/failed, pending approvals, workers
-// active, verified revenue), recent threads, recent failed jobs, and links
-// to every Forge tab. All figures come from real queries; job/approval/
-// worker counts use full-table fetches (these tables are small), never
-// list caps. No demo data, no fake figures.
-// The legacy Connections/Dates tabs and TopTabs navigation are untouched
-// (§13 decision is not part of this slice).
+// Livework+ Home — Forge command center, rebuilt to the reference layout
+// (Funnel Overview / Revenue Overview / Relationship Score / Talk to Forge /
+// Forge sections hub).
+//
+// All figures come from real queries; nothing is invented:
+// - Funnel cards: real `funnels` rows (name + backend status), first 4,
+//   "View All Funnels" opens the full list.
+// - Revenue: headline is the canonical money-funnel verified total
+//   (money_funnels, one row per funnel — never double-counted). The chart
+//   is the real revenue_events daily series for the last 30 days; when
+//   every bucket is zero there is no chart, just an honest empty state.
+//   No trend line or % change is invented (the change label comes from
+//   fetchRevenue's real prior-window comparison, only when computable).
+// - Relationship Score: the average rating of the recent real check-ins
+//   (same up-to-8 window Connections uses), labelled as exactly that.
+//   With no rated check-ins the card says so — never a fake score.
+// - Talk to Forge links to the Forge screen, where the composer lives.
+// - Forge sections hub links every screen the 5-tab bar no longer shows.
 import React, { useCallback, useEffect, useState } from "react";
 import {
   View,
@@ -22,45 +31,95 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import TopTabs from "../../components/TopTabs";
 import ForgeGate from "../../components/ForgeGate";
-import { THEME } from "../../lib/theme";
+import Ring from "../../components/Ring";
+import Sparkline from "../../components/Sparkline";
+import { THEME, FUNNEL_ACCENTS } from "../../lib/theme";
 import { supabase } from "../../lib/supabase";
 import {
   canonicalMoneyRows,
   formatCents,
-  formatDate,
+  isMissingTableError,
   normalizeStatus,
-  type ForgeThreadRow,
-  type FunnelRow,
   type MoneyFunnelRow,
 } from "../../lib/forge";
+import {
+  fetchFunnels,
+  fetchRevenue,
+  type FunnelSummary,
+  type RevenueSummary,
+} from "../../lib/data";
 
-type FailedJob = {
-  id: string;
-  title: string | null;
-  job_type: string | null;
-  funnel_id: string | null;
-  error_text: string | null;
-  created_at: string;
-};
+const CHECKIN_WINDOW = 8;
+const GOAL_RATING = 8;
 
-type Stats = {
-  funnelTotal: number;
-  funnelByStatus: { status: string; count: number }[];
+type HomeStats = {
+  funnels: FunnelSummary[];
   jobsRunning: number;
   jobsFailed: number;
   pendingApprovals: number;
   workersActive: number;
   verifiedRevenueCents: number;
+  revenue: RevenueSummary;
+  relationshipAvg: number | null;
+  relationshipCount: number;
+  checkinsError: string | null;
 };
 
-const LINKS: { label: string; icon: string; route: string }[] = [
-  { label: "Forge", icon: "flash", route: "/(tabs)/forge" },
-  { label: "Funnels", icon: "filter", route: "/(tabs)/funnels" },
-  { label: "Workers", icon: "construct", route: "/(tabs)/workers" },
-  { label: "Jobs", icon: "list", route: "/(tabs)/jobs" },
-  { label: "Approvals", icon: "checkmark-circle", route: "/(tabs)/approvals" },
-  { label: "Deliverables", icon: "document-text", route: "/(tabs)/deliverables" },
-  { label: "Insights", icon: "stats-chart", route: "/(tabs)/insights" },
+const HUB: { label: string; icon: string; route: string; detail: (s: HomeStats) => string }[] = [
+  {
+    label: "Forge",
+    icon: "flash",
+    route: "/(tabs)/forge",
+    detail: () => "Conversations + command composer",
+  },
+  {
+    label: "Funnels",
+    icon: "filter",
+    route: "/(tabs)/funnels",
+    detail: (s) => `${s.funnels.length} funnel${s.funnels.length === 1 ? "" : "s"}`,
+  },
+  {
+    label: "Workers",
+    icon: "construct",
+    route: "/(tabs)/workers",
+    detail: (s) => `${s.workersActive} active`,
+  },
+  {
+    label: "Jobs",
+    icon: "list",
+    route: "/(tabs)/jobs",
+    detail: (s) => `${s.jobsRunning} running / queued · ${s.jobsFailed} failed`,
+  },
+  {
+    label: "Approvals",
+    icon: "checkmark-circle",
+    route: "/(tabs)/approvals",
+    detail: (s) => `${s.pendingApprovals} pending`,
+  },
+  {
+    label: "Deliverables",
+    icon: "document-text",
+    route: "/(tabs)/deliverables",
+    detail: () => "Deliverables produced by Forge",
+  },
+  {
+    label: "Audit Log",
+    icon: "shield-check",
+    route: "/(tabs)/audit-log",
+    detail: () => "Every Forge action, audited",
+  },
+  {
+    label: "Bownd",
+    icon: "storefront",
+    route: "/(tabs)/bownd",
+    detail: () => "Bownd read-only view",
+  },
+  {
+    label: "Suggestions",
+    icon: "bulb",
+    route: "/(tabs)/suggestions",
+    detail: () => "Forge suggestions",
+  },
 ];
 
 export default function HomeScreen() {
@@ -75,10 +134,7 @@ export default function HomeScreen() {
 
 function HomeContent() {
   const router = useRouter();
-  const [stats, setStats] = useState<Stats | null>(null);
-  const [threads, setThreads] = useState<ForgeThreadRow[]>([]);
-  const [failedJobs, setFailedJobs] = useState<FailedJob[]>([]);
-  const [funnelNames, setFunnelNames] = useState<Record<string, string>>({});
+  const [stats, setStats] = useState<HomeStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -92,44 +148,33 @@ function HomeContent() {
     setRefreshing(true);
     setError(null);
     try {
-      const [f, m, j, a, w, t, fj, fn] = await Promise.all([
-        supabase.from("funnels").select("id,status").limit(1000),
+      const [f, m, j, a, w, r] = await Promise.all([
+        fetchFunnels(),
         supabase
           .from("money_funnels")
           .select("funnel_id,key,verified_revenue_cents")
           .limit(1000),
         supabase.from("forge_jobs").select("status").limit(1000),
-        supabase.from("approvals").select("id,status").limit(1000),
+        supabase
+          .from("approvals")
+          .select("id", { count: "exact", head: true })
+          .eq("status", "pending"),
         supabase.from("workers").select("id,status").limit(1000),
-        supabase
-          .from("forge_threads")
-          .select("id,title,status,created_at")
-          .order("created_at", { ascending: false })
-          .limit(5),
-        supabase
-          .from("forge_jobs")
-          .select("id,title,job_type,funnel_id,error_text,created_at,status")
-          .order("created_at", { ascending: false })
-          .limit(50),
-        supabase.from("funnels").select("id,name,slug"),
+        fetchRevenue(30),
       ]);
-      for (const r of [f, m, j, a, w, t, fj, fn]) {
-        if (r.error) throw new Error(r.error.message);
-      }
-      const funnelRows = (f.data ?? []) as { id: string; status: string | null }[];
-      const byStatus = new Map<string, number>();
-      for (const row of funnelRows) {
-        const s = normalizeStatus(row.status) || "UNKNOWN";
-        byStatus.set(s, (byStatus.get(s) ?? 0) + 1);
-      }
+      if (f.error) throw new Error(f.error);
+      if (m.error) throw new Error(m.error.message);
+      if (j.error) throw new Error(j.error.message);
+      if (a.error) throw new Error(a.error.message);
+      if (w.error) throw new Error(w.error.message);
+      if (r.error) throw new Error(r.error);
+
       const jobRows = (j.data ?? []) as { status: string }[];
       const jobsRunning = jobRows.filter(
-        (row) => normalizeStatus(row.status) === "RUNNING" || normalizeStatus(row.status) === "QUEUED",
+        (row) =>
+          normalizeStatus(row.status) === "RUNNING" || normalizeStatus(row.status) === "QUEUED",
       ).length;
       const jobsFailed = jobRows.filter((row) => normalizeStatus(row.status) === "FAILED").length;
-      const pendingApprovals = ((a.data ?? []) as { status: string | null }[]).filter(
-        (row) => normalizeStatus(row.status) === "PENDING",
-      ).length;
       const workersActive = ((w.data ?? []) as { status: string | null }[]).filter(
         (row) => normalizeStatus(row.status) === "ACTIVE",
       ).length;
@@ -141,27 +186,47 @@ function HomeContent() {
         (sum, row) => sum + (row.verified_revenue_cents ?? 0),
         0,
       );
+
+      // Relationship Score: average rating of the recent real check-ins.
+      // A missing relationship table (migration not run) is an honest
+      // empty state, not a Home failure; any other error is shown on the
+      // card itself.
+      let relationshipAvg: number | null = null;
+      let relationshipCount = 0;
+      let checkinsError: string | null = null;
+      try {
+        const { data, error: cError } = await supabase
+          .from("relationship_checkins")
+          .select("rating,checkin_date")
+          .order("checkin_date", { ascending: false })
+          .limit(100);
+        if (cError) throw cError;
+        const rated = ((data ?? []) as { rating: unknown }[])
+          .map((row) => (typeof row.rating === "number" ? row.rating : null))
+          .filter((v): v is number => v !== null)
+          .slice(0, CHECKIN_WINDOW);
+        relationshipCount = rated.length;
+        if (rated.length > 0) {
+          relationshipAvg = rated.reduce((sum, v) => sum + v, 0) / rated.length;
+        }
+      } catch (e) {
+        if (!isMissingTableError(e)) {
+          checkinsError = e instanceof Error ? e.message : "Could not load check-ins.";
+        }
+      }
+
       setStats({
-        funnelTotal: funnelRows.length,
-        funnelByStatus: [...byStatus.entries()]
-          .map(([status, count]) => ({ status, count }))
-          .sort((x, y) => y.count - x.count),
+        funnels: f.funnels,
         jobsRunning,
         jobsFailed,
-        pendingApprovals,
+        pendingApprovals: a.count ?? 0,
         workersActive,
         verifiedRevenueCents,
+        revenue: r.revenue,
+        relationshipAvg,
+        relationshipCount,
+        checkinsError,
       });
-      setThreads((t.data ?? []) as ForgeThreadRow[]);
-      const failed = ((fj.data ?? []) as (FailedJob & { status: string })[])
-        .filter((row) => normalizeStatus(row.status) === "FAILED")
-        .slice(0, 5);
-      setFailedJobs(failed);
-      const names: Record<string, string> = {};
-      for (const row of (fn.data ?? []) as FunnelRow[]) {
-        names[row.id] = row.name ?? row.slug ?? "Unnamed funnel";
-      }
-      setFunnelNames(names);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not load command center.");
     } finally {
@@ -173,6 +238,8 @@ function HomeContent() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const accents = Object.values(FUNNEL_ACCENTS);
 
   return (
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
@@ -192,24 +259,6 @@ function HomeContent() {
 
       <TopTabs />
 
-      {/* Command-center hero */}
-      <LinearGradient
-        colors={["#2B1B5E", "#1A1038", "#14102A"]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.hero}
-      >
-        <View style={{ flex: 1 }}>
-          <Text style={styles.heroTitle}>Forge Command Center</Text>
-          <Text style={styles.heroSub}>
-            Live status across funnels, jobs, approvals, and verified revenue.
-          </Text>
-        </View>
-        <View style={styles.shield}>
-          <Ionicons name="flash" size={44} color={THEME.purpleBright} />
-        </View>
-      </LinearGradient>
-
       {!!error && (
         <View style={[styles.card, styles.errorCard]}>
           <Text style={styles.errorText}>{error}</Text>
@@ -225,113 +274,168 @@ function HomeContent() {
         <Text style={styles.empty}>No command-center data yet.</Text>
       ) : (
         <>
-          {/* Quick stats */}
-          <Text style={styles.sectionLabel}>At a glance</Text>
-          <View style={styles.statGrid}>
-            <View style={styles.statCard}>
-              <Text style={styles.statValue}>{stats.funnelTotal}</Text>
-              <Text style={styles.statLabel}>Funnels</Text>
-              <Text style={styles.statDetail}>
-                {stats.funnelByStatus.map((s) => `${s.status} ${s.count}`).join(" · ") || "—"}
-              </Text>
-            </View>
-            <View style={styles.statCard}>
-              <Text style={styles.statValue}>{stats.jobsRunning}</Text>
-              <Text style={styles.statLabel}>Jobs running / queued</Text>
-              <Text style={styles.statDetail}>{stats.jobsFailed} failed</Text>
-            </View>
-            <View style={styles.statCard}>
-              <Text style={styles.statValue}>{stats.pendingApprovals}</Text>
-              <Text style={styles.statLabel}>Pending approvals</Text>
-              <Pressable onPress={() => router.push("/(tabs)/approvals")}>
-                <Text style={styles.statLink}>Open approvals →</Text>
+          {/* Funnel Overview — real funnels */}
+          <View style={styles.card}>
+            <View style={styles.cardHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cardTitle}>Funnel Overview</Text>
+                <Text style={styles.cardSub}>Track all your funnels in one place.</Text>
+              </View>
+              <Pressable onPress={() => router.push("/(tabs)/funnels")}>
+                <Text style={styles.viewAll}>View All Funnels ›</Text>
               </Pressable>
             </View>
-            <View style={styles.statCard}>
-              <Text style={styles.statValue}>{stats.workersActive}</Text>
-              <Text style={styles.statLabel}>Workers active</Text>
-              <Pressable onPress={() => router.push("/(tabs)/workers")}>
-                <Text style={styles.statLink}>Open workers →</Text>
-              </Pressable>
-            </View>
-          </View>
-          <View style={styles.revenueCard}>
-            <Text style={styles.revenueLabel}>Verified revenue (all funnels)</Text>
-            <Text style={styles.revenueValue}>{formatCents(stats.verifiedRevenueCents)}</Text>
-            <Text style={styles.revenueNote}>
-              Verified only — never projected or estimated. From the canonical money row per funnel.
-            </Text>
-          </View>
-
-          {/* Recent threads */}
-          <Text style={styles.sectionLabel}>Recent Forge threads</Text>
-          <View style={styles.group}>
-            {threads.length === 0 ? (
-              <Text style={styles.emptyInline}>No Forge threads yet.</Text>
+            {stats.funnels.length === 0 ? (
+              <Text style={styles.emptyInline}>No funnels yet.</Text>
             ) : (
-              threads.map((thread) => (
-                <Pressable
-                  key={thread.id}
-                  style={styles.rowCard}
-                  onPress={() => router.push("/(tabs)/forge")}
-                >
-                  <View style={styles.rowMid}>
-                    <Text style={styles.rowTitle} numberOfLines={2}>
-                      {thread.title || "Untitled thread"}
-                    </Text>
-                    <Text style={styles.rowSub}>
-                      {normalizeStatus(thread.status) || "—"} · {formatDate(thread.created_at)}
-                    </Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={18} color={THEME.textFaint} />
-                </Pressable>
-              ))
-            )}
-          </View>
-
-          {/* Recent failed jobs */}
-          <Text style={styles.sectionLabel}>Recent failed jobs</Text>
-          <View style={styles.group}>
-            {failedJobs.length === 0 ? (
-              <Text style={styles.emptyInline}>No failed jobs in the latest 50 jobs.</Text>
-            ) : (
-              failedJobs.map((job) => (
-                <Pressable
-                  key={job.id}
-                  style={styles.rowCard}
-                  onPress={() => router.push("/(tabs)/jobs")}
-                >
-                  <View style={styles.rowMid}>
-                    <Text style={styles.rowTitle} numberOfLines={2}>
-                      {job.title || job.job_type || "Job"}
-                    </Text>
-                    <Text style={styles.rowSub}>
-                      {job.funnel_id ? funnelNames[job.funnel_id] ?? "Unknown funnel" : "No funnel"} ·{" "}
-                      {formatDate(job.created_at)}
-                    </Text>
-                    {!!job.error_text && (
-                      <Text style={styles.rowError} numberOfLines={2}>
-                        {job.error_text}
+              <View style={styles.funnelGrid}>
+                {stats.funnels.slice(0, 4).map((funnel, i) => {
+                  const accent = accents[i % accents.length];
+                  return (
+                    <Pressable
+                      key={funnel.id}
+                      style={styles.funnelTile}
+                      onPress={() => router.push("/(tabs)/funnels")}
+                    >
+                      <View
+                        style={[
+                          styles.funnelIcon,
+                          { backgroundColor: `${accent.color}26` },
+                        ]}
+                      >
+                        <Ionicons name={accent.icon as never} size={22} color={accent.color} />
+                      </View>
+                      <Text style={styles.funnelName} numberOfLines={2}>
+                        {funnel.name}
                       </Text>
-                    )}
-                  </View>
-                  <Ionicons name="chevron-forward" size={18} color={THEME.textFaint} />
-                </Pressable>
-              ))
+                      <View style={styles.statusBadge}>
+                        <Text style={styles.statusText}>
+                          {normalizeStatus(funnel.status) || "—"}
+                        </Text>
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </View>
             )}
           </View>
 
-          {/* Links */}
-          <Text style={styles.sectionLabel}>Open</Text>
-          <View style={styles.linkGrid}>
-            {LINKS.map((link) => (
+          {/* Revenue Overview — verified revenue only */}
+          <View style={styles.card}>
+            <View style={styles.cardHeader}>
+              <View>
+                <Text style={styles.cardTitle}>Revenue Overview</Text>
+                <Text style={styles.cardSub}>All revenue across your funnels.</Text>
+              </View>
+              <Pressable onPress={() => router.push("/(tabs)/insights")}>
+                <Text style={styles.viewAll}>View Insights ›</Text>
+              </Pressable>
+            </View>
+            <View style={styles.revenueRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.revenueLabel}>Total Revenue</Text>
+                <Text style={styles.revenueValue}>{formatCents(stats.verifiedRevenueCents)}</Text>
+                {!!stats.revenue.changeLabel && (
+                  <Text style={styles.revenueDelta}>{stats.revenue.changeLabel}</Text>
+                )}
+                <Text style={styles.revenueNote}>
+                  Verified only — never projected or estimated. From the canonical money row
+                  per funnel.
+                </Text>
+              </View>
+              {stats.revenue.spark.some((p) => p > 0) ? (
+                <Sparkline points={stats.revenue.spark} width={150} height={56} />
+              ) : (
+                <Text style={styles.sparkEmpty}>No verified revenue events in the last 30 days.</Text>
+              )}
+            </View>
+          </View>
+
+          {/* Relationship Score — average of the recent real check-ins */}
+          <View style={styles.card}>
+            <View style={styles.relRow}>
+              {stats.checkinsError ? (
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cardTitle}>Relationship Score</Text>
+                  <Text style={styles.errorText}>{stats.checkinsError}</Text>
+                </View>
+              ) : stats.relationshipAvg === null ? (
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cardTitle}>Relationship Score</Text>
+                  <Text style={styles.cardSub}>
+                    No check-ins yet — add your first check-in on Connections and the score
+                    appears here.
+                  </Text>
+                  <Pressable onPress={() => router.push("/(tabs)/connections")}>
+                    <Text style={styles.viewAll}>Open Connections ›</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <>
+                  <Ring
+                    pct={(stats.relationshipAvg / 10) * 100}
+                    size={96}
+                    stroke={8}
+                    center={stats.relationshipAvg.toFixed(1)}
+                    sub="/10"
+                  />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.cardTitle}>Relationship Score</Text>
+                    <Text style={styles.cardSub}>
+                      Average of your last {stats.relationshipCount} check-in
+                      {stats.relationshipCount === 1 ? "" : "s"} · goal {GOAL_RATING}/10.
+                    </Text>
+                    <Pressable onPress={() => router.push("/(tabs)/insights")}>
+                      <Text style={styles.viewAll}>View Insights ›</Text>
+                    </Pressable>
+                  </View>
+                </>
+              )}
+            </View>
+          </View>
+
+          {/* Talk to Forge */}
+          <Pressable onPress={() => router.push("/(tabs)/forge")}>
+            <LinearGradient
+              colors={["#2B1B5E", "#1A1038", "#14102A"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.forgeCard}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.forgeTitle}>Talk to Forge</Text>
+                <Text style={styles.forgeSub}>
+                  Your AI partner for commands, insights, and execution.
+                </Text>
+              </View>
+              <View style={styles.forgeBtn}>
+                <Text style={styles.forgeBtnText}>Open Forge ›</Text>
+              </View>
+            </LinearGradient>
+          </Pressable>
+
+          {/* Forge sections — every screen the 5-tab bar no longer shows */}
+          <Text style={styles.sectionLabel}>Forge sections</Text>
+          <View style={styles.group}>
+            {HUB.map((item) => (
               <Pressable
-                key={link.route}
-                style={styles.linkCard}
-                onPress={() => router.push(link.route as never)}
+                key={item.route}
+                style={styles.rowCard}
+                onPress={() => router.push(item.route as never)}
               >
-                <Ionicons name={link.icon as never} size={22} color={THEME.purpleBright} />
-                <Text style={styles.linkText}>{link.label}</Text>
+                <View style={styles.rowIcon}>
+                  <Ionicons name={item.icon as never} size={20} color={THEME.purpleBright} />
+                </View>
+                <View style={styles.rowMid}>
+                  <Text style={styles.rowTitle}>{item.label}</Text>
+                  <Text style={styles.rowSub}>{item.detail(stats)}</Text>
+                </View>
+                {item.label === "Approvals" && stats.pendingApprovals > 0 && (
+                  <View style={styles.countBadge}>
+                    <Text style={styles.countBadgeText}>{stats.pendingApprovals}</Text>
+                  </View>
+                )}
+                <Ionicons name="chevron-forward" size={18} color={THEME.textFaint} />
               </Pressable>
             ))}
           </View>
@@ -367,7 +471,65 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: "rgba(168,85,247,0.5)",
   },
-  hero: {
+  card: {
+    backgroundColor: THEME.card,
+    borderRadius: THEME.radius,
+    borderWidth: 1,
+    borderColor: THEME.cardBorder,
+    padding: 14,
+    marginBottom: 14,
+  },
+  errorCard: { borderColor: "rgba(236,72,153,0.5)" },
+  errorText: { color: THEME.pink, fontSize: 13, lineHeight: 18 },
+  retryText: { color: THEME.purpleBright, fontSize: 13, fontWeight: "800", marginTop: 8 },
+  empty: { color: THEME.textMuted, fontSize: 14, textAlign: "center", marginTop: 24 },
+  emptyInline: { color: THEME.textMuted, fontSize: 13, paddingVertical: 8 },
+  cardHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 10,
+    marginBottom: 12,
+  },
+  cardTitle: { color: "#fff", fontSize: 17, fontWeight: "900" },
+  cardSub: { color: THEME.textMuted, fontSize: 12, lineHeight: 17, marginTop: 2 },
+  viewAll: { color: THEME.purpleBright, fontSize: 12, fontWeight: "800", marginTop: 4 },
+  funnelGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
+  funnelTile: {
+    flexBasis: "47%",
+    flexGrow: 1,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderRadius: THEME.radiusSm,
+    borderWidth: 1,
+    borderColor: THEME.cardBorder,
+    padding: 12,
+    gap: 8,
+  },
+  funnelIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  funnelName: { color: "#fff", fontSize: 13, fontWeight: "800", minHeight: 34 },
+  statusBadge: {
+    alignSelf: "flex-start",
+    borderWidth: 1,
+    borderColor: THEME.textFaint,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  statusText: { color: THEME.textMuted, fontSize: 10, fontWeight: "900" },
+  revenueRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+  revenueLabel: { color: THEME.textMuted, fontSize: 12, fontWeight: "800" },
+  revenueValue: { color: THEME.green, fontSize: 28, fontWeight: "900", marginTop: 2 },
+  revenueDelta: { color: THEME.green, fontSize: 12, fontWeight: "800", marginTop: 2 },
+  revenueNote: { color: THEME.textFaint, fontSize: 11, lineHeight: 15, marginTop: 4 },
+  sparkEmpty: { color: THEME.textFaint, fontSize: 11, lineHeight: 15, maxWidth: 150 },
+  relRow: { flexDirection: "row", alignItems: "center", gap: 14 },
+  forgeCard: {
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
@@ -377,61 +539,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(168,85,247,0.25)",
   },
-  heroTitle: { color: "#fff", fontSize: 24, fontWeight: "900" },
-  heroSub: { color: THEME.textMuted, fontSize: 13, marginTop: 6, lineHeight: 18 },
-  shield: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: "rgba(168,85,247,0.16)",
-    alignItems: "center",
-    justifyContent: "center",
+  forgeTitle: { color: "#fff", fontSize: 20, fontWeight: "900" },
+  forgeSub: { color: THEME.textMuted, fontSize: 13, marginTop: 4, lineHeight: 18 },
+  forgeBtn: {
     borderWidth: 1,
-    borderColor: "rgba(168,85,247,0.4)",
+    borderColor: THEME.purpleBright,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
   },
+  forgeBtnText: { color: "#fff", fontSize: 12, fontWeight: "800" },
   sectionLabel: { color: "#fff", fontSize: 15, fontWeight: "800", marginBottom: 10 },
-  card: {
-    backgroundColor: THEME.card,
-    borderRadius: THEME.radius,
-    borderWidth: 1,
-    borderColor: THEME.cardBorder,
-    padding: 14,
-  },
-  errorCard: { borderColor: "rgba(236,72,153,0.5)", marginBottom: 14 },
-  errorText: { color: THEME.pink, fontSize: 13, lineHeight: 18 },
-  retryText: { color: THEME.purpleBright, fontSize: 13, fontWeight: "800", marginTop: 8 },
-  empty: { color: THEME.textMuted, fontSize: 14, textAlign: "center", marginTop: 24 },
-  emptyInline: { color: THEME.textMuted, fontSize: 13, padding: 14 },
-  statGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 12,
-    marginBottom: 12,
-  },
-  statCard: {
-    flexBasis: "48%",
-    flexGrow: 1,
-    backgroundColor: THEME.card,
-    borderRadius: THEME.radius,
-    borderWidth: 1,
-    borderColor: THEME.cardBorder,
-    padding: 14,
-  },
-  statValue: { color: "#fff", fontSize: 26, fontWeight: "900" },
-  statLabel: { color: THEME.textMuted, fontSize: 12, fontWeight: "800", marginTop: 2 },
-  statDetail: { color: THEME.textMuted, fontSize: 12, marginTop: 4 },
-  statLink: { color: THEME.purpleBright, fontSize: 12, fontWeight: "800", marginTop: 4 },
-  revenueCard: {
-    backgroundColor: THEME.card,
-    borderRadius: THEME.radius,
-    borderWidth: 1,
-    borderColor: THEME.cardBorder,
-    padding: 16,
-    marginBottom: 22,
-  },
-  revenueLabel: { color: THEME.textMuted, fontSize: 12, fontWeight: "800" },
-  revenueValue: { color: THEME.green, fontSize: 28, fontWeight: "900", marginTop: 4 },
-  revenueNote: { color: THEME.textFaint, fontSize: 12, lineHeight: 16, marginTop: 6 },
   group: {
     backgroundColor: THEME.card,
     borderRadius: THEME.radius,
@@ -444,33 +562,32 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
-    paddingVertical: 14,
+    paddingVertical: 13,
     paddingHorizontal: 14,
     borderBottomWidth: 1,
     borderBottomColor: "rgba(255,255,255,0.05)",
   },
+  rowIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: "rgba(168,85,247,0.18)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   rowMid: { flex: 1 },
   rowTitle: { color: "#fff", fontSize: 15, fontWeight: "800" },
   rowSub: { color: THEME.textMuted, fontSize: 12, marginTop: 2 },
-  rowError: { color: THEME.pink, fontSize: 12, marginTop: 2 },
-  linkGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 12,
-    marginBottom: 12,
-  },
-  linkCard: {
-    flexBasis: "31%",
-    flexGrow: 1,
-    backgroundColor: THEME.card,
-    borderRadius: THEME.radius,
-    borderWidth: 1,
-    borderColor: THEME.cardBorder,
-    padding: 14,
+  countBadge: {
+    backgroundColor: THEME.pink,
+    borderRadius: 999,
+    minWidth: 24,
+    height: 24,
     alignItems: "center",
-    gap: 8,
+    justifyContent: "center",
+    paddingHorizontal: 6,
   },
-  linkText: { color: "#fff", fontSize: 13, fontWeight: "800" },
+  countBadgeText: { color: "#fff", fontSize: 12, fontWeight: "900" },
   refreshBtn: {
     backgroundColor: "rgba(255,255,255,0.07)",
     borderRadius: 999,

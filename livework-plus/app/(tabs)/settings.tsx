@@ -1,8 +1,13 @@
-// Livework+ Settings (Phase 5).
-// Notifications switch is persisted on-device (AsyncStorage) with an
-// honest note that push is not set up yet. Account shows the real
-// session (sign in / sign out). The other four rows are honestly
-// disabled — their backend screens do not exist yet.
+// Livework+ Control Center (Settings), rebuilt to the reference layout:
+// header card + Preferences section + Your Settings section.
+//
+// The rows are the app's REAL settings only. The reference's old
+// dating-content rows (Relationship Goals, Deal Breakers, Preferences,
+// Location, Profile Strength / matches) stay replaced — Phase 8 replaced
+// that content and it does not come back. Preferences holds the rows
+// that work (Notifications, Account); Your Settings holds the rows
+// whose backend screens do not exist yet, honestly disabled with a
+// "Soon" tag and a reason.
 // Requires phase-a-ui Auth (<AuthProvider> in app/_layout.tsx).
 import React, { useEffect, useState } from "react";
 import {
@@ -15,6 +20,7 @@ import {
   Switch,
   ActivityIndicator,
 } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { THEME } from "../../lib/theme";
@@ -71,10 +77,28 @@ export default function SettingsScreen() {
   return (
     <SafeAreaView style={styles.root}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-        <Text style={styles.title}>Settings</Text>
+        {/* Control Center header */}
+        <LinearGradient
+          colors={["#2B1B5E", "#1A1038", "#14102A"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.hero}
+        >
+          <View style={{ flex: 1 }}>
+            <Text style={styles.heroTitle}>Control Center</Text>
+            <Text style={styles.heroSub}>
+              Manage your preferences and set the foundation for great connections.
+            </Text>
+          </View>
+          <View style={styles.shield}>
+            <Ionicons name="shield-checkmark" size={44} color={THEME.purpleBright} />
+          </View>
+        </LinearGradient>
 
-        {/* Notifications — preference persisted on-device; push not set up */}
+        {/* Preferences — rows that work */}
+        <Text style={styles.sectionLabel}>Preferences</Text>
         <View style={styles.group}>
+          {/* Notifications — preference persisted on-device; push not set up */}
           <View style={styles.row}>
             <View style={styles.rowIcon}>
               <Ionicons name="notifications" size={20} color={THEME.purpleBright} />
@@ -93,15 +117,8 @@ export default function SettingsScreen() {
               />
             )}
           </View>
-        </View>
-        <Text style={styles.note}>
-          Push notifications are not set up yet (no notification service). This switch saves your
-          preference on this device only.
-        </Text>
-
-        {/* Account — real session */}
-        <View style={styles.group}>
-          <View style={styles.row}>
+          {/* Account — real session */}
+          <View style={[styles.row, styles.rowLast]}>
             <View style={styles.rowIcon}>
               <Ionicons name="person-circle" size={20} color={THEME.purpleBright} />
             </View>
@@ -122,11 +139,19 @@ export default function SettingsScreen() {
             )}
           </View>
         </View>
+        <Text style={styles.note}>
+          Push notifications are not set up yet (no notification service). This switch saves your
+          preference on this device only.
+        </Text>
 
-        {/* Disabled rows — backend screens do not exist yet */}
+        {/* Your Settings — backend screens do not exist yet */}
+        <Text style={styles.sectionLabel}>Your Settings</Text>
         <View style={styles.group}>
-          {DISABLED_ROWS.map((r) => (
-            <View key={r.title} style={[styles.row, styles.rowDisabled]}>
+          {DISABLED_ROWS.map((r, i) => (
+            <View
+              key={r.title}
+              style={[styles.row, styles.rowDisabled, i === DISABLED_ROWS.length - 1 && styles.rowLast]}
+            >
               <View style={styles.rowIcon}>
                 <Ionicons name={r.icon as never} size={20} color={THEME.purpleBright} />
               </View>
@@ -154,7 +179,29 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: THEME.bg },
   content: { paddingHorizontal: 18, paddingTop: 10 },
-  title: { color: "#fff", fontSize: 26, fontWeight: "900", marginBottom: 16 },
+  hero: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderRadius: THEME.radius,
+    padding: 18,
+    marginBottom: 22,
+    borderWidth: 1,
+    borderColor: "rgba(168,85,247,0.25)",
+  },
+  heroTitle: { color: "#fff", fontSize: 24, fontWeight: "900" },
+  heroSub: { color: THEME.textMuted, fontSize: 13, marginTop: 6, lineHeight: 18 },
+  shield: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: "rgba(168,85,247,0.16)",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "rgba(168,85,247,0.4)",
+  },
+  sectionLabel: { color: "#fff", fontSize: 15, fontWeight: "800", marginBottom: 10 },
   group: {
     backgroundColor: THEME.card,
     borderRadius: THEME.radius,
@@ -171,6 +218,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "rgba(255,255,255,0.05)",
   },
+  rowLast: { borderBottomWidth: 0 },
   rowDisabled: { opacity: 0.55 },
   rowIcon: {
     width: 40,
