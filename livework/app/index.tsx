@@ -1,7 +1,19 @@
-// Livework Dashboard — venue dashboard (Phase 5).
-// Every button has a real handler. Every section shows live Supabase data
-// or an explicit empty state. No demo data, no fake publish/payout claims,
-// no fake projections/audience numbers.
+// Livework Dashboard — vendor dashboard (Phase 5), rebuilt to the
+// reference dashboard LAYOUT (desktop reference adapted to mobile:
+// same sections stacked vertically, no desktop sidebar, existing
+// mobile navigation kept).
+//
+// Every section shows live Supabase data or an explicit empty state.
+// No demo data, no fake numbers. The reference's figures (28 events,
+// 1,243 tickets, $23,892 revenue, $34.50 avg ticket, 89% attendance,
+// Brickhouse / Brooklyn / Alex Thompson, Indie Fridays $4,560, …)
+// are MOCKUP and are never shown. Ticket/revenue/attendance metrics
+// have no backing (Livework has no ticketing) — those cards are
+// omitted with an honest note, never invented numbers and never 0
+// presented as sales. Projections / Audience / Smart Suggestions
+// have no backing data — honest empty states, never invented
+// forecasts, demographics, or suggestions.
+//
 // Requires phase-a-ui Auth (<AuthProvider> in app/_layout.tsx).
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -23,7 +35,6 @@ import { THEME } from "../lib/theme";
 import {
   fetchDashboard,
   formatMoney,
-  GENERAL_TIPS,
   RANGES,
   type DashboardData,
   type DashboardEvent,
@@ -31,6 +42,7 @@ import {
 } from "../lib/data";
 import { useAuth } from "../lib/auth";
 import { supabase } from "../lib/supabase";
+import { getUserTenantIds, getUserVenues } from "../lib/tenant";
 
 function Section({
   title,
@@ -67,6 +79,8 @@ export default function DashboardScreen() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [venueCount, setVenueCount] = useState<number | null>(null);
+  const [redemptionCount, setRedemptionCount] = useState<number | null>(null);
   const scrollRef = useRef<ScrollView | null>(null);
   const calendarY = useRef(0);
 
@@ -74,6 +88,31 @@ export default function DashboardScreen() {
     setLoading(true);
     const d = await fetchDashboard(range);
     setData(d);
+    // Venue + redemption counts: real rows only, same queries the
+    // Venues / Redemptions screens use. Failures leave the count
+    // unknown ("—") instead of inventing a number.
+    try {
+      const venues = await getUserVenues();
+      setVenueCount(venues.length);
+    } catch {
+      setVenueCount(null);
+    }
+    try {
+      if (!supabase) throw new Error("Supabase is not configured.");
+      const tenantIds = await getUserTenantIds();
+      if (tenantIds.length === 0) {
+        setRedemptionCount(0);
+      } else {
+        const { count, error } = await supabase
+          .from("venue_redemptions")
+          .select("id", { count: "exact", head: true })
+          .in("tenant_id", tenantIds);
+        if (error) throw error;
+        setRedemptionCount(count ?? 0);
+      }
+    } catch {
+      setRedemptionCount(null);
+    }
     setLoading(false);
   }, [range]);
 
@@ -185,9 +224,6 @@ export default function DashboardScreen() {
           <Pressable style={styles.venuesBtn} onPress={() => router.push("/venues")}>
             <Text style={styles.venuesText}>My Venues</Text>
           </Pressable>
-          <Pressable style={styles.addBtn} onPress={() => router.push("/add-event")}>
-            <Text style={styles.addText}>+ Add New Event</Text>
-          </Pressable>
         </View>
 
         {/* Slice 3: redemptions + publish outbox links. */}
@@ -244,20 +280,49 @@ export default function DashboardScreen() {
               </View>
             )}
 
-            {/* KPI cards — real counts only */}
+            {/* Stat cards — real vendor metrics only. Tickets Sold /
+                Avg. Ticket Price / Attendance Rate are NOT shown:
+                Livework has no ticketing, so those numbers do not
+                exist. Showing 0 would misread as "no sales". */}
             <View style={styles.kpiGrid}>
-              <View style={styles.kpiCard}>
-                <Text style={styles.kpiLabel}>Events</Text>
+              <Pressable style={styles.kpiCard} onPress={() => router.push("/venues")}>
+                <View style={styles.kpiTop}>
+                  <Text style={styles.kpiLabel}>Total Events</Text>
+                  <Ionicons name="calendar" size={16} color={THEME.purple} />
+                </View>
                 <Text style={styles.kpiValue}>{data?.eventCount ?? 0}</Text>
                 <Text style={styles.kpiDelta}>{data?.rangeLabel ?? ""}</Text>
-              </View>
+              </Pressable>
+              <Pressable style={styles.kpiCard} onPress={() => router.push("/venues")}>
+                <View style={styles.kpiTop}>
+                  <Text style={styles.kpiLabel}>Venues</Text>
+                  <Ionicons name="business" size={16} color={THEME.blue} />
+                </View>
+                <Text style={styles.kpiValue}>{venueCount ?? "—"}</Text>
+                <Text style={styles.kpiDelta}>Your venues</Text>
+              </Pressable>
+              <Pressable style={styles.kpiCard} onPress={() => router.push("/redemptions")}>
+                <View style={styles.kpiTop}>
+                  <Text style={styles.kpiLabel}>Redemptions</Text>
+                  <Ionicons name="ticket" size={16} color={THEME.green} />
+                </View>
+                <Text style={styles.kpiValue}>{redemptionCount ?? "—"}</Text>
+                <Text style={styles.kpiDelta}>Bownd redemptions</Text>
+              </Pressable>
               <View style={styles.kpiCard}>
-                <Text style={styles.kpiLabel}>Verified Revenue</Text>
+                <View style={styles.kpiTop}>
+                  <Text style={styles.kpiLabel}>Verified Revenue</Text>
+                  <Ionicons name="cash" size={16} color={THEME.orange} />
+                </View>
                 <Text style={styles.kpiValue}>{formatMoney(data?.verifiedRevenue ?? 0)}</Text>
                 <Text style={styles.kpiDelta}>Verified only — projections never shown as earned</Text>
                 {!!data?.revenueScopeNote && <Text style={styles.revenueNote}>{data.revenueScopeNote}</Text>}
               </View>
             </View>
+            <Text style={styles.notTrackedNote}>
+              Tickets sold, average ticket price, and attendance rate aren&apos;t tracked —
+              Livework has no ticketing yet.
+            </Text>
 
             {/* Event Activity — real events-per-day */}
             <Section
@@ -286,17 +351,19 @@ export default function DashboardScreen() {
               )}
             </Section>
 
-            {/* Projections — no ticketing data exists, so no numbers are shown */}
-            <Section title="Projections">
-              <Text style={styles.empty}>Projections need historical ticket data — not available yet.</Text>
-            </Section>
-
-            {/* Your Events — real events rows, expandable */}
+            {/* Top Performing Events — the vendor's real events.
+                No ticket/revenue data exists, so "top" cannot be
+                ranked by performance: rows are soonest first, with
+                real fields only (title, date, type, price, status).
+                Edit / Delete work exactly as before. */}
             <Section
-              title="Your Events"
+              title="Top Performing Events"
               action="This Month"
               onAction={() => setRange("month")}
             >
+              <Text style={styles.sectionNote}>
+                Your events, soonest first — performance ranking needs ticket data.
+              </Text>
               {(data?.events ?? []).length === 0 ? (
                 <Text style={styles.empty}>No events yet.</Text>
               ) : (
@@ -354,11 +421,6 @@ export default function DashboardScreen() {
               )}
             </Section>
 
-            {/* Audience Insights — no attendee data exists */}
-            <Section title="Audience Insights" action="This Month" onAction={() => setRange("month")}>
-              <Text style={styles.empty}>Audience insights need attendee data — not available yet.</Text>
-            </Section>
-
             {/* Event Calendar — real events */}
             <View
               onLayout={(ev) => {
@@ -393,19 +455,60 @@ export default function DashboardScreen() {
               </Section>
             </View>
 
-            {/* Tips — general tips, labeled as such (not personalized) */}
-            <Section title="Tips">
-              <Text style={styles.tipsNote}>General tips — personalized suggestions need your event history.</Text>
-              {GENERAL_TIPS.map((s) => (
-                <View key={s} style={styles.suggRow}>
-                  <Ionicons name="bulb" size={18} color={THEME.orange} />
-                  <Text style={styles.suggText}>{s}</Text>
-                </View>
-              ))}
+            {/* Add New Event — opens the EXISTING create-event flow.
+                The form itself is unchanged (same fields/behavior);
+                this panel is the prominent entry point. */}
+            <View style={styles.addEventCard}>
+              <View style={styles.addEventHeader}>
+                <Text style={styles.cardTitle}>Add New Event</Text>
+                <Pressable onPress={() => router.push("/add-event")}>
+                  <Ionicons name="add-circle" size={26} color={THEME.purple} />
+                </Pressable>
+              </View>
+              <Text style={styles.addEventField}>Event Title</Text>
+              <Text style={styles.addEventField}>Date &amp; Time</Text>
+              <Text style={styles.addEventField}>Event Type</Text>
+              <Text style={styles.addEventField}>Ticket Type &amp; Price</Text>
+              <Pressable style={styles.createBtn} onPress={() => router.push("/add-event")}>
+                <Text style={styles.createBtnText}>Create Event</Text>
+              </Pressable>
+              <Text style={styles.addEventNote}>Opens the full event form.</Text>
+            </View>
+
+            {/* Get more exposure — featured placement has no billing
+                yet, so Boost is disabled with the reason, never sold. */}
+            <View style={styles.boostCard}>
+              <Text style={styles.boostTitle}>Get more exposure</Text>
+              <Text style={styles.boostText}>Boost your events and reach more fans.</Text>
+              <Pressable style={[styles.boostBtn, styles.boostBtnDisabled]} disabled>
+                <Text style={styles.boostBtnText}>Boost Event</Text>
+              </Pressable>
+              <Text style={styles.boostReason}>
+                Featured placement is coming soon — no billing yet, so boosting isn&apos;t available.
+              </Text>
+            </View>
+
+            {/* Projections — no ticketing data exists, so no numbers are shown */}
+            <Section title="Projections">
+              <Text style={styles.empty}>Projections need historical ticket data — not available yet.</Text>
             </Section>
 
-            {/* Latest Events — real events, no fake publish/payout claims */}
-            <Section title="Latest Events">
+            {/* Audience Insights — no attendee data exists */}
+            <Section title="Audience Insights" action="This Month" onAction={() => setRange("month")}>
+              <Text style={styles.empty}>Audience insights need attendee data — not available yet.</Text>
+            </Section>
+
+            {/* Smart Suggestions — no backing data exists, so no
+                suggestions are invented. (The old general-tips list
+                contained invented figures and was removed.) */}
+            <Section title="Smart Suggestions">
+              <Text style={styles.empty}>
+                Smart suggestions need your event history and audience data — not available yet.
+              </Text>
+            </Section>
+
+            {/* Recent Activity — real events, no fake publish/payout claims */}
+            <Section title="Recent Activity">
               {(data?.latestEvents ?? []).length === 0 ? (
                 <Text style={styles.empty}>No events yet.</Text>
               ) : (
@@ -469,13 +572,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   venuesText: { color: "#fff", fontWeight: "800", fontSize: 13 },
-  addBtn: {
-    backgroundColor: THEME.purple,
-    borderRadius: 10,
-    paddingVertical: 11,
-    paddingHorizontal: 14,
-  },
-  addText: { color: "#fff", fontWeight: "900", fontSize: 13 },
   linkBtn: {
     flex: 1,
     borderWidth: 1,
@@ -519,10 +615,16 @@ const styles = StyleSheet.create({
     borderColor: THEME.cardBorder,
     padding: 14,
   },
+  kpiTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
   kpiLabel: { color: THEME.textMuted, fontSize: 12, fontWeight: "700" },
   kpiValue: { color: "#fff", fontSize: 24, fontWeight: "900", marginTop: 6 },
   kpiDelta: { color: THEME.green, fontSize: 11, fontWeight: "800", marginTop: 4 },
   revenueNote: { color: THEME.textFaint, fontSize: 11, lineHeight: 15, marginTop: 6 },
+  notTrackedNote: { color: THEME.textFaint, fontSize: 11, lineHeight: 15 },
   setupCard: { borderColor: "rgba(139,92,246,0.5)" },
   setupTitle: { color: "#fff", fontSize: 16, fontWeight: "900" },
   setupText: { color: THEME.textMuted, fontSize: 13, lineHeight: 18, marginTop: 6 },
@@ -549,6 +651,7 @@ const styles = StyleSheet.create({
   },
   cardTitle: { color: "#fff", fontSize: 16, fontWeight: "900" },
   cardAction: { color: THEME.textMuted, fontSize: 12, fontWeight: "700" },
+  sectionNote: { color: THEME.textFaint, fontSize: 12, lineHeight: 16, marginBottom: 10 },
   legendRow: { flexDirection: "row", gap: 14, marginBottom: 10 },
   legend: { color: THEME.textMuted, fontSize: 11, fontWeight: "700" },
   dayRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 6 },
@@ -587,7 +690,6 @@ const styles = StyleSheet.create({
   eventTitle: { color: "#fff", fontSize: 14, fontWeight: "800" },
   eventDate: { color: THEME.textMuted, fontSize: 12, marginTop: 2 },
   detailText: { color: THEME.textMuted, fontSize: 12, lineHeight: 16 },
-  tipsNote: { color: THEME.textFaint, fontSize: 12, marginBottom: 10, lineHeight: 16 },
   calRow: {
     flexDirection: "row",
     gap: 12,
@@ -601,8 +703,48 @@ const styles = StyleSheet.create({
   calEvent: { flexDirection: "row", gap: 8, alignItems: "center" },
   calTime: { color: THEME.purple, fontSize: 12, fontWeight: "800", width: 64 },
   calTitle: { color: "#fff", fontSize: 13, fontWeight: "700" },
-  suggRow: { flexDirection: "row", gap: 10, marginBottom: 10, alignItems: "flex-start" },
-  suggText: { color: THEME.textMuted, fontSize: 13, flex: 1, lineHeight: 18 },
+  addEventCard: {
+    backgroundColor: THEME.card,
+    borderRadius: THEME.radius,
+    borderWidth: 1,
+    borderColor: THEME.cardBorder,
+    padding: 16,
+    gap: 10,
+  },
+  addEventHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  addEventField: { color: THEME.textMuted, fontSize: 13 },
+  createBtn: {
+    backgroundColor: THEME.purple,
+    borderRadius: 10,
+    paddingVertical: 13,
+    alignItems: "center",
+    marginTop: 4,
+  },
+  createBtnText: { color: "#fff", fontWeight: "900", fontSize: 15 },
+  addEventNote: { color: THEME.textFaint, fontSize: 11 },
+  boostCard: {
+    backgroundColor: "#1D1533",
+    borderRadius: THEME.radius,
+    borderWidth: 1,
+    borderColor: "rgba(139,92,246,0.4)",
+    padding: 16,
+    gap: 8,
+  },
+  boostTitle: { color: "#fff", fontSize: 16, fontWeight: "900" },
+  boostText: { color: THEME.textMuted, fontSize: 13, lineHeight: 18 },
+  boostBtn: {
+    borderRadius: 10,
+    paddingVertical: 11,
+    alignItems: "center",
+    marginTop: 4,
+  },
+  boostBtnDisabled: { backgroundColor: THEME.cardBorder, opacity: 0.6 },
+  boostBtnText: { color: "#fff", fontWeight: "900", fontSize: 13 },
+  boostReason: { color: THEME.textMuted, fontSize: 12, lineHeight: 16 },
   activityRow: { flexDirection: "row", gap: 10, marginBottom: 10, alignItems: "flex-start" },
   activityDot: {
     width: 8,
