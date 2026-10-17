@@ -178,7 +178,7 @@ export default function DashboardScreen() {
   // Delete: confirm first, then delete the vendor's own event row.
   // RLS restricts deletes to the vendor's tenants; the list only shows
   // the vendor's own events, so this can only delete their own rows.
-  async function onDeleteEvent(e: DashboardEvent) {
+  async function onDeleteEvent(e: Pick<DashboardEvent, "id" | "title">) {
     Alert.alert("Delete event?", `Delete "${e.title}"? This cannot be undone.`, [
       { text: "Cancel", style: "cancel" },
       {
@@ -465,7 +465,12 @@ export default function DashboardScreen() {
                   </Pressable>
                 </View>
               ) : (topData?.events ?? []).length === 0 ? (
-                <Text style={styles.empty}>No events yet.</Text>
+                <View>
+                  <Text style={styles.empty}>No events yet.</Text>
+                  <Text style={styles.sectionNote}>
+                    Events outside this window are hidden — switch to All upcoming to see them.
+                  </Text>
+                </View>
               ) : (
                 (topData?.events ?? []).map((e) => {
                   const expanded = expandedId === e.id;
@@ -499,22 +504,25 @@ export default function DashboardScreen() {
                           color={THEME.textMuted}
                         />
                       </Pressable>
-                      {expanded && (
-                        <View style={styles.eventActions}>
-                          <Pressable
-                            style={styles.actionBtn}
-                            onPress={() => router.push(`/edit-event?id=${e.id}`)}
-                          >
-                            <Text style={styles.actionText}>Edit</Text>
-                          </Pressable>
-                          <Pressable
-                            style={[styles.actionBtn, styles.deleteBtn]}
-                            onPress={() => void onDeleteEvent(e)}
-                          >
-                            <Text style={[styles.actionText, styles.deleteText]}>Delete</Text>
-                          </Pressable>
-                        </View>
-                      )}
+                      {/* Edit / Delete are ALWAYS visible on every row —
+                          not hidden behind the expand. The expand only
+                          reveals the detail fields. Previously the actions
+                          showed only after tapping a row (chevron hint
+                          only), so events looked uneditable. */}
+                      <View style={styles.eventActions}>
+                        <Pressable
+                          style={styles.actionBtn}
+                          onPress={() => router.push(`/edit-event?id=${e.id}`)}
+                        >
+                          <Text style={styles.actionText}>Edit</Text>
+                        </Pressable>
+                        <Pressable
+                          style={[styles.actionBtn, styles.deleteBtn]}
+                          onPress={() => void onDeleteEvent(e)}
+                        >
+                          <Text style={[styles.actionText, styles.deleteText]}>Delete</Text>
+                        </Pressable>
+                      </View>
                     </View>
                   );
                 })
@@ -537,9 +545,22 @@ export default function DashboardScreen() {
                       </View>
                       <View style={{ flex: 1, gap: 4 }}>
                         {d.events.map((e) => (
-                          <View key={e.title} style={styles.calEvent}>
-                            <Text style={styles.calTime}>{e.time}</Text>
-                            <Text style={styles.calTitle}>{e.title}</Text>
+                          <View key={e.id} style={styles.calEventWrap}>
+                            <View style={styles.calEvent}>
+                              <Text style={styles.calTime}>{e.time}</Text>
+                              <Text style={styles.calTitle}>{e.title}</Text>
+                            </View>
+                            {/* Calendar rows get the same Edit / Delete as
+                                the event list — previously the calendar
+                                showed events with no way to act on them. */}
+                            <View style={styles.calActions}>
+                              <Pressable onPress={() => router.push(`/edit-event?id=${e.id}`)}>
+                                <Text style={styles.calActionText}>Edit</Text>
+                              </Pressable>
+                              <Pressable onPress={() => void onDeleteEvent(e)}>
+                                <Text style={[styles.calActionText, styles.calDeleteText]}>Delete</Text>
+                              </Pressable>
+                            </View>
                           </View>
                         ))}
                       </View>
@@ -809,6 +830,10 @@ const styles = StyleSheet.create({
   calDayLabel: { color: THEME.textMuted, fontSize: 11, fontWeight: "800" },
   calDate: { color: "#fff", fontSize: 16, fontWeight: "900" },
   calEvent: { flexDirection: "row", gap: 8, alignItems: "center" },
+  calEventWrap: { gap: 2 },
+  calActions: { flexDirection: "row", gap: 12, paddingLeft: 72 },
+  calActionText: { color: THEME.purple, fontSize: 12, fontWeight: "800" },
+  calDeleteText: { color: "#F9A8D4" },
   calTime: { color: THEME.purple, fontSize: 12, fontWeight: "800", width: 64 },
   calTitle: { color: "#fff", fontSize: 13, fontWeight: "700" },
   addEventCard: {

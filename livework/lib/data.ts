@@ -42,7 +42,7 @@ export type CalendarDay = {
   date: number;
   /** Start-of-day timestamp, used to sort days by full date (not day-of-month). */
   sortKey: number;
-  events: { time: string; title: string }[];
+  events: { id: string; time: string; title: string }[];
 };
 
 export type DashboardData = {
@@ -234,7 +234,7 @@ export async function fetchDashboard(range: RangeKey): Promise<DashboardData> {
           sortKey: new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(),
           events: [],
         };
-      existing.events.push({ time: formatTime(e.startTs), title: e.title });
+      existing.events.push({ id: e.id, time: formatTime(e.startTs), title: e.title });
       calMap.set(key, existing);
     }
     const calendar = [...calMap.values()].sort((a, b) => a.sortKey - b.sortKey);
