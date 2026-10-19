@@ -20,7 +20,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { fetchEvents, fetchVenues, type EventItem, type Venue } from "../../lib/store";
 import { useAuth } from "../../lib/auth";
-import { getShowcaseEvents, getShowcaseVenues, resolvePlaylists } from "../../data/showcase";
+import {
+  getShowcaseEvents,
+  getShowcaseVenues,
+  resolvePlaylists,
+  type ResolvedPlaylist,
+} from "../../data/showcase";
 import { categoryForVenueName, resolveCardImage } from "../../lib/placeholders";
 import { CardBackground } from "../../components/ui/CardBackground";
 import {
@@ -118,6 +123,76 @@ export default function Home() {
     [effEvents, effVenues]
   );
 
+  // Home section order (fixed): Showcase spotlight cards, Tonight in KC,
+  // Top Venues, Date Night, Family Fun, Featured. Playlists are looked up
+  // by id so the order holds even if resolvePlaylists returns them in a
+  // different order; any future playlist not in this order renders after
+  // Family Fun, before Featured.
+  const playlistById = useMemo(
+    () => new Map(playlists.map((p) => [p.id, p])),
+    [playlists]
+  );
+  const otherPlaylists = useMemo(
+    () =>
+      playlists.filter(
+        (p) => p.id !== "tonight-in-kc" && p.id !== "date-night" && p.id !== "family-fun"
+      ),
+    [playlists]
+  );
+
+  function renderPlaylist(pl: ResolvedPlaylist | undefined) {
+    if (!pl) return null;
+    return (
+      <View key={pl.id}>
+        <Section title={pl.title} subtitle={pl.subtitle} />
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ gap: 12, paddingBottom: 10 }}
+        >
+          {pl.items.map((item) =>
+            item.kind === "event" ? (
+              <View key={`event:${item.event.id}`} style={styles.playlistCardWrap}>
+                <EventCard
+                  title={item.event.title}
+                  venueName={getVenueName(item.event.venueId, effVenues)}
+                  label={formatWhen(item.event.startISO)}
+                  badge={item.event.isTest ? "Test" : undefined}
+                  photoUrl={item.event.photoUrl}
+                  onPress={() => openEvent(item.event.id)}
+                />
+              </View>
+            ) : (
+              <TouchableOpacity
+                key={`venue:${item.venue.id}`}
+                onPress={() => openVenue(item.venue.id, item.venue.name)}
+                activeOpacity={0.86}
+                style={styles.venueCard}
+              >
+                <CardBackground
+                  source={resolveCardImage(
+                    item.venue.photoUrl,
+                    categoryForVenueName(item.venue.name)
+                  )}
+                  style={styles.venueCardBg}
+                  contentStyle={styles.venueCardContent}
+                >
+                  <Text style={styles.venueCardName} numberOfLines={2}>
+                    {item.venue.name}
+                  </Text>
+                  {item.venue.isTest && (
+                    <Text style={styles.testBadgeText}>Test</Text>
+                  )}
+                  <Text style={styles.venueCardMeta}>Tap to view</Text>
+                </CardBackground>
+              </TouchableOpacity>
+            )
+          )}
+        </ScrollView>
+      </View>
+    );
+  }
+
   function go(route: string) {
     router.replace(route);
   }
@@ -177,7 +252,7 @@ export default function Home() {
           <Text style={styles.emptyText}>No matches for “{q.trim()}”.</Text>
         ) : (
           <>
-            {/* Spotlight hero cards (vertical list) */}
+            {/* Showcase — spotlight hero cards (vertical list), first section */}
             {spotlightEvents.map((item) => (
               <EventCard
                 key={item.id}
@@ -190,56 +265,9 @@ export default function Home() {
               />
             ))}
 
-            {/* Featured playlists — horizontal rails (below spotlight, above Top Venues) */}
-            {playlists.map((pl) => (
-              <View key={pl.id}>
-                <Section title={pl.title} subtitle={pl.subtitle} />
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={{ gap: 12, paddingBottom: 10 }}
-                >
-                  {pl.items.map((item) =>
-                    item.kind === "event" ? (
-                      <View key={`event:${item.event.id}`} style={styles.playlistCardWrap}>
-                        <EventCard
-                          title={item.event.title}
-                          venueName={getVenueName(item.event.venueId, effVenues)}
-                          label={formatWhen(item.event.startISO)}
-                          badge={item.event.isTest ? "Test" : undefined}
-                          photoUrl={item.event.photoUrl}
-                          onPress={() => openEvent(item.event.id)}
-                        />
-                      </View>
-                    ) : (
-                      <TouchableOpacity
-                        key={`venue:${item.venue.id}`}
-                        onPress={() => openVenue(item.venue.id, item.venue.name)}
-                        activeOpacity={0.86}
-                        style={styles.venueCard}
-                      >
-                        <CardBackground
-                          source={resolveCardImage(
-                            item.venue.photoUrl,
-                            categoryForVenueName(item.venue.name)
-                          )}
-                          style={styles.venueCardBg}
-                          contentStyle={styles.venueCardContent}
-                        >
-                          <Text style={styles.venueCardName} numberOfLines={2}>
-                            {item.venue.name}
-                          </Text>
-                          {item.venue.isTest && (
-                            <Text style={styles.testBadgeText}>Test</Text>
-                          )}
-                          <Text style={styles.venueCardMeta}>Tap to view</Text>
-                        </CardBackground>
-                      </TouchableOpacity>
-                    )
-                  )}
-                </ScrollView>
-              </View>
-            ))}
+            {/* Home order: Showcase (spotlight) → Tonight in KC → Top Venues
+                → Date Night → Family Fun → Featured. */}
+            {renderPlaylist(playlistById.get("tonight-in-kc"))}
 
             {/* Top Venues orbs (first 3 venues, name only) */}
             {topVenues.length > 0 && (
@@ -273,6 +301,10 @@ export default function Home() {
                 </ScrollView>
               </View>
             )}
+
+            {renderPlaylist(playlistById.get("date-night"))}
+            {renderPlaylist(playlistById.get("family-fun"))}
+            {otherPlaylists.map((pl) => renderPlaylist(pl))}
 
             {/* Featured — rendered TWICE, exactly as the reference does. */}
             {featured && (

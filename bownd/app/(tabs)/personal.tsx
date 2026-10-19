@@ -46,7 +46,7 @@ import { MemberCode } from "../../components/ui/MemberCode";
 import { CardBackground } from "../../components/ui/CardBackground";
 import { resolveCardImage, categoryForVenueName, resolveEventCardImage } from "../../lib/placeholders";
 
-type PanelTab = "All" | "QR" | "Rewards" | "Venue";
+type PanelTab = "All" | "QR" | "Rewards";
 
 export default function PersonalScreen() {
   const router = useRouter();
@@ -178,7 +178,9 @@ export default function PersonalScreen() {
 
   const showQr = panel === "All" || panel === "QR";
   const showRewards = panel === "All" || panel === "Rewards";
-  const showVenue = panel === "All" || panel === "Venue";
+  // Favorite venues live under "All" only. The old "Venue" panel tab is
+  // now the "What's Close" button — it opens the map page instead of
+  // switching the panel.
 
   return (
     <View style={refStyles.root}>
@@ -223,7 +225,7 @@ export default function PersonalScreen() {
           {/* Light panel */}
           <View style={refStyles.lightPanel}>
             <View style={refStyles.panelTabs}>
-              {(["All", "QR", "Rewards", "Venue"] as PanelTab[]).map((p) => (
+              {(["All", "QR", "Rewards"] as PanelTab[]).map((p) => (
                 <TouchableOpacity
                   key={p}
                   onPress={() => setPanel(p)}
@@ -234,6 +236,12 @@ export default function PersonalScreen() {
                   </Text>
                 </TouchableOpacity>
               ))}
+              <TouchableOpacity
+                onPress={() => router.push("/whats-close")}
+                style={refStyles.panelTab}
+              >
+                <Text style={refStyles.panelTabText}>What&apos;s Close</Text>
+              </TouchableOpacity>
             </View>
 
             {/* QR section */}
@@ -321,8 +329,8 @@ export default function PersonalScreen() {
               </>
             )}
 
-            {/* Venue section — favorite venues */}
-            {showVenue && (
+            {/* Favorite venues — under the All panel */}
+            {panel === "All" && (
               <>
                 <Text style={[refStyles.darkHeading, styles.sectionHeading]}>Favorite Venues</Text>
                 {favoriteVenues.length === 0 ? (

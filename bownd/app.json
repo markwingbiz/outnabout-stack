@@ -34,6 +34,15 @@
         {
           "cameraPermission": "Allow Bownd to access your camera to scan QR codes for rewards and check-ins."
         }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Bownd to use your location to show venues and events near you. Your location stays on this device — it is never stored or shared.",
+          "locationAlwaysAndWhenInUsePermission": "Allow Bownd to use your location to show venues and events near you. Your location stays on this device — it is never stored or shared.",
+          "isIosBackgroundLocationEnabled": false,
+          "isAndroidBackgroundLocationEnabled": false
+        }
       ]
     ],
 
