@@ -4,15 +4,20 @@
 // mobile navigation kept).
 //
 // Every section shows live Supabase data or an explicit empty state.
-// No demo data, no fake numbers. The reference's figures (28 events,
-// 1,243 tickets, $23,892 revenue, $34.50 avg ticket, 89% attendance,
-// Brickhouse / Brooklyn / Alex Thompson, Indie Fridays $4,560, …)
-// are MOCKUP and are never shown. Ticket/revenue/attendance metrics
-// have no backing (Livework has no ticketing) — those cards are
-// omitted with an honest note, never invented numbers and never 0
-// presented as sales. Projections / Audience / Smart Suggestions
-// have no backing data — honest empty states, never invented
-// forecasts, demographics, or suggestions.
+// No demo data, no fake numbers — EXCEPT the operator-only demo mode
+// (lib/demo.ts): when the operator toggles "Preview demo", the whole
+// dashboard swaps to a bundled, clearly-labeled sample dataset so
+// Livework looks full when shown to someone. Demo mode never mixes
+// with real data, never counts toward real metrics, shows $0 revenue,
+// and demo rows have no Edit/Delete/publish/export. The reference's
+// figures (28 events, 1,243 tickets, $23,892 revenue, $34.50 avg
+// ticket, 89% attendance, Brickhouse / Brooklyn / Alex Thompson,
+// Indie Fridays $4,560, …) are MOCKUP and are never shown.
+// Ticket/revenue/attendance metrics have no backing (Livework has no
+// ticketing) — those cards are omitted with an honest note, never
+// invented numbers and never 0 presented as sales. Projections /
+// Audience / Smart Suggestions have no backing data — honest empty
+// states, never invented forecasts, demographics, or suggestions.
 //
 // Requires phase-a-ui Auth (<AuthProvider> in app/_layout.tsx).
 import React, { useCallback, useEffect, useState } from "react";
@@ -40,6 +45,12 @@ import {
   type DashboardEvent,
   type RangeKey,
 } from "../lib/data";
+import {
+  buildDemoDashboard,
+  DEMO_REDEMPTION_COUNT,
+  DEMO_VENUE_COUNT,
+  isOperatorEmail,
+} from "../lib/demo";
 import { useAuth } from "../lib/auth";
 import { supabase } from "../lib/supabase";
 import { getUserTenantIds, getUserVenues } from "../lib/tenant";
@@ -90,9 +101,24 @@ export default function DashboardScreen() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [venueCount, setVenueCount] = useState<number | null>(null);
   const [redemptionCount, setRedemptionCount] = useState<number | null>(null);
+  // Demo mode: operator-only showcase view (lib/demo.ts). Session-only
+  // state — every fresh open starts on REAL data. While demo is on, no
+  // Supabase queries run and nothing on screen is real data.
+  const [demoOn, setDemoOn] = useState(false);
+  const isOperator = isOperatorEmail(session?.user?.email ?? null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
+    if (demoOn) {
+      // Demo: bundled sample dataset only — no Supabase reads, no real
+      // rows. Counts are the demo constants, never real metrics.
+      const userName = session?.user?.email?.split("@")[0] ?? "there";
+      setData(buildDemoDashboard(range, userName));
+      setVenueCount(DEMO_VENUE_COUNT);
+      setRedemptionCount(DEMO_REDEMPTION_COUNT);
+      setLoading(false);
+      return;
+    }
     const d = await fetchDashboard(range);
     setData(d);
     // Venue + redemption counts: real rows only, same queries the
@@ -121,7 +147,7 @@ export default function DashboardScreen() {
       setRedemptionCount(null);
     }
     setLoading(false);
-  }, [range]);
+  }, [range, demoOn, session?.user?.email]);
 
   useEffect(() => {
     if (session) void refresh();
@@ -130,16 +156,25 @@ export default function DashboardScreen() {
 
   // Per-section fetches: each section reuses fetchDashboard with its OWN
   // range and renders only its own fields, so the sections are truly
-  // independent of each other and of the global range.
+  // independent of each other and of the global range. In demo mode the
+  // sections use the same bundled sample dataset.
   const refreshActivity = useCallback(async () => {
+    if (demoOn) {
+      setActivityData(buildDemoDashboard(activityRange, session?.user?.email?.split("@")[0] ?? "there"));
+      return;
+    }
     const d = await fetchDashboard(activityRange);
     setActivityData(d);
-  }, [activityRange]);
+  }, [activityRange, demoOn, session?.user?.email]);
 
   const refreshTop = useCallback(async () => {
+    if (demoOn) {
+      setTopData(buildDemoDashboard(topRange, session?.user?.email?.split("@")[0] ?? "there"));
+      return;
+    }
     const d = await fetchDashboard(topRange);
     setTopData(d);
-  }, [topRange]);
+  }, [topRange, demoOn, session?.user?.email]);
 
   useEffect(() => {
     if (session) void refreshActivity();
@@ -151,6 +186,12 @@ export default function DashboardScreen() {
 
   async function onExport() {
     if (!data) return;
+    // Demo data must never leave the app as if it were real: exporting
+    // sample rows could be mistaken for a real export.
+    if (demoOn) {
+      Alert.alert("Demo data can't be exported", "Switch back to your real data to export.");
+      return;
+    }
     if (data.events.length === 0 && data.verifiedRevenue === 0) {
       Alert.alert("Nothing to export yet", "No events or verified revenue in this range.");
       return;
@@ -179,6 +220,12 @@ export default function DashboardScreen() {
   // RLS restricts deletes to the vendor's tenants; the list only shows
   // the vendor's own events, so this can only delete their own rows.
   async function onDeleteEvent(e: Pick<DashboardEvent, "id" | "title">) {
+    // Defense in depth: demo rows have no Delete button, but a delete
+    // call for a demo id must never reach Supabase.
+    if (demoOn || e.id.startsWith("demo-")) {
+      Alert.alert("Sample event", "Demo data can't be deleted.");
+      return;
+    }
     Alert.alert("Delete event?", `Delete "${e.title}"? This cannot be undone.`, [
       { text: "Cancel", style: "cancel" },
       {
@@ -254,6 +301,32 @@ export default function DashboardScreen() {
             <Text style={styles.exportText}>Export</Text>
           </Pressable>
         </View>
+
+        {/* Operator-only demo toggle. While demo is on, the whole
+            dashboard shows the bundled sample dataset (lib/demo.ts)
+            — no real queries run and nothing on screen is real. */}
+        {isOperator && (
+          <Pressable
+            style={[styles.demoToggleBtn, demoOn && styles.demoToggleBtnActive]}
+            onPress={() => setDemoOn((v) => !v)}
+          >
+            <Text style={styles.demoToggleText}>
+              {demoOn ? "Exit demo — back to real data" : "Preview demo"}
+            </Text>
+          </Pressable>
+        )}
+
+        {/* DEMO banner — always visible while demo is on so sample data
+            can never be mistaken for real data. */}
+        {demoOn && (
+          <View style={styles.demoBanner}>
+            <Text style={styles.demoBannerTitle}>DEMO — sample data, not real</Text>
+            <Text style={styles.demoBannerText}>
+              Nothing here is your real venue data. Demo events can&apos;t be edited,
+              deleted, published, or exported, and demo revenue is never earnings.
+            </Text>
+          </View>
+        )}
 
         <View style={styles.headerRow}>
           <Pressable style={styles.rangeBtn} onPress={() => setRangePickerOpen((v) => !v)}>
@@ -508,21 +581,29 @@ export default function DashboardScreen() {
                           not hidden behind the expand. The expand only
                           reveals the detail fields. Previously the actions
                           showed only after tapping a row (chevron hint
-                          only), so events looked uneditable. */}
-                      <View style={styles.eventActions}>
-                        <Pressable
-                          style={styles.actionBtn}
-                          onPress={() => router.push(`/edit-event?id=${e.id}`)}
-                        >
-                          <Text style={styles.actionText}>Edit</Text>
-                        </Pressable>
-                        <Pressable
-                          style={[styles.actionBtn, styles.deleteBtn]}
-                          onPress={() => void onDeleteEvent(e)}
-                        >
-                          <Text style={[styles.actionText, styles.deleteText]}>Delete</Text>
-                        </Pressable>
-                      </View>
+                          only), so events looked uneditable. In demo mode
+                          there are no Edit / Delete buttons: demo rows
+                          are sample data and can never be changed. */}
+                      {demoOn ? (
+                        <View style={styles.eventActions}>
+                          <Text style={styles.sampleBadge}>Sample</Text>
+                        </View>
+                      ) : (
+                        <View style={styles.eventActions}>
+                          <Pressable
+                            style={styles.actionBtn}
+                            onPress={() => router.push(`/edit-event?id=${e.id}`)}
+                          >
+                            <Text style={styles.actionText}>Edit</Text>
+                          </Pressable>
+                          <Pressable
+                            style={[styles.actionBtn, styles.deleteBtn]}
+                            onPress={() => void onDeleteEvent(e)}
+                          >
+                            <Text style={[styles.actionText, styles.deleteText]}>Delete</Text>
+                          </Pressable>
+                        </View>
+                      )}
                     </View>
                   );
                 })
@@ -552,15 +633,22 @@ export default function DashboardScreen() {
                             </View>
                             {/* Calendar rows get the same Edit / Delete as
                                 the event list — previously the calendar
-                                showed events with no way to act on them. */}
-                            <View style={styles.calActions}>
-                              <Pressable onPress={() => router.push(`/edit-event?id=${e.id}`)}>
-                                <Text style={styles.calActionText}>Edit</Text>
-                              </Pressable>
-                              <Pressable onPress={() => void onDeleteEvent(e)}>
-                                <Text style={[styles.calActionText, styles.calDeleteText]}>Delete</Text>
-                              </Pressable>
-                            </View>
+                                showed events with no way to act on them.
+                                In demo mode: a Sample badge instead. */}
+                            {demoOn ? (
+                              <View style={styles.calActions}>
+                                <Text style={styles.sampleBadge}>Sample</Text>
+                              </View>
+                            ) : (
+                              <View style={styles.calActions}>
+                                <Pressable onPress={() => router.push(`/edit-event?id=${e.id}`)}>
+                                  <Text style={styles.calActionText}>Edit</Text>
+                                </Pressable>
+                                <Pressable onPress={() => void onDeleteEvent(e)}>
+                                  <Text style={[styles.calActionText, styles.calDeleteText]}>Delete</Text>
+                                </Pressable>
+                              </View>
+                            )}
                           </View>
                         ))}
                       </View>
@@ -887,4 +975,24 @@ const styles = StyleSheet.create({
     marginTop: 5,
   },
   activityText: { color: THEME.textMuted, fontSize: 13, flex: 1, lineHeight: 18 },
+  // Demo mode (operator-only showcase): toggle + banner + Sample badge.
+  demoToggleBtn: {
+    borderWidth: 1,
+    borderColor: "rgba(245,195,106,0.5)",
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: "center",
+  },
+  demoToggleBtnActive: { backgroundColor: "rgba(245,195,106,0.16)" },
+  demoToggleText: { color: "#f5c36a", fontWeight: "900", fontSize: 13 },
+  demoBanner: {
+    backgroundColor: "rgba(245,195,106,0.14)",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(245,195,106,0.55)",
+    padding: 14,
+  },
+  demoBannerTitle: { color: "#f5c36a", fontSize: 15, fontWeight: "900" },
+  demoBannerText: { color: "rgba(255,255,255,0.85)", fontSize: 12, lineHeight: 17, marginTop: 6 },
+  sampleBadge: { color: "#f5c36a", fontSize: 12, fontWeight: "900" },
 });
