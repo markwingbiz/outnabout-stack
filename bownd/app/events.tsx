@@ -209,7 +209,7 @@ export default function EventsScreen() {
       <View style={styles.root}>
         {/* Header */}
         <View style={styles.header}>
-          <Text style={styles.brand}>OutnAbout</Text>
+          <Text style={styles.brand}>Bownd</Text>
           <Text style={styles.h1}>Events</Text>
         </View>
 

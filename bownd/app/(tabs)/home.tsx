@@ -21,6 +21,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { fetchEvents, fetchVenues, type EventItem, type Venue } from "../../lib/store";
 import { useAuth } from "../../lib/auth";
 import { getShowcaseEvents, getShowcaseVenues, resolvePlaylists } from "../../data/showcase";
+import { categoryForVenueName, resolveCardImage } from "../../lib/placeholders";
+import { CardBackground } from "../../components/ui/CardBackground";
 import {
   BottomNav,
   EventCard,
@@ -53,7 +55,6 @@ function matchesHomeSearch(e: EventItem, venueName: string, q: string) {
   );
 }
 
-const VENUE_ICONS = ["wine-outline", "business-outline", "storefront-outline"] as const;
 
 export default function Home() {
   const router = useRouter();
@@ -125,8 +126,8 @@ export default function Home() {
     router.push({ pathname: "/detail", params: { id, kind: "event" } });
   }
 
-  function openVenue(name: string) {
-    router.push({ pathname: "/(tabs)/events", params: { venue: name } });
+  function openVenue(id: string, name: string) {
+    router.push({ pathname: "/(tabs)/events", params: { venueId: id, venue: name } });
   }
 
   function openSearchInEvents() {
@@ -213,18 +214,26 @@ export default function Home() {
                     ) : (
                       <TouchableOpacity
                         key={`venue:${item.venue.id}`}
-                        onPress={() => openVenue(item.venue.name)}
-                        style={refStyles.venueItem}
+                        onPress={() => openVenue(item.venue.id, item.venue.name)}
+                        activeOpacity={0.86}
+                        style={styles.venueCard}
                       >
-                        <LinearGradient
-                          colors={["#24364b", "#100d22"]}
-                          style={refStyles.venueIcon}
+                        <CardBackground
+                          source={resolveCardImage(
+                            item.venue.photoUrl,
+                            categoryForVenueName(item.venue.name)
+                          )}
+                          style={styles.venueCardBg}
+                          contentStyle={styles.venueCardContent}
                         >
-                          <Ionicons name="storefront-outline" size={31} color="#eee8ff" />
-                        </LinearGradient>
-                        <Text style={refStyles.venueName} numberOfLines={2}>
-                          {item.venue.name}
-                        </Text>
+                          <Text style={styles.venueCardName} numberOfLines={2}>
+                            {item.venue.name}
+                          </Text>
+                          {item.venue.isTest && (
+                            <Text style={styles.testBadgeText}>Test</Text>
+                          )}
+                          <Text style={styles.venueCardMeta}>Tap to view</Text>
+                        </CardBackground>
                       </TouchableOpacity>
                     )
                   )}
@@ -241,33 +250,24 @@ export default function Home() {
                   showsHorizontalScrollIndicator={false}
                   contentContainerStyle={{ gap: 12, paddingBottom: 10 }}
                 >
-                  {topVenues.map((v, i) => (
+                  {topVenues.map((v) => (
                     <TouchableOpacity
                       key={v.id}
-                      onPress={() => openVenue(v.name)}
-                      style={refStyles.venueItem}
+                      onPress={() => openVenue(v.id, v.name)}
+                      activeOpacity={0.86}
+                      style={styles.venueCard}
                     >
-                      <LinearGradient
-                        colors={
-                          i === 1 ? ["#5a47a4", "#151026"] : ["#24364b", "#100d22"]
-                        }
-                        style={refStyles.venueIcon}
+                      <CardBackground
+                        source={resolveCardImage(v.photoUrl, categoryForVenueName(v.name))}
+                        style={styles.venueCardBg}
+                        contentStyle={styles.venueCardContent}
                       >
-                        <Ionicons
-                          name={
-                            i === 0
-                              ? "wine-outline"
-                              : i === 1
-                                ? "business-outline"
-                                : "storefront-outline"
-                          }
-                          size={31}
-                          color="#eee8ff"
-                        />
-                      </LinearGradient>
-                      <Text style={refStyles.venueName} numberOfLines={2}>
-                        {v.name}
-                      </Text>
+                        <Text style={styles.venueCardName} numberOfLines={2}>
+                          {v.name}
+                        </Text>
+                        {v.isTest && <Text style={styles.testBadgeText}>Test</Text>}
+                        <Text style={styles.venueCardMeta}>Tap to view</Text>
+                      </CardBackground>
                     </TouchableOpacity>
                   ))}
                 </ScrollView>
@@ -287,27 +287,24 @@ export default function Home() {
                   showsHorizontalScrollIndicator={false}
                   contentContainerStyle={{ gap: 12, paddingBottom: 10 }}
                 >
-                  {visibleVenues.slice(0, 3).map((v, i) => (
+                  {visibleVenues.slice(0, 3).map((v) => (
                     <TouchableOpacity
                       key={v.id}
-                      onPress={() => openVenue(v.name)}
-                      style={refStyles.venueItem}
+                      onPress={() => openVenue(v.id, v.name)}
+                      activeOpacity={0.86}
+                      style={styles.venueCard}
                     >
-                      <LinearGradient
-                        colors={
-                          i === 1 ? ["#5a47a4", "#151026"] : ["#24364b", "#100d22"]
-                        }
-                        style={refStyles.venueIcon}
+                      <CardBackground
+                        source={resolveCardImage(v.photoUrl, categoryForVenueName(v.name))}
+                        style={styles.venueCardBg}
+                        contentStyle={styles.venueCardContent}
                       >
-                        <Ionicons
-                          name={VENUE_ICONS[i % VENUE_ICONS.length]}
-                          size={31}
-                          color="#eee8ff"
-                        />
-                      </LinearGradient>
-                      <Text style={refStyles.venueName} numberOfLines={2}>
-                        {v.name}
-                      </Text>
+                        <Text style={styles.venueCardName} numberOfLines={2}>
+                          {v.name}
+                        </Text>
+                        {v.isTest && <Text style={styles.testBadgeText}>Test</Text>}
+                        <Text style={styles.venueCardMeta}>Tap to view</Text>
+                      </CardBackground>
                     </TouchableOpacity>
                   ))}
                 </ScrollView>
@@ -372,5 +369,36 @@ const styles = StyleSheet.create({
   },
   playlistCardWrap: {
     width: 280,
+  },
+  // Venue cards — same photo-card style as the Events tab Top Venues
+  // rail (photo background, name, "Tap to view"). Replaces the old
+  // small icon tiles.
+  venueCard: {
+    width: 190,
+    marginRight: 12,
+    marginBottom: 0,
+    minHeight: 110,
+    borderRadius: 17,
+    overflow: "hidden",
+  },
+  venueCardBg: { flex: 1, borderRadius: 17 },
+  venueCardContent: { padding: 13, justifyContent: "space-between" },
+  venueCardName: {
+    color: "rgba(255,255,255,0.95)",
+    fontSize: 16,
+    fontWeight: "900",
+    lineHeight: 20,
+  },
+  venueCardMeta: {
+    marginTop: 10,
+    color: "rgba(255,255,255,0.62)",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  testBadgeText: {
+    color: "#f5c36a",
+    fontWeight: "900",
+    fontSize: 11,
+    marginTop: 4,
   },
 });

@@ -5,7 +5,8 @@ export type PersonaProfile = {
   vibe: "spicy" | "fun" | "relaxed" | "adventurous" | "sporty";
 };
 
-const KEY = "OUTNABOUT_PERSONA_V1";
+const KEY = "BOWND_PERSONA_V1";
+const LEGACY_KEY = "OUTNABOUT_PERSONA_V1";
 
 export const DEFAULT_PERSONA: PersonaProfile = {
   audience: "singles",
@@ -30,7 +31,17 @@ function normalizePersona(p: any): PersonaProfile {
 
 export async function loadPersona(): Promise<PersonaProfile> {
   try {
-    const raw = await AsyncStorage.getItem(KEY);
+    let raw = await AsyncStorage.getItem(KEY);
+    if (!raw) {
+      // One-time migration from the pre-rebrand key: carry the saved
+      // persona over, then drop the legacy key.
+      const legacy = await AsyncStorage.getItem(LEGACY_KEY);
+      if (legacy) {
+        raw = legacy;
+        await AsyncStorage.setItem(KEY, legacy);
+        await AsyncStorage.removeItem(LEGACY_KEY);
+      }
+    }
     if (!raw) return DEFAULT_PERSONA;
     return normalizePersona(JSON.parse(raw));
   } catch {

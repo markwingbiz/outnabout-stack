@@ -164,7 +164,20 @@ export default function DetailScreen() {
   }
 
   function openVenueEvents() {
-    router.push({ pathname: "/(tabs)/events", params: { venue: venueName } });
+    // Pass the venue's Firestore doc id (exact match) AND its display
+    // name (chip label + legacy name matching). The Events tab matches
+    // by id first, so this always lands on the correct venue even when
+    // the event's venueId is a legacy name.
+    const venue = demoVenue
+      ? undefined
+      : venues.find((x) => x.id === event?.venueId || x.name === event?.venueId);
+    router.push({
+      pathname: "/(tabs)/events",
+      params: {
+        venueId: demoVenue ? demoVenue.id : (venue?.id ?? event?.venueId ?? ""),
+        venue: venueName,
+      },
+    });
   }
 
   async function openWebsite(url: string) {

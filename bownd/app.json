@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "OutnAbout",
+    "name": "Bownd",
     "slug": "vibekc",
     "scheme": "vibekc",
     "version": "1.0.1",
@@ -32,7 +32,7 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow OutnAbout to access your camera to scan QR codes for rewards and check-ins."
+          "cameraPermission": "Allow Bownd to access your camera to scan QR codes for rewards and check-ins."
         }
       ]
     ],

@@ -333,7 +333,10 @@ export default function PersonalScreen() {
                       <TouchableOpacity
                         key={item.id}
                         onPress={() =>
-                          router.push({ pathname: "/(tabs)/events", params: { venue: item.title } })
+                          router.push({
+                            pathname: "/(tabs)/events",
+                            params: { venueId: item.id, venue: item.title },
+                          })
                         }
                         style={[styles.tile, { padding: 0 }]}
                       >
@@ -349,6 +352,7 @@ export default function PersonalScreen() {
                           <Text style={styles.tileSub} numberOfLines={1}>
                             {item.subtitle || "Kansas City"}
                           </Text>
+                          <Text style={styles.tileMeta}>Tap to view</Text>
                         </CardBackground>
                       </TouchableOpacity>
                     ))}
@@ -508,6 +512,7 @@ const styles = StyleSheet.create({
   tileTitle: { color: "#ffffff", fontSize: 16, fontWeight: "900", lineHeight: 20 },
   tileSub: { color: "rgba(255,255,255,0.85)", marginTop: 6, fontSize: 12, fontWeight: "800" },
   tileWhen: { marginTop: 8, color: "#ffffff", fontSize: 12, fontWeight: "900" },
+  tileMeta: { marginTop: 8, color: "rgba(255,255,255,0.62)", fontSize: 12, fontWeight: "800" },
   rowCard: {
     flexDirection: "row",
     alignItems: "center",
