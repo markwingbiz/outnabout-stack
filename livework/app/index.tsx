@@ -302,6 +302,17 @@ export default function DashboardScreen() {
           </Pressable>
         </View>
 
+        {/* Create Event — prominent entry point at the very top of the
+            dashboard. Previously the only way in was the "Add New Event"
+            card buried mid-scroll, so creating an event was hard to find.
+            This button just opens the same add-event form. In demo mode
+            it creates a REAL event in the form (saving works as usual) —
+            the demo banner explains the dashboard data is sample. */}
+        <Pressable style={styles.createEventTopBtn} onPress={() => router.push("/add-event")}>
+          <Ionicons name="add-circle" size={20} color="#fff" />
+          <Text style={styles.createEventTopText}>Create Event</Text>
+        </Pressable>
+
         {/* Operator-only demo toggle. While demo is on, the whole
             dashboard shows the bundled sample dataset (lib/demo.ts)
             — no real queries run and nothing on screen is real. */}
@@ -945,6 +956,17 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginTop: 4,
   },
+  createEventTopBtn: {
+    backgroundColor: THEME.purple,
+    borderRadius: 12,
+    height: 52,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginTop: 14,
+  },
+  createEventTopText: { color: "#fff", fontWeight: "900", fontSize: 16 },
   createBtnText: { color: "#fff", fontWeight: "900", fontSize: 15 },
   addEventNote: { color: THEME.textFaint, fontSize: 11 },
   boostCard: {
