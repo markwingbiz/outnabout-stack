@@ -42,10 +42,15 @@ import { THEME } from "../lib/theme";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../lib/auth";
 import { getUserTenantIds, getUserVenues, type TenantVenue } from "../lib/tenant";
+import { canPublishToBownd, verificationLabel, verificationStatusOf } from "../lib/verification";
 
 // Publish-request creation is ENABLED — see the verified-live notes in
 // the file header. Keys: venue `livework:venue:<venue_id>`, event
 // `livework:<event_id>`.
+//
+// Verification gate (v1): publishing is UX-blocked here when the event's
+// venue is not verified — bownd-sync ALSO enforces it server-side
+// (request would fail with 'venue_unverified'). is_test venues exempt.
 
 /** Statuses that mean "already queued or live" — never insert over these. */
 const ACTIVE_REQUEST_STATUSES = ["pending", "processing", "published"];
@@ -193,6 +198,15 @@ export default function PublishScreen() {
       return;
     }
     const venue = venues.find((v) => v.id === ev.venueId);
+    // UX gate: refuse to queue until the venue is verified. The vendor
+    // requests a review from My Venues; after approval this unblocks.
+    if (venue && !canPublishToBownd(venue)) {
+      Alert.alert(
+        "Venue not verified",
+        `"${venue.name}" is ${verificationLabel(verificationStatusOf(venue)).toLowerCase()} — only verified venues publish to Bownd. Request a verification review from My Venues, and publishing unlocks after approval.`,
+      );
+      return;
+    }
     const tenantId = ev.tenantId ?? venue?.tenant_id ?? null;
     if (!tenantId) {
       Alert.alert("Could not publish", "Couldn't determine which tenant owns this event.");

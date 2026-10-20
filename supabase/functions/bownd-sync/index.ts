@@ -10,6 +10,14 @@
 //   Firestore write is set-with-merge on the stored doc ref (re-publishing
 //   the same request produces the same doc, never a duplicate).
 //
+//   VERIFICATION GATE: a venue publishes only when
+//   venues.verification_status = 'verified' (v1 = manual operator review;
+//   verification_method records how). Event publishes are gated on their
+//   venue. is_test venues are exempt (operator test data, never public).
+//   Unverified => the request fails with 'venue_unverified'; it is
+//   retryable, so after an operator verifies the venue the vendor just
+//   retries. This gate is server-side — the apps cannot bypass it.
+//
 // 'mirror' (Firestore -> Supabase): lists Firestore events / venues /
 //   redemptions changed since the per-collection watermark in
 //   bownd_mirror_state, upserts them into Supabase, advances the watermark,
@@ -752,6 +760,46 @@ async function noteRequestError(
   }
 }
 
+/**
+ * Venue verification gate (v1: manual operator review).
+ * A venue publishes only when venues.verification_status = 'verified'.
+ * Event publishes are gated on the venue the event belongs to.
+ * Operator test rows (venues.is_test = true) are EXEMPT — test data,
+ * never public. Fail-closed: a missing/unknown status blocks.
+ * The gate reads STATUS only, so v2 phone codes slot in by writing
+ * the same column (verification_method records how it was verified).
+ */
+async function checkVenueVerification(
+  service: SupabaseClient,
+  kind: "event" | "venue",
+  supabaseRow: Record<string, unknown>,
+): Promise<{ ok: boolean; detail: string }> {
+  let venue: Record<string, unknown> | null = null;
+  if (kind === "venue") {
+    venue = supabaseRow;
+  } else {
+    const venueId = asNonEmptyString(supabaseRow.venue_id);
+    if (!venueId) return { ok: true, detail: "" }; // venue-less event — nothing to gate on.
+    const { data, error } = await service
+      .from("venues")
+      .select("id, name, is_test, verification_status")
+      .eq("id", venueId)
+      .maybeSingle();
+    if (error) return { ok: false, detail: `Venue lookup for verification gate failed: ${error.message}` };
+    if (!data) return { ok: false, detail: `The event's venue (${venueId}) was not found.` };
+    venue = data as Record<string, unknown>;
+  }
+  if (venue.is_test === true) return { ok: true, detail: "" };
+  const status =
+    typeof venue.verification_status === "string" ? venue.verification_status : "unverified";
+  if (status === "verified") return { ok: true, detail: "" };
+  const name = asNonEmptyString(venue.name) ?? String(venue.id);
+  return {
+    ok: false,
+    detail: `Venue "${name}" is not verified (status: ${status}). An operator reviews every venue claim before it can publish to Bownd — request a review in Livework, then retry the publish.`,
+  };
+}
+
 /** Resolve the Firestore venue doc id for a Supabase venue id. */
 async function resolveFirestoreVenueRef(
   service: SupabaseClient,
@@ -807,6 +855,10 @@ function supabaseVenueToFirestore(
     tenantRef,
     tenantId,
     isTest: rowIsTest(row),
+    // Verification flag for Bownd's "Verified" venue badge. Only
+    // verified (or test) venues pass the publish gate above, so this is
+    // true for every non-test venue doc Bownd reads.
+    verified: row.verification_status === "verified",
     sourceRef: `supabase:${String(row.id)}`,
     updatedAt: SERVER_TIMESTAMP,
   };
@@ -873,6 +925,11 @@ async function publishOne(
       `No bownd_tenant_map row for tenant_id ${tenantId}. Establish the mapping at Bownd launch — Forge escalates this via a GitHub issue; this function does not guess one.`,
     );
   }
+
+  // Venue verification gate — server-side, the apps cannot bypass it.
+  // Unverified venues (and their events) never reach Bownd.
+  const gate = await checkVenueVerification(service, kind, supabaseRow);
+  if (!gate.ok) return await fail("venue_unverified", gate.detail);
 
   // Build the Firestore doc.
   let firestoreDoc: Record<string, unknown>;

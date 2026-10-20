@@ -61,6 +61,7 @@ export default function RootLayout() {
           <Stack.Screen name="edit-event" />
           <Stack.Screen name="redemptions" />
           <Stack.Screen name="publish" />
+          <Stack.Screen name="verify-review" />
           <Stack.Screen name="(auth)" />
         </Stack>
       </TenantGate>

@@ -225,6 +225,7 @@ export default function WhatsCloseScreen() {
                     <Text style={styles.muted}>
                       {formatDistance(miles)} away · {eventCount} event
                       {eventCount === 1 ? "" : "s"}
+                      {venue.verified ? " · ✓ Verified" : ""}
                       {venue.isTest ? " · Test" : ""}
                       {usingDemo ? " · Sample" : ""}
                     </Text>

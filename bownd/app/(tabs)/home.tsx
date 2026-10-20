@@ -183,6 +183,9 @@ export default function Home() {
                   {item.venue.isTest && (
                     <Text style={styles.testBadgeText}>Test</Text>
                   )}
+                  {item.venue.verified && (
+                    <Text style={styles.verifiedBadgeText}>✓ Verified</Text>
+                  )}
                   <Text style={styles.venueCardMeta}>Tap to view</Text>
                 </CardBackground>
               </TouchableOpacity>
@@ -294,6 +297,7 @@ export default function Home() {
                           {v.name}
                         </Text>
                         {v.isTest && <Text style={styles.testBadgeText}>Test</Text>}
+                        {v.verified && <Text style={styles.verifiedBadgeText}>✓ Verified</Text>}
                         <Text style={styles.venueCardMeta}>Tap to view</Text>
                       </CardBackground>
                     </TouchableOpacity>
@@ -335,6 +339,7 @@ export default function Home() {
                           {v.name}
                         </Text>
                         {v.isTest && <Text style={styles.testBadgeText}>Test</Text>}
+                        {v.verified && <Text style={styles.verifiedBadgeText}>✓ Verified</Text>}
                         <Text style={styles.venueCardMeta}>Tap to view</Text>
                       </CardBackground>
                     </TouchableOpacity>
@@ -429,6 +434,12 @@ const styles = StyleSheet.create({
   },
   testBadgeText: {
     color: "#f5c36a",
+    fontWeight: "900",
+    fontSize: 11,
+    marginTop: 4,
+  },
+  verifiedBadgeText: {
+    color: "#7ee2a0",
     fontWeight: "900",
     fontSize: 11,
     marginTop: 4,

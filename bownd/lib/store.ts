@@ -103,6 +103,10 @@ export type Venue = {
   photoUrl?: string;
   // Operator-only test flag — see EventItem.isTest.
   isTest?: boolean;
+  // Verification gate: true when the venue passed operator verification
+  // (bownd-sync writes this from venues.verification_status). Verified
+  // venues show a "✓ Verified" badge in the UI.
+  verified?: boolean;
 };
 
 export type UserProfile = {
@@ -189,6 +193,7 @@ function toVenue(id: string, data: any): Venue {
     featured: data.featured === true,
     photoUrl: typeof data.photoUrl === "string" ? data.photoUrl : undefined,
     isTest: data.isTest === true,
+    verified: data.verified === true,
   };
 }
 
