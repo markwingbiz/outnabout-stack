@@ -1,7 +1,8 @@
 // forge-deliverable-admin — Operator-only deliverable lifecycle (Phase 8 Slice 2).
 //
 // POST { action: 'transition_deliverable', deliverable_id,
-//        transition: 'approve'|'publish'|'reject', idempotency_key? }
+//        transition: 'approve'|'publish'|'reject', idempotency_key?,
+//        reason? }
 //
 // Only forge_operator (admin counts). Transitions are enforced here,
 // never in the UI (design §5.1):
@@ -9,7 +10,11 @@
 //   publish: approved -> published (requires the linked approval, when
 //            approval_id is set, to be 'approved' — a deliverable is
 //            only published after its approval, if required, is approved)
-//   reject:  draft|ready -> rejected
+//   reject:  draft|ready -> failed (the deliverables CHECK allows only
+//            draft/ready/approved/published/failed — there is no
+//            'rejected'. 'failed' means REWORK, never a dead end: the
+//            row is stamped with metadata.needs_rework so the worker
+//            loop picks it back up for revision. Mark, 2026-10-21.)
 //
 // Idempotent replay: a deliverable already in the target status returns
 // its current row with deduped: true and changes nothing.
@@ -40,7 +45,7 @@ const TRANSITIONS: Record<
 > = {
   approve: { from: ["ready"], to: "approved", audit: "deliverable.approved" },
   publish: { from: ["approved"], to: "published", audit: "deliverable.published" },
-  reject: { from: ["draft", "ready"], to: "rejected", audit: "deliverable.rejected" },
+  reject: { from: ["draft", "ready"], to: "failed", audit: "deliverable.rejected" },
 };
 
 Deno.serve((req) =>
@@ -61,6 +66,9 @@ Deno.serve((req) =>
     if (!rule) {
       throw new HttpError(400, "transition must be 'approve', 'publish', or 'reject'");
     }
+    // Optional rejection reason (the current Livework+ caller does not
+    // send one; accepted so a reason can ride along when provided).
+    const reason = typeof body.reason === "string" ? body.reason.trim() : "";
 
     const { data: deliverable, error } = await service
       .from("deliverables")
@@ -102,9 +110,29 @@ Deno.serve((req) =>
       }
     }
 
+    const update: Record<string, unknown> = { status: rule.to };
+    if (transition === "reject") {
+      // REWORK stamp (Mark, 2026-10-21): 'failed' sends the deliverable
+      // back to its producing worker via the loop, so record everything
+      // the loop needs to pick it back up — merged over existing metadata.
+      const existingMetadata =
+        deliverable.metadata &&
+        typeof deliverable.metadata === "object" &&
+        !Array.isArray(deliverable.metadata)
+          ? (deliverable.metadata as Record<string, unknown>)
+          : {};
+      update.metadata = {
+        ...existingMetadata,
+        needs_rework: true,
+        rework_reason: reason || null,
+        rejected_at: new Date().toISOString(),
+        rejected_from_status: current,
+      };
+    }
+
     const { data: updated, error: updateError } = await service
       .from("deliverables")
-      .update({ status: rule.to })
+      .update(update)
       .eq("id", deliverableId)
       .select("*")
       .single();
