@@ -36,6 +36,8 @@ import {
 } from "../../lib/store";
 import { useAuth } from "../../lib/auth";
 import { getShowcaseEvents, getShowcaseVenues } from "../../data/showcase";
+import { categoryForVenueName, resolveCardImage, resolveEventCardImage } from "../../lib/placeholders";
+import { CardBackground } from "../../components/ui/CardBackground";
 import {
   BottomNav,
   EventCard,
@@ -74,6 +76,24 @@ function nextSunday(from: Date) {
   const diff = (0 - day + 7) % 7;
   return startOfDay(addDays(d, diff));
 }
+function matchesVenueFilter(
+  e: EventItem,
+  venueId: string | null,
+  venueName: string | null,
+  venues: Venue[]
+): boolean {
+  if (!venueId && !venueName) return true;
+  // Exact id match first: the id is unambiguous even when two venues
+  // share a name or the event carries a legacy venue name.
+  if (venueId && e.venueId.toLowerCase() === venueId.toLowerCase()) return true;
+  if (venueName) {
+    const want = venueName.toLowerCase();
+    if (getVenueName(e.venueId, venues).toLowerCase() === want) return true;
+    if (e.venueId.toLowerCase() === want) return true;
+  }
+  return false;
+}
+
 function uniq<T>(arr: T[]) {
   return Array.from(new Set(arr));
 }
@@ -143,11 +163,12 @@ function FavButton({ isFav, onToggle }: { isFav: boolean; onToggle: () => void }
 export default function EventsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ q?: string; venue?: string }>();
+  const params = useLocalSearchParams<{ q?: string; venue?: string; venueId?: string }>();
   const { user } = useAuth();
 
   const [query, setQuery] = useState("");
   const [venueFilter, setVenueFilter] = useState<string | null>(null);
+  const [venueIdFilter, setVenueIdFilter] = useState<string | null>(null);
   const [persona, setPersona] = useState<PersonaProfile>(DEFAULT_PERSONA);
   const [timeChip, setTimeChip] = useState<TimeChip>("tonight");
   const [personalizedOn, setPersonalizedOn] = useState<boolean>(false);
@@ -190,7 +211,9 @@ export default function EventsScreen() {
   const [venues, setVenues] = useState<Venue[]>([]);
   useEffect(() => {
     let alive = true;
-    Promise.all([fetchEvents(), fetchVenues()]).then(([rows, venueRows]) => {
+    // Pass the viewer's email so operator-only test items are visible
+    // only to the operator (store.ts filters for everyone else).
+    Promise.all([fetchEvents(user?.email ?? null), fetchVenues(user?.email ?? null)]).then(([rows, venueRows]) => {
       if (alive) {
         setEvents(rows);
         setVenues(venueRows);
@@ -199,7 +222,7 @@ export default function EventsScreen() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [user?.email]);
 
   // Wholesale showcase fallback: demo only when the real catalog is
   // completely empty. Never mixed with real data.
@@ -207,11 +230,21 @@ export default function EventsScreen() {
   const effEvents = usingDemo ? getShowcaseEvents() : events;
   const effVenues = usingDemo ? getShowcaseVenues() : venues;
 
-  // Incoming params (Home search, venue orbs, Personal favorites).
+  // Incoming params (Home search, venue cards, Personal favorites,
+  // detail "See venue events"). Venue navigation passes the venue's
+  // Firestore id + display name. Arriving with a venue filter resets
+  // the time chip to "all": the user asked for THIS venue's events,
+  // and the tonight chip would otherwise zero the list ("No events
+  // match your filters") even when the venue has events this week.
   useEffect(() => {
     if (typeof params.q === "string" && params.q.trim()) setQuery(params.q);
-    if (typeof params.venue === "string" && params.venue.trim()) setVenueFilter(params.venue);
-  }, [params.q, params.venue]);
+    if (typeof params.venue === "string" && params.venue.trim()) {
+      setVenueFilter(params.venue);
+      setTimeChip("all");
+    }
+    if (typeof params.venueId === "string" && params.venueId.trim())
+      setVenueIdFilter(params.venueId);
+  }, [params.q, params.venue, params.venueId]);
 
   function go(route: string) {
     router.replace(route);
@@ -222,7 +255,12 @@ export default function EventsScreen() {
   }
 
   function openVenue(name: string) {
+    // Look up the id so matching is exact even if two venues share a
+    // name; viewing a venue resets the time chip to "all".
+    const v = effVenues.find((x) => x.name === name);
+    setVenueIdFilter(v?.id ?? null);
     setVenueFilter(name);
+    setTimeChip("all");
   }
 
   async function onToggleFav(item: EventItem) {
@@ -268,19 +306,14 @@ export default function EventsScreen() {
     const base = effEvents
       .filter((e) => inTimeWindow(e, timeChip))
       .filter((e) => matchesSearch(e, getVenueName(e.venueId, effVenues), query))
-      .filter((e) =>
-        venueFilter
-          ? getVenueName(e.venueId, effVenues).toLowerCase() === venueFilter.toLowerCase() ||
-            e.venueId.toLowerCase() === venueFilter.toLowerCase()
-          : true
-      );
+      .filter((e) => matchesVenueFilter(e, venueIdFilter, venueFilter, effVenues));
     const personaFiltered = personalizedOn ? base.filter((e) => matchesPersona(e, persona)) : base;
     return [...personaFiltered].sort((a, b) => {
       const da = parseISO(a.startISO)?.getTime() ?? Number.MAX_SAFE_INTEGER;
       const db = parseISO(b.startISO)?.getTime() ?? Number.MAX_SAFE_INTEGER;
       return da - db;
     });
-  }, [persona, personalizedOn, query, timeChip, effEvents, venueFilter, effVenues]);
+  }, [persona, personalizedOn, query, timeChip, effEvents, venueFilter, venueIdFilter, effVenues]);
 
   const headerSubtitle = useMemo(() => {
     const city = "Kansas City";
@@ -340,13 +373,16 @@ export default function EventsScreen() {
         </View>
 
         {/* Venue filter chip */}
-        {!!venueFilter && (
+        {!!(venueFilter || venueIdFilter) && (
           <View style={styles.venueFilterRow}>
             <Text style={styles.venueFilterText} numberOfLines={1}>
-              Venue: {venueFilter}
+              Venue: {venueFilter ?? venueIdFilter}
             </Text>
             <TouchableOpacity
-              onPress={() => setVenueFilter(null)}
+              onPress={() => {
+                setVenueFilter(null);
+                setVenueIdFilter(null);
+              }}
               hitSlop={8}
               style={styles.venueFilterClear}
             >
@@ -369,22 +405,28 @@ export default function EventsScreen() {
                 key={item.id}
                 onPress={() => openEvent(item.id)}
                 activeOpacity={0.86}
-                style={[refStyles.tailored, styles.tailoredCard]}
+                style={[refStyles.tailored, styles.tailoredCard, { padding: 0, overflow: "hidden" }]}
               >
-                <Text style={refStyles.micro}>{formatWhen(item.startISO)}</Text>
-                <Text style={refStyles.tailoredTitle} numberOfLines={3}>
-                  {item.title}
-                </Text>
-                <Text style={refStyles.muted}>{getVenueName(item.venueId, effVenues)}</Text>
-                <View style={refStyles.tagRow}>
-                  {uniq([...(item.vibeTags || []), ...(item.audienceTags || [])])
-                    .slice(0, 3)
-                    .map((t) => (
-                      <View key={`${item.id}_${t}`} style={refStyles.tag}>
-                        <Text style={refStyles.tagText}>{t}</Text>
-                      </View>
-                    ))}
-                </View>
+                <CardBackground
+                  source={resolveEventCardImage(item.photoUrl)}
+                  style={styles.tailoredBg}
+                  contentStyle={styles.tailoredContent}
+                >
+                  <Text style={refStyles.micro}>{formatWhen(item.startISO)}</Text>
+                  <Text style={refStyles.tailoredTitle} numberOfLines={3}>
+                    {item.title}
+                  </Text>
+                  <Text style={refStyles.muted}>{getVenueName(item.venueId, effVenues)}</Text>
+                  <View style={refStyles.tagRow}>
+                    {uniq([...(item.vibeTags || []), ...(item.audienceTags || [])])
+                      .slice(0, 3)
+                      .map((t) => (
+                        <View key={`${item.id}_${t}`} style={refStyles.tag}>
+                          <Text style={refStyles.tagText}>{t}</Text>
+                        </View>
+                      ))}
+                  </View>
+                </CardBackground>
               </TouchableOpacity>
             ))}
           </ScrollView>
@@ -404,6 +446,7 @@ export default function EventsScreen() {
               venueName={getVenueName(item.venueId, effVenues)}
               label={formatWhen(item.startISO)}
               compact
+              photoUrl={item.photoUrl}
               onPress={() => openEvent(item.id)}
             />
           ))}
@@ -421,12 +464,24 @@ export default function EventsScreen() {
                 key={name}
                 onPress={() => openVenue(name)}
                 activeOpacity={0.86}
-                style={[refStyles.tailored, styles.venueRailCard]}
+                style={[refStyles.tailored, styles.venueRailCard, { padding: 0, overflow: "hidden" }]}
               >
-                <Text style={styles.venueRailName} numberOfLines={2}>
-                  {name}
-                </Text>
-                <Text style={styles.venueRailMeta}>Tap to view</Text>
+                <CardBackground
+                  source={resolveCardImage(
+                    effVenues.find((v) => v.name === name)?.photoUrl,
+                    categoryForVenueName(name)
+                  )}
+                  style={styles.tailoredBg}
+                  contentStyle={styles.venueRailContent}
+                >
+                  <Text style={styles.venueRailName} numberOfLines={2}>
+                    {name}
+                  </Text>
+                  {effVenues.find((v) => v.name === name)?.isTest && (
+                    <Text style={styles.testBadgeText}>Test</Text>
+                  )}
+                  <Text style={styles.venueRailMeta}>Tap to view</Text>
+                </CardBackground>
               </TouchableOpacity>
             ))}
           </ScrollView>
@@ -442,13 +497,19 @@ export default function EventsScreen() {
           </Text>
         ) : (
           allEvents.map((item) => (
-            <View key={item.id} style={styles.bigRow}>
+            <CardBackground
+              key={item.id}
+              source={resolveEventCardImage(item.photoUrl)}
+              style={styles.bigRow}
+              contentStyle={styles.bigRowContent}
+            >
               <TouchableOpacity onPress={() => openEvent(item.id)} style={StyleSheet.absoluteFill} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.bigWhen}>{formatWhen(item.startISO)}</Text>
                 <Text style={styles.bigTitle} numberOfLines={2}>
                   {item.title}
                 </Text>
+                {item.isTest && <Text style={styles.testBadgeText}>Test</Text>}
                 <Text style={styles.bigVenue} numberOfLines={1}>
                   {getVenueName(item.venueId, effVenues)}
                 </Text>
@@ -470,7 +531,7 @@ export default function EventsScreen() {
                 isFav={favKeys.has(`event:${item.id}`)}
                 onToggle={() => onToggleFav(item)}
               />
-            </View>
+            </CardBackground>
           ))
         )}
       </ScrollView>
@@ -511,6 +572,12 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     fontSize: 13,
   },
+  testBadgeText: {
+    color: "#f5c36a",
+    fontWeight: "900",
+    fontSize: 11,
+    marginTop: 4,
+  },
   showcaseChip: {
     alignSelf: "flex-start",
     paddingHorizontal: 12,
@@ -537,13 +604,15 @@ const styles = StyleSheet.create({
     marginRight: 12,
     marginBottom: 0,
   },
+  tailoredBg: { flex: 1, borderRadius: 17 },
+  tailoredContent: { padding: 13 },
   venueRailCard: {
     width: 190,
     marginRight: 12,
     marginBottom: 0,
-    justifyContent: "space-between",
     minHeight: 110,
   },
+  venueRailContent: { padding: 13, justifyContent: "space-between" },
   venueRailName: {
     color: "rgba(255,255,255,0.95)",
     fontSize: 16,
@@ -565,14 +634,15 @@ const styles = StyleSheet.create({
   bigRow: {
     borderRadius: 18,
     overflow: "hidden",
-    padding: 14,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.12)",
-    backgroundColor: "rgba(0,0,0,0.20)",
+    marginBottom: 10,
+  },
+  bigRowContent: {
     flexDirection: "row",
     gap: 12,
     alignItems: "center",
-    marginBottom: 10,
+    padding: 14,
   },
   bigWhen: {
     color: "rgba(255,255,255,0.70)",

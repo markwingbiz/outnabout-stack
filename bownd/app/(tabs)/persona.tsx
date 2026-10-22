@@ -113,7 +113,7 @@ export default function Persona() {
   return (
     <SpaceBackground>
       <View style={{ marginBottom: 10 }}>
-        <Text style={uiStyles.brand}>OutnAbout</Text>
+        <Text style={uiStyles.brand}>Bownd</Text>
         <Text style={uiStyles.h1}>Pick a vibe. Pick a plan.</Text>
       </View>
 

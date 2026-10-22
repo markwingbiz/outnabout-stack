@@ -37,15 +37,17 @@ export default function PersonalQrPanel({
   const [pressedA, setPressedA] = useState(false);
   const [pressedB, setPressedB] = useState(false);
 
-  const qrValue = useMemo(() => {
-    return value?.trim() ? value.trim() : "vibekc://qr?code=demo";
-  }, [value]);
+  // REAL codes only: no value means no code — never render a QR for a
+  // fake/demo placeholder value. Callers must pass a real token.
+  const qrValue = useMemo(() => value?.trim() ?? "", [value]);
+  const hasCode = qrValue.length > 0;
 
   const displayCode = useMemo(() => {
+    if (!hasCode) return "—";
     const v = qrValue;
     const chunk = v.split("=").pop() || v.split("/").pop() || v;
     return chunk.length > 18 ? chunk.slice(0, 18) + "…" : chunk;
-  }, [qrValue]);
+  }, [qrValue, hasCode]);
 
   return (
     <View style={styles.wrap}>
@@ -54,9 +56,13 @@ export default function PersonalQrPanel({
         {!!subtitle && <Text style={styles.subtitle}>{subtitle}</Text>}
 
         <View style={styles.qrFrame}>
-          <View style={styles.qrInner}>
-            <QRCode value={qrValue} size={size} />
-          </View>
+          {hasCode ? (
+            <View style={styles.qrInner}>
+              <QRCode value={qrValue} size={size} />
+            </View>
+          ) : (
+            <Text style={styles.noCodeText}>No code yet — generate one to show it here.</Text>
+          )}
         </View>
 
         <View style={styles.metaRow}>
@@ -132,6 +138,14 @@ const styles = StyleSheet.create({
     padding: 10,
     backgroundColor: "white",
     ...(Platform.OS === "android" ? { overflow: "hidden" } : { overflow: "hidden" }),
+  },
+  noCodeText: {
+    paddingVertical: 24,
+    paddingHorizontal: 12,
+    textAlign: "center",
+    color: "rgba(255,255,255,0.75)",
+    fontSize: 13,
+    fontWeight: "700",
   },
   metaRow: {
     marginTop: 10,

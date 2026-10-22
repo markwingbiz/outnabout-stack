@@ -12,7 +12,7 @@
 //   curated entry has one. No buttons are decorative: every pressable
 //   does something real.
 import React, { useEffect, useMemo, useState } from "react";
-import { SafeAreaView, View, Text, StyleSheet, ScrollView, Pressable, Alert } from "react-native";
+import { SafeAreaView, View, Text, StyleSheet, ScrollView, Pressable, Alert, ImageBackground } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Linking from "expo-linking";
 import { BrandBackground } from "./ui/BrandBackground";
@@ -35,6 +35,12 @@ import {
   findShowcaseVenue,
   isShowcaseId,
 } from "../data/showcase";
+import {
+  resolveCardImage,
+  categoryForVenueName,
+  categoryForText,
+  resolveEventCardImage,
+} from "../lib/placeholders";
 
 function formatWhen(startISO: string) {
   const d = new Date(startISO);
@@ -60,7 +66,9 @@ export default function DetailScreen() {
 
   useEffect(() => {
     let alive = true;
-    Promise.all([fetchEvents(), fetchVenues()]).then(([rows, venueRows]) => {
+    // Pass the viewer's email so operator-only test items are visible
+    // only to the operator (store.ts filters for everyone else).
+    Promise.all([fetchEvents(user?.email ?? null), fetchVenues(user?.email ?? null)]).then(([rows, venueRows]) => {
       if (alive) {
         setEvents(rows);
         setVenues(venueRows);
@@ -70,7 +78,7 @@ export default function DetailScreen() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [user?.email]);
 
   const demoEvent = useMemo(() => {
     if (kind === "experience" || kind === "venue") return undefined;
@@ -156,7 +164,20 @@ export default function DetailScreen() {
   }
 
   function openVenueEvents() {
-    router.push({ pathname: "/(tabs)/events", params: { venue: venueName } });
+    // Pass the venue's Firestore doc id (exact match) AND its display
+    // name (chip label + legacy name matching). The Events tab matches
+    // by id first, so this always lands on the correct venue even when
+    // the event's venueId is a legacy name.
+    const venue = demoVenue
+      ? undefined
+      : venues.find((x) => x.id === event?.venueId || x.name === event?.venueId);
+    router.push({
+      pathname: "/(tabs)/events",
+      params: {
+        venueId: demoVenue ? demoVenue.id : (venue?.id ?? event?.venueId ?? ""),
+        venue: venueName,
+      },
+    });
   }
 
   async function openWebsite(url: string) {
@@ -197,6 +218,18 @@ export default function DetailScreen() {
                   </Text>
                 </View>
               )}
+              {event.isTest && (
+                <View style={styles.demoBadge}>
+                  <Text style={styles.demoBadgeText}>Test — operator only, not a live listing</Text>
+                </View>
+              )}
+              <ImageBackground
+                source={resolveEventCardImage(event.photoUrl)}
+                style={styles.detailBanner}
+                resizeMode="cover"
+              >
+                <View style={styles.detailBannerScrim} />
+              </ImageBackground>
               <Text style={styles.h2}>{event.title}</Text>
               <Text style={styles.meta}>
                 {venueName} • {formatWhen(event.startISO)}
@@ -227,6 +260,13 @@ export default function DetailScreen() {
                   Showcase preview — not a live listing
                 </Text>
               </View>
+              <ImageBackground
+                source={resolveCardImage(demoVenue.photoUrl, categoryForVenueName(demoVenue.name))}
+                style={styles.detailBanner}
+                resizeMode="cover"
+              >
+                <View style={styles.detailBannerScrim} />
+              </ImageBackground>
               <Text style={styles.h2}>{demoVenue.name}</Text>
               <Text style={styles.meta}>Showcase preview venue</Text>
 
@@ -241,6 +281,16 @@ export default function DetailScreen() {
             </BrandCard>
           ) : experience ? (
             <BrandCard>
+              <ImageBackground
+                source={resolveCardImage(
+                  undefined,
+                  categoryForText(experience.title, ...experience.vibes, ...experience.personas)
+                )}
+                style={styles.detailBanner}
+                resizeMode="cover"
+              >
+                <View style={styles.detailBannerScrim} />
+              </ImageBackground>
               <Text style={styles.h2}>{experience.title}</Text>
               <Text style={styles.meta}>
                 {experience.neighborhood} • {experience.price} • {experience.duration}
@@ -305,6 +355,20 @@ const styles = StyleSheet.create({
     color: theme.text,
     fontSize: 22,
     fontWeight: "900",
+  },
+
+  // Detail header image: TEMP placeholder art (or the listing's real photo
+  // when one exists) above the title. No text sits on the image, so the
+  // scrim is only a light darkening for a finished look.
+  detailBanner: {
+    height: 180,
+    borderRadius: 14,
+    overflow: "hidden",
+    marginBottom: 14,
+  },
+  detailBannerScrim: {
+    flex: 1,
+    backgroundColor: "rgba(8,5,18,0.18)",
   },
 
   demoBadge: {

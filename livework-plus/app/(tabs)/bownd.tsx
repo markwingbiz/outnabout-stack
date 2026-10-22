@@ -3,8 +3,9 @@
 // Read-only mirror view: Bownd events + venues mirrored from Firestore
 // (source_ref 'bownd:<doc-id>'), Bownd redemptions (redemption_type
 // 'bownd_qr'), and sync status from bownd_mirror_state. "Sync now" is
-// DISABLED with the reason: bownd-sync is not deployed (Phase 9 — needs
-// the Firebase service account + tenant mapping). Nothing here writes.
+// DISABLED with the reason: the mirror is invoked from the operator
+// terminal (Supabase dashboard / function invoke with operator auth) —
+// no in-app invoke is wired. Nothing here writes.
 // Redemptions show "Venue not linked" when the mirror did not attach a
 // venue_id — the mirror does not populate venue_id/event_id today.
 import React, { useCallback, useEffect, useState } from "react";
@@ -132,15 +133,16 @@ function BowndContent() {
         </Pressable>
       </View>
 
-      {/* Sync status — read-only until Phase 9 */}
+      {/* Sync status — read-only; the mirror runs from the operator terminal */}
       <View style={[styles.card, styles.syncCard]}>
         <Text style={styles.sectionLabel}>Sync status</Text>
         <Text style={styles.syncNote}>
-          Sync is not live — bownd-sync is not deployed (Phase 9: needs the Firebase service
-          account + tenant mapping). Nothing below has been synced until the first mirror run.
+          Sync is live — bownd-sync is deployed. The mirror is invoked from the
+          operator terminal, not from this screen, so Sync now stays disabled
+          here. The rows below show mirrored Bownd data.
         </Text>
         <Pressable style={[styles.btn, styles.btnDisabled]} disabled>
-          <Text style={styles.btnText}>Sync now (disabled — sync not live)</Text>
+          <Text style={styles.btnText}>Sync now (disabled — mirror runs from the operator terminal)</Text>
         </Pressable>
         {mirrorState.length === 0 ? (
           <Text style={styles.muted}>No mirror state rows yet — no sync has run.</Text>

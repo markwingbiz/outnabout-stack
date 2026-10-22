@@ -19,7 +19,15 @@ import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { fetchEvents, fetchVenues, type EventItem, type Venue } from "../../lib/store";
-import { getShowcaseEvents, getShowcaseVenues, resolvePlaylists } from "../../data/showcase";
+import { useAuth } from "../../lib/auth";
+import {
+  getShowcaseEvents,
+  getShowcaseVenues,
+  resolvePlaylists,
+  type ResolvedPlaylist,
+} from "../../data/showcase";
+import { categoryForVenueName, resolveCardImage } from "../../lib/placeholders";
+import { CardBackground } from "../../components/ui/CardBackground";
 import {
   BottomNav,
   EventCard,
@@ -52,11 +60,11 @@ function matchesHomeSearch(e: EventItem, venueName: string, q: string) {
   );
 }
 
-const VENUE_ICONS = ["wine-outline", "business-outline", "storefront-outline"] as const;
 
 export default function Home() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
   const [q, setQ] = useState("");
 
   // Events + venues come from Firestore; when BOTH are empty, the
@@ -66,7 +74,9 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     let alive = true;
-    Promise.all([fetchEvents(), fetchVenues()])
+    // Pass the viewer's email so operator-only test items are visible
+    // only to the operator (store.ts filters for everyone else).
+    Promise.all([fetchEvents(user?.email ?? null), fetchVenues(user?.email ?? null)])
       .then(([rows, venueRows]) => {
         if (!alive) return;
         setEvents(rows);
@@ -79,7 +89,7 @@ export default function Home() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [user?.email]);
 
   const qNorm = q.trim().toLowerCase();
 
@@ -113,6 +123,79 @@ export default function Home() {
     [effEvents, effVenues]
   );
 
+  // Home section order (fixed): Showcase spotlight cards, Tonight in KC,
+  // Top Venues, Date Night, Family Fun, Featured. Playlists are looked up
+  // by id so the order holds even if resolvePlaylists returns them in a
+  // different order; any future playlist not in this order renders after
+  // Family Fun, before Featured.
+  const playlistById = useMemo(
+    () => new Map(playlists.map((p) => [p.id, p])),
+    [playlists]
+  );
+  const otherPlaylists = useMemo(
+    () =>
+      playlists.filter(
+        (p) => p.id !== "tonight-in-kc" && p.id !== "date-night" && p.id !== "family-fun"
+      ),
+    [playlists]
+  );
+
+  function renderPlaylist(pl: ResolvedPlaylist | undefined) {
+    if (!pl) return null;
+    return (
+      <View key={pl.id}>
+        <Section title={pl.title} subtitle={pl.subtitle} />
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ gap: 12, paddingBottom: 10 }}
+        >
+          {pl.items.map((item) =>
+            item.kind === "event" ? (
+              <View key={`event:${item.event.id}`} style={styles.playlistCardWrap}>
+                <EventCard
+                  title={item.event.title}
+                  venueName={getVenueName(item.event.venueId, effVenues)}
+                  label={formatWhen(item.event.startISO)}
+                  badge={item.event.isTest ? "Test" : undefined}
+                  photoUrl={item.event.photoUrl}
+                  onPress={() => openEvent(item.event.id)}
+                />
+              </View>
+            ) : (
+              <TouchableOpacity
+                key={`venue:${item.venue.id}`}
+                onPress={() => openVenue(item.venue.id, item.venue.name)}
+                activeOpacity={0.86}
+                style={styles.venueCard}
+              >
+                <CardBackground
+                  source={resolveCardImage(
+                    item.venue.photoUrl,
+                    categoryForVenueName(item.venue.name)
+                  )}
+                  style={styles.venueCardBg}
+                  contentStyle={styles.venueCardContent}
+                >
+                  <Text style={styles.venueCardName} numberOfLines={2}>
+                    {item.venue.name}
+                  </Text>
+                  {item.venue.isTest && (
+                    <Text style={styles.testBadgeText}>Test</Text>
+                  )}
+                  {item.venue.verified && (
+                    <Text style={styles.verifiedBadgeText}>✓ Verified</Text>
+                  )}
+                  <Text style={styles.venueCardMeta}>Tap to view</Text>
+                </CardBackground>
+              </TouchableOpacity>
+            )
+          )}
+        </ScrollView>
+      </View>
+    );
+  }
+
   function go(route: string) {
     router.replace(route);
   }
@@ -121,8 +204,8 @@ export default function Home() {
     router.push({ pathname: "/detail", params: { id, kind: "event" } });
   }
 
-  function openVenue(name: string) {
-    router.push({ pathname: "/(tabs)/events", params: { venue: name } });
+  function openVenue(id: string, name: string) {
+    router.push({ pathname: "/(tabs)/events", params: { venueId: id, venue: name } });
   }
 
   function openSearchInEvents() {
@@ -172,58 +255,22 @@ export default function Home() {
           <Text style={styles.emptyText}>No matches for “{q.trim()}”.</Text>
         ) : (
           <>
-            {/* Spotlight hero cards (vertical list) */}
+            {/* Showcase — spotlight hero cards (vertical list), first section */}
             {spotlightEvents.map((item) => (
               <EventCard
                 key={item.id}
                 title={item.title}
                 venueName={getVenueName(item.venueId, effVenues)}
                 label={formatWhen(item.startISO)}
-                badge="Spotlight"
+                badge={item.isTest ? "Test" : "Spotlight"}
+                photoUrl={item.photoUrl}
                 onPress={() => openEvent(item.id)}
               />
             ))}
 
-            {/* Featured playlists — horizontal rails (below spotlight, above Top Venues) */}
-            {playlists.map((pl) => (
-              <View key={pl.id}>
-                <Section title={pl.title} subtitle={pl.subtitle} />
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={{ gap: 12, paddingBottom: 10 }}
-                >
-                  {pl.items.map((item) =>
-                    item.kind === "event" ? (
-                      <View key={`event:${item.event.id}`} style={styles.playlistCardWrap}>
-                        <EventCard
-                          title={item.event.title}
-                          venueName={getVenueName(item.event.venueId, effVenues)}
-                          label={formatWhen(item.event.startISO)}
-                          onPress={() => openEvent(item.event.id)}
-                        />
-                      </View>
-                    ) : (
-                      <TouchableOpacity
-                        key={`venue:${item.venue.id}`}
-                        onPress={() => openVenue(item.venue.name)}
-                        style={refStyles.venueItem}
-                      >
-                        <LinearGradient
-                          colors={["#24364b", "#100d22"]}
-                          style={refStyles.venueIcon}
-                        >
-                          <Ionicons name="storefront-outline" size={31} color="#eee8ff" />
-                        </LinearGradient>
-                        <Text style={refStyles.venueName} numberOfLines={2}>
-                          {item.venue.name}
-                        </Text>
-                      </TouchableOpacity>
-                    )
-                  )}
-                </ScrollView>
-              </View>
-            ))}
+            {/* Home order: Showcase (spotlight) → Tonight in KC → Top Venues
+                → Date Night → Family Fun → Featured. */}
+            {renderPlaylist(playlistById.get("tonight-in-kc"))}
 
             {/* Top Venues orbs (first 3 venues, name only) */}
             {topVenues.length > 0 && (
@@ -234,38 +281,34 @@ export default function Home() {
                   showsHorizontalScrollIndicator={false}
                   contentContainerStyle={{ gap: 12, paddingBottom: 10 }}
                 >
-                  {topVenues.map((v, i) => (
+                  {topVenues.map((v) => (
                     <TouchableOpacity
                       key={v.id}
-                      onPress={() => openVenue(v.name)}
-                      style={refStyles.venueItem}
+                      onPress={() => openVenue(v.id, v.name)}
+                      activeOpacity={0.86}
+                      style={styles.venueCard}
                     >
-                      <LinearGradient
-                        colors={
-                          i === 1 ? ["#5a47a4", "#151026"] : ["#24364b", "#100d22"]
-                        }
-                        style={refStyles.venueIcon}
+                      <CardBackground
+                        source={resolveCardImage(v.photoUrl, categoryForVenueName(v.name))}
+                        style={styles.venueCardBg}
+                        contentStyle={styles.venueCardContent}
                       >
-                        <Ionicons
-                          name={
-                            i === 0
-                              ? "wine-outline"
-                              : i === 1
-                                ? "business-outline"
-                                : "storefront-outline"
-                          }
-                          size={31}
-                          color="#eee8ff"
-                        />
-                      </LinearGradient>
-                      <Text style={refStyles.venueName} numberOfLines={2}>
-                        {v.name}
-                      </Text>
+                        <Text style={styles.venueCardName} numberOfLines={2}>
+                          {v.name}
+                        </Text>
+                        {v.isTest && <Text style={styles.testBadgeText}>Test</Text>}
+                        {v.verified && <Text style={styles.verifiedBadgeText}>✓ Verified</Text>}
+                        <Text style={styles.venueCardMeta}>Tap to view</Text>
+                      </CardBackground>
                     </TouchableOpacity>
                   ))}
                 </ScrollView>
               </View>
             )}
+
+            {renderPlaylist(playlistById.get("date-night"))}
+            {renderPlaylist(playlistById.get("family-fun"))}
+            {otherPlaylists.map((pl) => renderPlaylist(pl))}
 
             {/* Featured — rendered TWICE, exactly as the reference does. */}
             {featured && (
@@ -280,27 +323,25 @@ export default function Home() {
                   showsHorizontalScrollIndicator={false}
                   contentContainerStyle={{ gap: 12, paddingBottom: 10 }}
                 >
-                  {visibleVenues.slice(0, 3).map((v, i) => (
+                  {visibleVenues.slice(0, 3).map((v) => (
                     <TouchableOpacity
                       key={v.id}
-                      onPress={() => openVenue(v.name)}
-                      style={refStyles.venueItem}
+                      onPress={() => openVenue(v.id, v.name)}
+                      activeOpacity={0.86}
+                      style={styles.venueCard}
                     >
-                      <LinearGradient
-                        colors={
-                          i === 1 ? ["#5a47a4", "#151026"] : ["#24364b", "#100d22"]
-                        }
-                        style={refStyles.venueIcon}
+                      <CardBackground
+                        source={resolveCardImage(v.photoUrl, categoryForVenueName(v.name))}
+                        style={styles.venueCardBg}
+                        contentStyle={styles.venueCardContent}
                       >
-                        <Ionicons
-                          name={VENUE_ICONS[i % VENUE_ICONS.length]}
-                          size={31}
-                          color="#eee8ff"
-                        />
-                      </LinearGradient>
-                      <Text style={refStyles.venueName} numberOfLines={2}>
-                        {v.name}
-                      </Text>
+                        <Text style={styles.venueCardName} numberOfLines={2}>
+                          {v.name}
+                        </Text>
+                        {v.isTest && <Text style={styles.testBadgeText}>Test</Text>}
+                        {v.verified && <Text style={styles.verifiedBadgeText}>✓ Verified</Text>}
+                        <Text style={styles.venueCardMeta}>Tap to view</Text>
+                      </CardBackground>
                     </TouchableOpacity>
                   ))}
                 </ScrollView>
@@ -365,5 +406,42 @@ const styles = StyleSheet.create({
   },
   playlistCardWrap: {
     width: 280,
+  },
+  // Venue cards — same photo-card style as the Events tab Top Venues
+  // rail (photo background, name, "Tap to view"). Replaces the old
+  // small icon tiles.
+  venueCard: {
+    width: 190,
+    marginRight: 12,
+    marginBottom: 0,
+    minHeight: 110,
+    borderRadius: 17,
+    overflow: "hidden",
+  },
+  venueCardBg: { flex: 1, borderRadius: 17 },
+  venueCardContent: { padding: 13, justifyContent: "space-between" },
+  venueCardName: {
+    color: "rgba(255,255,255,0.95)",
+    fontSize: 16,
+    fontWeight: "900",
+    lineHeight: 20,
+  },
+  venueCardMeta: {
+    marginTop: 10,
+    color: "rgba(255,255,255,0.62)",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  testBadgeText: {
+    color: "#f5c36a",
+    fontWeight: "900",
+    fontSize: 11,
+    marginTop: 4,
+  },
+  verifiedBadgeText: {
+    color: "#7ee2a0",
+    fontWeight: "900",
+    fontSize: 11,
+    marginTop: 4,
   },
 });
