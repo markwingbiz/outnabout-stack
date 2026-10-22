@@ -140,11 +140,16 @@ function FunnelDetailContent() {
         setPayload(statusResp);
         setDeliverables((delivs.data ?? []) as DeliverableRow[]);
         // Prefill the editor from the canonical money goal. The canonical
-        // row is the backfill_* mirror when one exists, else the first row —
-        // the same rule as the Funnels list.
+        // row is the one carrying a target when one exists (the 2026-10-21
+        // remap puts exactly one target per funnel family), else the
+        // backfill_* mirror, else the first row — the same rule as the
+        // Funnels list.
         const moneyRows = (statusResp.money_funnels ?? []) as MoneyFunnelRow[];
         const canonical =
-          moneyRows.find((r) => (r.key ?? "").startsWith("backfill_")) ?? moneyRows[0] ?? null;
+          moneyRows.find((r) => moneyTargetCents(r) !== null) ??
+          moneyRows.find((r) => (r.key ?? "").startsWith("backfill_")) ??
+          moneyRows[0] ??
+          null;
         setModelInput(canonical?.revenue_model ?? "");
         const target = canonical ? moneyTargetCents(canonical) : null;
         setTargetDollarsInput(target != null ? (target / 100).toFixed(2) : "");

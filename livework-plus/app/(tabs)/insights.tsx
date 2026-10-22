@@ -9,7 +9,7 @@
 // Phase 8 Slice 1: Insights is operator-gated via <ForgeGate> (same
 // check as the Forge tabs) — a signed-in non-operator sees
 // "Forge is for operators", never funnel names or verified revenue.
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -29,18 +29,13 @@ import {
   fetchMoneyFunnels,
   fetchRevenue,
   formatMoney,
+  resolveCanonicalFunnels,
   type FunnelSummary,
   type MoneyFunnelSummary,
   type RevenueSummary,
 } from "../../lib/data";
 
 const RANGE_OPTIONS = [7, 30, 90];
-
-/** Money goal for a money funnel (metadata.revenue_target_cents, in cents). */
-function targetDollars(row: MoneyFunnelSummary): number | null {
-  const raw = row.metadata?.revenue_target_cents;
-  return typeof raw === "number" ? raw / 100 : null;
-}
 
 function StatusBadge({ status }: { status: string }) {
   const s = status.toUpperCase();
@@ -98,6 +93,13 @@ function InsightsContent() {
     void refresh();
   }, [refresh]);
 
+  // Canonical structure (2026-10-21 remap): 8 funnels — sub-rows nested
+  // under their parent, the legacy KC Content row excluded entirely.
+  const views = useMemo(
+    () => resolveCanonicalFunnels(funnels, moneyFunnels),
+    [funnels, moneyFunnels],
+  );
+
   return (
     <SafeAreaView style={styles.root}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
@@ -115,11 +117,12 @@ function InsightsContent() {
 
           {loading ? (
             <ActivityIndicator color={THEME.purpleBright} />
-          ) : funnels.length === 0 ? (
+          ) : views.length === 0 ? (
             <Text style={styles.empty}>No funnels yet.</Text>
           ) : (
             <View style={styles.funnelGrid}>
-              {funnels.map((f, i) => {
+              {views.map((view, i) => {
+                const f = view.funnel;
                 const accents = Object.values(FUNNEL_ACCENTS)[i % Object.values(FUNNEL_ACCENTS).length];
                 return (
                   <Pressable
@@ -209,29 +212,38 @@ function InsightsContent() {
           </Text>
           {loading ? (
             <ActivityIndicator color={THEME.purpleBright} />
-          ) : moneyFunnels.length === 0 ? (
-            <Text style={styles.empty}>No money funnels yet.</Text>
+          ) : views.length === 0 ? (
+            <Text style={styles.empty}>No funnels yet.</Text>
           ) : (
             <>
               {(() => {
                 let verifiedSum = 0;
                 let targetSum = 0;
-                for (const row of moneyFunnels) {
-                  verifiedSum += (row.verified_revenue_cents ?? 0) / 100;
-                  targetSum += targetDollars(row) ?? 0;
+                for (const view of views) {
+                  verifiedSum += view.verifiedCents / 100;
+                  targetSum += (view.targetCents ?? 0) / 100;
                 }
                 return (
                   <>
-                    {moneyFunnels.map((row) => {
-                      const verified = (row.verified_revenue_cents ?? 0) / 100;
-                      const target = targetDollars(row);
+                    {views.map((view) => {
+                      const verified = view.verifiedCents / 100;
+                      const target =
+                        view.targetCents !== null ? view.targetCents / 100 : null;
                       const pct =
                         target && target > 0 ? Math.min(100, (verified / target) * 100) : null;
                       return (
-                        <View key={row.id} style={styles.reconRow}>
-                          <Text style={styles.reconName} numberOfLines={2}>
-                            {row.name ?? row.key ?? "Unnamed funnel"}
-                          </Text>
+                        <View key={view.funnel.id} style={styles.reconRow}>
+                          <View style={styles.reconNameWrap}>
+                            <Text style={styles.reconName} numberOfLines={2}>
+                              {view.funnel.name}
+                            </Text>
+                            {view.subFunnels.length > 0 && (
+                              <Text style={styles.reconIncludes} numberOfLines={2}>
+                                Includes{" "}
+                                {view.subFunnels.map((s) => s.name).join(", ")}
+                              </Text>
+                            )}
+                          </View>
                           <Text style={styles.reconNumbers}>
                             {formatMoney(verified)} of{" "}
                             {target !== null ? formatMoney(target) : "no target"}
@@ -241,7 +253,7 @@ function InsightsContent() {
                       );
                     })}
                     <View style={[styles.reconRow, styles.reconTotalRow]}>
-                      <Text style={styles.reconName}>All money funnels</Text>
+                      <Text style={styles.reconName}>All funnels</Text>
                       <Text style={styles.reconNumbers}>
                         {formatMoney(verifiedSum)} of{" "}
                         {targetSum > 0 ? formatMoney(targetSum) : "no targets"}
@@ -380,7 +392,9 @@ const styles = StyleSheet.create({
     borderBottomColor: "rgba(255,255,255,0.06)",
   },
   reconTotalRow: { borderBottomWidth: 0, marginTop: 4 },
-  reconName: { color: "#fff", fontSize: 13, fontWeight: "700", flex: 1 },
+  reconNameWrap: { flex: 1 },
+  reconName: { color: "#fff", fontSize: 13, fontWeight: "700" },
+  reconIncludes: { color: THEME.textFaint, fontSize: 11, marginTop: 2 },
   reconNumbers: { color: THEME.textMuted, fontSize: 12, textAlign: "right" },
   reconEcosystem: { color: THEME.textMuted, fontSize: 12, marginTop: 10, fontWeight: "700" },
   relTitle: { color: "#fff", fontSize: 15, fontWeight: "900" },

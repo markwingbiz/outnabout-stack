@@ -36,16 +36,16 @@ import Sparkline from "../../components/Sparkline";
 import { THEME, FUNNEL_ACCENTS } from "../../lib/theme";
 import { supabase } from "../../lib/supabase";
 import {
-  canonicalMoneyRows,
   formatCents,
   isMissingTableError,
   normalizeStatus,
-  type MoneyFunnelRow,
 } from "../../lib/forge";
 import {
   fetchFunnels,
   fetchRevenue,
+  resolveCanonicalFunnels,
   type FunnelSummary,
+  type MoneyFunnelSummary,
   type RevenueSummary,
 } from "../../lib/data";
 
@@ -152,7 +152,7 @@ function HomeContent() {
         fetchFunnels(),
         supabase
           .from("money_funnels")
-          .select("funnel_id,key,verified_revenue_cents")
+          .select("id, key, name, funnel_id, revenue_model, verified_revenue_cents, metadata")
           .limit(1000),
         supabase.from("forge_jobs").select("status").limit(1000),
         supabase
@@ -178,14 +178,16 @@ function HomeContent() {
       const workersActive = ((w.data ?? []) as { status: string | null }[]).filter(
         (row) => normalizeStatus(row.status) === "ACTIVE",
       ).length;
-      // Verified revenue: sum the canonical money row per funnel (prefer the
-      // backfill_* mirror) so funnels with several money rows are not
-      // double-counted. Cents → dollars via formatCents.
-      const canonical = canonicalMoneyRows((m.data ?? []) as MoneyFunnelRow[]);
-      const verifiedRevenueCents = canonical.reduce(
-        (sum, row) => sum + (row.verified_revenue_cents ?? 0),
-        0,
+      // Canonical structure (2026-10-21 remap): 8 canonical funnels —
+      // sub-rows nest under their parent, the legacy KC Content row is
+      // excluded. Verified revenue sums the canonical money row of each
+      // funnel family only, so nothing is double-counted. Cents →
+      // dollars via formatCents.
+      const views = resolveCanonicalFunnels(
+        f.funnels,
+        (m.data ?? []) as MoneyFunnelSummary[],
       );
+      const verifiedRevenueCents = views.reduce((sum, v) => sum + v.verifiedCents, 0);
 
       // Relationship Score: average rating of the recent real check-ins.
       // A missing relationship table (migration not run) is an honest
@@ -216,7 +218,7 @@ function HomeContent() {
       }
 
       setStats({
-        funnels: f.funnels,
+        funnels: views.map((v) => v.funnel),
         jobsRunning,
         jobsFailed,
         pendingApprovals: a.count ?? 0,
