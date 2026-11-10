@@ -173,12 +173,14 @@ async function writeCategoriesToRegistry(
 ): Promise<void> {
   if (!supabase) return;
   const deviceId = await getPushDeviceId();
-  await supabase
-    .from("push_tokens")
-    .update({ categories_enabled: prefs, updated_at: new Date().toISOString() })
-    .eq("account_id", accountId)
-    .eq("app", PUSH_APP)
-    .eq("device_id", deviceId);
+  // The anon key has no direct push_tokens access — category writes go
+  // through the set_push_token_categories security-definer RPC, keyed by
+  // the (firebase uid, per-install device_id) capability pair.
+  await supabase.rpc("set_push_token_categories", {
+    p_firebase_uid: accountId,
+    p_device_id: deviceId,
+    p_categories_enabled: prefs,
+  });
 }
 
 export async function saveCategoryPref(key: string, value: boolean): Promise<PushCategoryPrefs> {
@@ -260,26 +262,20 @@ export async function registerPushToken(accountId: string | null): Promise<boole
   if (!token) return false;
   const deviceId = await getPushDeviceId();
   const prefs = await loadCategoryPrefs();
-  const now = new Date().toISOString();
-  const { error } = await supabase.from("push_tokens").upsert(
-    {
-      account_id: accountId,
-      account_scope: PUSH_SCOPE,
-      tenant_id: null,
-      app: PUSH_APP,
-      platform: Platform.OS === "ios" ? "ios" : "android",
-      device_id: deviceId,
-      expo_push_token: token,
-      categories_enabled: prefs,
-      permission_status: "granted",
-      device_timezone: deviceTimezone(),
-      app_version: Constants.expoConfig?.version ?? null,
-      last_seen_at: now,
-      updated_at: now,
-      disabled_at: null,
-    },
-    { onConflict: "account_id,app,device_id" },
-  );
+  // Registration goes through the register_push_token security-definer
+  // RPC — the anon key holds no direct push_tokens grant. The RPC
+  // upserts on (account_id, app, device_id), hard-coding app='bownd',
+  // scope='customer', and clears disabled_at, same as a raw upsert did.
+  const { error } = await supabase.rpc("register_push_token", {
+    p_firebase_uid: accountId,
+    p_device_id: deviceId,
+    p_expo_push_token: token,
+    p_platform: Platform.OS === "ios" ? "ios" : "android",
+    p_categories_enabled: prefs,
+    p_permission_status: "granted",
+    p_device_timezone: deviceTimezone(),
+    p_app_version: Constants.expoConfig?.version ?? null,
+  });
   if (error) return false;
   registrationAccountId = accountId;
   return true;
@@ -289,12 +285,10 @@ export async function registerPushToken(accountId: string | null): Promise<boole
 export async function unregisterPushToken(accountId: string | null): Promise<void> {
   if (!supabase || !accountId) return;
   const deviceId = await getPushDeviceId();
-  await supabase
-    .from("push_tokens")
-    .delete()
-    .eq("account_id", accountId)
-    .eq("app", PUSH_APP)
-    .eq("device_id", deviceId);
+  await supabase.rpc("unregister_push_token", {
+    p_firebase_uid: accountId,
+    p_device_id: deviceId,
+  });
   if (registrationAccountId === accountId) registrationAccountId = null;
 }
 
