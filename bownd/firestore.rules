@@ -105,14 +105,23 @@ service cloud.firestore {
     // (see lib/store.ts fetchEvents/fetchVenues); the operator's
     // unfiltered list is allowed by the isOperator() branch, which
     // depends only on the request.
+    // INTERIM LOCKDOWN (2026-11-09, operator decision): catalog reads
+    // are operator-only while the catalog holds only test docs and no
+    // public build is live. Verified live 2026-11-09: the conditional
+    // public rule below-era leaked test events through unfiltered
+    // list/query results — Firestore cannot enforce the negative
+    // isPublicEvent condition (isTest != true) on queries, though
+    // direct gets were denied correctly. RESTORE the conditional
+    // public reads (isPublicEvent / isPublicVenue get+list) only
+    // alongside the production build whose queries carry the filters,
+    // and only once bownd-sync stamps a positive published marker so
+    // the public condition is enforceable like the venues rule.
     match /events/{id} {
-      allow get: if isPublicEvent(resource.data) || isOperator();
-      allow list: if isOperator() || isPublicEvent(resource.data);
+      allow get, list: if isOperator();
       allow create, update, delete: if false;
     }
     match /venues/{id} {
-      allow get: if isPublicVenue(resource.data) || isOperator();
-      allow list: if isOperator() || isPublicVenue(resource.data);
+      allow get, list: if isOperator();
       allow create, update, delete: if false;
     }
 
