@@ -1,0 +1,632 @@
+diff --git a/bownd/app.json b/bownd/app.json
+index 262b659..01dee12 100644
+--- a/bownd/app.json
++++ b/bownd/app.json
+@@ -34,6 +34,15 @@
+         {
+           "cameraPermission": "Allow Bownd to access your camera to scan QR codes for rewards and check-ins."
+         }
++      ],
++      [
++        "expo-location",
++        {
++          "locationWhenInUsePermission": "Allow Bownd to use your location to show venues and events near you. Your location stays on this device — it is never stored or shared.",
++          "locationAlwaysAndWhenInUsePermission": "Allow Bownd to use your location to show venues and events near you. Your location stays on this device — it is never stored or shared.",
++          "isIosBackgroundLocationEnabled": false,
++          "isAndroidBackgroundLocationEnabled": false
++        }
+       ]
+     ],
+ 
+diff --git a/bownd/app/(tabs)/personal.tsx b/bownd/app/(tabs)/personal.tsx
+index 6535bdc..8c03ade 100644
+--- a/bownd/app/(tabs)/personal.tsx
++++ b/bownd/app/(tabs)/personal.tsx
+@@ -46,7 +46,7 @@ import { MemberCode } from "../../components/ui/MemberCode";
+ import { CardBackground } from "../../components/ui/CardBackground";
+ import { resolveCardImage, categoryForVenueName, resolveEventCardImage } from "../../lib/placeholders";
+ 
+-type PanelTab = "All" | "QR" | "Rewards" | "Venue";
++type PanelTab = "All" | "QR" | "Rewards";
+ 
+ export default function PersonalScreen() {
+   const router = useRouter();
+@@ -178,7 +178,9 @@ export default function PersonalScreen() {
+ 
+   const showQr = panel === "All" || panel === "QR";
+   const showRewards = panel === "All" || panel === "Rewards";
+-  const showVenue = panel === "All" || panel === "Venue";
++  // Favorite venues live under "All" only. The old "Venue" panel tab is
++  // now the "What's Close" button — it opens the map page instead of
++  // switching the panel.
+ 
+   return (
+     <View style={refStyles.root}>
+@@ -223,7 +225,7 @@ export default function PersonalScreen() {
+           {/* Light panel */}
+           <View style={refStyles.lightPanel}>
+             <View style={refStyles.panelTabs}>
+-              {(["All", "QR", "Rewards", "Venue"] as PanelTab[]).map((p) => (
++              {(["All", "QR", "Rewards"] as PanelTab[]).map((p) => (
+                 <TouchableOpacity
+                   key={p}
+                   onPress={() => setPanel(p)}
+@@ -234,6 +236,12 @@ export default function PersonalScreen() {
+                   </Text>
+                 </TouchableOpacity>
+               ))}
++              <TouchableOpacity
++                onPress={() => router.push("/whats-close")}
++                style={refStyles.panelTab}
++              >
++                <Text style={refStyles.panelTabText}>What&apos;s Close</Text>
++              </TouchableOpacity>
+             </View>
+ 
+             {/* QR section */}
+@@ -321,8 +329,8 @@ export default function PersonalScreen() {
+               </>
+             )}
+ 
+-            {/* Venue section — favorite venues */}
+-            {showVenue && (
++            {/* Favorite venues — under the All panel */}
++            {panel === "All" && (
+               <>
+                 <Text style={[refStyles.darkHeading, styles.sectionHeading]}>Favorite Venues</Text>
+                 {favoriteVenues.length === 0 ? (
+diff --git a/bownd/app/whats-close.tsx b/bownd/app/whats-close.tsx
+new file mode 100644
+index 0000000..5fc2b6d
+--- /dev/null
++++ b/bownd/app/whats-close.tsx
+@@ -0,0 +1,320 @@
++// app/whats-close.tsx
++// What's Around You — map + nearby lists for venues and events.
++//
++// - Location is requested ONCE, foreground-only, and used ONLY on this
++//   device to center the map and sort by distance. It is never stored,
++//   never sent to any server, and never leaves the device.
++// - If permission is denied (or location is unavailable), the map centers
++//   on downtown KC and the lists sort from there, with an honest note.
++// - Venues/events whose venue has no coordinates (store.ts defaults to
++//   lat 0 / lng 0) are NOT put on the map and carry no distance — they
++//   are counted in the "no map location yet" note, never plotted at 0,0.
++// - Map tiles come from OpenStreetMap via Leaflet (no API key, no
++//   account). Tiles need internet; the lists below still work offline.
++// - Catalog rule matches Home: when Firestore is empty (no events AND
++//   no venues), the authorized showcase fallback is used wholesale —
++//   never mixed — and demo markers are labeled "Sample listing".
++import React, { useEffect, useMemo, useState } from "react";
++import {
++  View,
++  Text,
++  StyleSheet,
++  ScrollView,
++  Pressable,
++  ActivityIndicator,
++} from "react-native";
++import { SafeAreaView } from "react-native-safe-area-context";
++import { useRouter } from "expo-router";
++import { WebView, type WebViewMessageEvent } from "react-native-webview";
++import * as Location from "expo-location";
++
++import { fetchEvents, fetchVenues, type EventItem, type Venue } from "../lib/store";
++import { useAuth } from "../lib/auth";
++import { getShowcaseEvents, getShowcaseVenues } from "../data/showcase";
++import {
++  KC_FALLBACK,
++  buildMapHtml,
++  formatDistance,
++  hasCoords,
++  haversineMiles,
++  venueCoordFor,
++  type LatLng,
++  type MapMarker,
++} from "../lib/nearby";
++import { formatWhen, getVenueName } from "./ui/reference";
++
++type LocState = "loading" | "granted" | "denied";
++
++export default function WhatsCloseScreen() {
++  const router = useRouter();
++  const { user } = useAuth();
++
++  const [locState, setLocState] = useState<LocState>("loading");
++  const [userLoc, setUserLoc] = useState<LatLng | null>(null);
++  const [events, setEvents] = useState<EventItem[]>([]);
++  const [venues, setVenues] = useState<Venue[]>([]);
++  const [loading, setLoading] = useState(true);
++
++  useEffect(() => {
++    let alive = true;
++    (async () => {
++      // Location: foreground only, on-device only.
++      try {
++        const { status } = await Location.requestForegroundPermissionsAsync();
++        if (!alive) return;
++        if (status !== "granted") {
++          setLocState("denied");
++        } else {
++          const pos = await Location.getCurrentPositionAsync({
++            accuracy: Location.Accuracy.Balanced,
++          });
++          if (!alive) return;
++          setUserLoc({ lat: pos.coords.latitude, lng: pos.coords.longitude });
++          setLocState("granted");
++        }
++      } catch {
++        if (alive) setLocState("denied");
++      }
++      // Catalog: same wholesale rule as Home.
++      try {
++        const [rows, venueRows] = await Promise.all([
++          fetchEvents(user?.email ?? null),
++          fetchVenues(user?.email ?? null),
++        ]);
++        if (!alive) return;
++        setEvents(rows);
++        setVenues(venueRows);
++      } catch {
++        // Lists stay empty; the map still renders.
++      } finally {
++        if (alive) setLoading(false);
++      }
++    })();
++    return () => {
++      alive = false;
++    };
++  }, [user?.email]);
++
++  const usingDemo = events.length === 0 && venues.length === 0;
++  const effEvents = usingDemo ? getShowcaseEvents() : events;
++  const effVenues = usingDemo ? getShowcaseVenues() : venues;
++
++  const center = userLoc ?? KC_FALLBACK;
++
++  const nearbyVenues = useMemo(() => {
++    return effVenues
++      .filter((v) => hasCoords(v.lat, v.lng))
++      .map((v) => ({
++        venue: v,
++        miles: haversineMiles(center, { lat: v.lat, lng: v.lng }),
++        eventCount: effEvents.filter((e) => e.venueId === v.id || e.venueId === v.name).length,
++      }))
++      .sort((a, b) => a.miles - b.miles);
++  }, [effVenues, effEvents, center]);
++
++  const unmappedVenueCount = effVenues.length - nearbyVenues.length;
++
++  const nearbyEvents = useMemo(() => {
++    return effEvents
++      .map((e) => {
++        const coords = venueCoordFor(e.venueId, effVenues);
++        return coords
++          ? { event: e, miles: haversineMiles(center, coords) }
++          : null;
++      })
++      .filter((x): x is { event: EventItem; miles: number } => x !== null)
++      .sort((a, b) => a.miles - b.miles);
++  }, [effEvents, effVenues, center]);
++
++  const unmappedEventCount = effEvents.length - nearbyEvents.length;
++
++  const markers: MapMarker[] = useMemo(
++    () =>
++      nearbyVenues.map(({ venue, eventCount }) => ({
++        id: venue.id,
++        name: venue.name,
++        lat: venue.lat,
++        lng: venue.lng,
++        subtitle: `${eventCount} event${eventCount === 1 ? "" : "s"}`,
++        badge: venue.isTest ? "Test" : usingDemo ? "Sample listing" : undefined,
++      })),
++    [nearbyVenues, usingDemo]
++  );
++
++  const mapHtml = useMemo(
++    () => buildMapHtml({ center, user: userLoc, markers }),
++    [center, userLoc, markers]
++  );
++
++  const venueNameById = useMemo(
++    () => new Map(effVenues.map((v) => [v.id, v.name])),
++    [effVenues]
++  );
++
++  function onMapMessage(e: WebViewMessageEvent) {
++    const data = e.nativeEvent.data;
++    if (data.startsWith("venue:")) {
++      const id = data.slice("venue:".length);
++      router.push({
++        pathname: "/(tabs)/events",
++        params: { venueId: id, venue: venueNameById.get(id) ?? id },
++      });
++    }
++  }
++
++  function openVenue(id: string, name: string) {
++    router.push({ pathname: "/(tabs)/events", params: { venueId: id, venue: name } });
++  }
++
++  function openEvent(id: string) {
++    router.push({ pathname: "/detail", params: { id, kind: "event" } });
++  }
++
++  return (
++    <SafeAreaView style={styles.root} edges={["top"]}>
++      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
++        <Pressable onPress={() => router.back()} hitSlop={8} style={styles.backBtn}>
++          <Text style={styles.backText}>‹ Back</Text>
++        </Pressable>
++        <Text style={styles.title}>What&apos;s Around You</Text>
++        <Text style={styles.sub}>
++          {locState === "loading"
++            ? "Finding your location…"
++            : locState === "granted"
++              ? "Sorted by distance from you. Your location stays on this device."
++              : "Location off — showing downtown KC. Turn on location permission to sort from where you are."}
++        </Text>
++
++        {usingDemo && !loading && (
++          <View style={styles.showcaseChip}>
++            <Text style={styles.showcaseChipText}>Showcase preview · Sample listings</Text>
++          </View>
++        )}
++
++        <View style={styles.mapWrap}>
++          <WebView
++            source={{ html: mapHtml }}
++            style={styles.map}
++            onMessage={onMapMessage}
++            javaScriptEnabled
++            domStorageEnabled
++          />
++        </View>
++        <Text style={styles.mapNote}>
++          Map © OpenStreetMap contributors. Tap a pin, then See events.
++        </Text>
++
++        {loading ? (
++          <ActivityIndicator color="#fff" size="large" style={{ marginTop: 24 }} />
++        ) : (
++          <>
++            <Text style={styles.sectionLabel}>Nearby venues ({nearbyVenues.length})</Text>
++            {nearbyVenues.length === 0 ? (
++              <Text style={styles.muted}>No venues have a map location yet.</Text>
++            ) : (
++              nearbyVenues.map(({ venue, miles, eventCount }) => (
++                <Pressable
++                  key={venue.id}
++                  style={styles.row}
++                  onPress={() => openVenue(venue.id, venue.name)}
++                >
++                  <View style={{ flex: 1 }}>
++                    <Text style={styles.rowTitle} numberOfLines={1}>
++                      {venue.name}
++                    </Text>
++                    <Text style={styles.muted}>
++                      {formatDistance(miles)} away · {eventCount} event
++                      {eventCount === 1 ? "" : "s"}
++                      {venue.isTest ? " · Test" : ""}
++                      {usingDemo ? " · Sample" : ""}
++                    </Text>
++                  </View>
++                  <Text style={styles.rowAction}>See events ›</Text>
++                </Pressable>
++              ))
++            )}
++            {unmappedVenueCount > 0 && (
++              <Text style={styles.muted}>
++                {unmappedVenueCount} venue{unmappedVenueCount === 1 ? "" : "s"} don&apos;t have a
++                map location yet and aren&apos;t shown on the map.
++              </Text>
++            )}
++
++            <Text style={styles.sectionLabel}>Nearby events ({nearbyEvents.length})</Text>
++            {nearbyEvents.length === 0 ? (
++              <Text style={styles.muted}>No events with a mappable venue yet.</Text>
++            ) : (
++              nearbyEvents.map(({ event, miles }) => (
++                <Pressable key={event.id} style={styles.row} onPress={() => openEvent(event.id)}>
++                  <View style={{ flex: 1 }}>
++                    <Text style={styles.rowTitle} numberOfLines={1}>
++                      {event.title}
++                    </Text>
++                    <Text style={styles.muted}>
++                      {getVenueName(event.venueId, effVenues)} · {formatDistance(miles)} away ·{" "}
++                      {formatWhen(event.startISO)}
++                      {event.isTest ? " · Test" : ""}
++                      {usingDemo ? " · Sample" : ""}
++                    </Text>
++                  </View>
++                  <Text style={styles.rowAction}>View ›</Text>
++                </Pressable>
++              ))
++            )}
++            {unmappedEventCount > 0 && (
++              <Text style={styles.muted}>
++                {unmappedEventCount} event{unmappedEventCount === 1 ? "" : "s"} at venues without
++                a map location aren&apos;t shown here — find them in Events.
++              </Text>
++            )}
++          </>
++        )}
++      </ScrollView>
++    </SafeAreaView>
++  );
++}
++
++const styles = StyleSheet.create({
++  root: { flex: 1, backgroundColor: "#0e0b19" },
++  content: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 32 },
++  backBtn: { alignSelf: "flex-start", paddingVertical: 6 },
++  backText: { color: "#fff", fontSize: 16, fontWeight: "800" },
++  title: { color: "#fff", fontSize: 26, fontWeight: "900", marginTop: 4 },
++  sub: { color: "rgba(255,255,255,0.7)", fontSize: 13, lineHeight: 18, marginTop: 6 },
++  showcaseChip: {
++    alignSelf: "flex-start",
++    paddingHorizontal: 12,
++    paddingVertical: 6,
++    borderRadius: 999,
++    backgroundColor: "rgba(245,195,106,0.16)",
++    borderWidth: 1,
++    borderColor: "rgba(245,195,106,0.45)",
++    marginTop: 10,
++  },
++  showcaseChipText: { color: "#f5c36a", fontSize: 12, fontWeight: "900" },
++  mapWrap: {
++    height: 360,
++    borderRadius: 17,
++    overflow: "hidden",
++    marginTop: 14,
++    borderWidth: 1,
++    borderColor: "rgba(255,255,255,0.12)",
++  },
++  map: { flex: 1, backgroundColor: "#141021" },
++  mapNote: { color: "rgba(255,255,255,0.55)", fontSize: 11, marginTop: 6 },
++  sectionLabel: { color: "#fff", fontSize: 17, fontWeight: "900", marginTop: 20, marginBottom: 10 },
++  row: {
++    flexDirection: "row",
++    alignItems: "center",
++    gap: 12,
++    backgroundColor: "rgba(255,255,255,0.06)",
++    borderRadius: 14,
++    borderWidth: 1,
++    borderColor: "rgba(255,255,255,0.10)",
++    padding: 12,
++    marginBottom: 8,
++  },
++  rowTitle: { color: "#fff", fontSize: 15, fontWeight: "800" },
++  rowAction: { color: "#fff", fontSize: 13, fontWeight: "800" },
++  muted: { color: "rgba(255,255,255,0.6)", fontSize: 12, lineHeight: 17, marginTop: 2 },
++});
+diff --git a/bownd/lib/nearby.ts b/bownd/lib/nearby.ts
+new file mode 100644
+index 0000000..9df06a3
+--- /dev/null
++++ b/bownd/lib/nearby.ts
+@@ -0,0 +1,113 @@
++// lib/nearby.ts
++// Pure helpers for the What's Around You page (whats-close.tsx).
++// - Distances are computed on-device from the viewer's location and the
++//   venue coordinates. Location is NEVER stored or sent anywhere.
++// - Firestore/store.ts defaults missing coordinates to lat 0 / lng 0
++//   (Null Island). hasCoords() treats exactly 0,0 as "no location" so
++//   those venues never render as a marker off the coast of Africa.
++// - buildMapHtml() is pure (string in → string out) so the map markup is
++//   unit-testable without a WebView. Markers post `venue:<id>` back to
++//   React Native via window.ReactNativeWebView.postMessage.
++
++export const KC_FALLBACK = { lat: 39.0997, lng: -94.5786 }; // Downtown KC
++
++export type LatLng = { lat: number; lng: number };
++
++export function hasCoords(lat: number, lng: number): boolean {
++  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
++  if (lat === 0 && lng === 0) return false; // store.ts "no coords" sentinel
++  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return false;
++  return true;
++}
++
++/** Great-circle distance in miles. */
++export function haversineMiles(a: LatLng, b: LatLng): number {
++  const R = 3958.8; // Earth radius in miles
++  const toRad = (d: number) => (d * Math.PI) / 180;
++  const dLat = toRad(b.lat - a.lat);
++  const dLng = toRad(b.lng - a.lng);
++  const s =
++    Math.sin(dLat / 2) ** 2 +
++    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
++  return 2 * R * Math.asin(Math.sqrt(s));
++}
++
++export function formatDistance(miles: number): string {
++  if (!Number.isFinite(miles)) return "—";
++  if (miles < 0.1) return `${Math.max(1, Math.round(miles * 5280))} ft`;
++  return `${miles.toFixed(1)} mi`;
++}
++
++/** Find a venue's coordinates by Firestore id OR name (ids may be names). */
++export function venueCoordFor(
++  venueId: string,
++  venues: Array<{ id: string; name: string; lat: number; lng: number }>
++): LatLng | null {
++  const v = venues.find((x) => x.id === venueId || x.name === venueId);
++  if (!v || !hasCoords(v.lat, v.lng)) return null;
++  return { lat: v.lat, lng: v.lng };
++}
++
++export type MapMarker = {
++  id: string;
++  name: string;
++  lat: number;
++  lng: number;
++  subtitle: string; // e.g. "3 events" — shown in the popup
++  badge?: string; // e.g. "Test" / "Sample" — shown in the popup
++};
++
++/**
++ * Full Leaflet + OpenStreetMap page. Tiles need internet; the lists
++ * below the map still work offline. Attribution is required by the
++ * OpenStreetMap tile usage policy and stays in the corner.
++ */
++export function buildMapHtml(args: {
++  center: LatLng;
++  user: LatLng | null;
++  markers: MapMarker[];
++}): string {
++  const payload = JSON.stringify({
++    center: args.center,
++    user: args.user,
++    markers: args.markers,
++  });
++  return `<!DOCTYPE html><html><head><meta charset="utf-8"/>
++<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
++<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
++<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
++<style>html,body,#map{height:100%;margin:0;padding:0;background:#141021;}
++.leaflet-popup-content-wrapper{background:#1d1642;color:#fff;border-radius:12px;}
++.leaflet-popup-content{margin:12px 14px;font-family:-apple-system,system-ui,sans-serif;}
++.leaflet-popup-tip{background:#1d1642;}
++.popup-name{font-weight:800;font-size:14px;}
++.popup-sub{opacity:.75;font-size:12px;margin-top:2px;}
++.popup-badge{color:#f5c36a;font-weight:800;font-size:11px;margin-top:2px;}
++.popup-btn{display:block;margin-top:8px;background:#6242bb;color:#fff;text-align:center;
++padding:8px 10px;border-radius:999px;font-weight:800;font-size:12px;border:0;width:100%;}
++</style></head><body><div id="map"></div><script>
++var data = ${payload};
++var map = L.map('map').setView([data.center.lat, data.center.lng], 13);
++L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
++  maxZoom: 19,
++  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
++}).addTo(map);
++if (data.user) {
++  L.circleMarker([data.user.lat, data.user.lng], { radius: 9, color: '#fff',
++    weight: 2, fillColor: '#3b82f6', fillOpacity: 1 }).addTo(map)
++    .bindPopup('You are here');
++}
++data.markers.forEach(function (m) {
++  var badge = m.badge ? '<div class="popup-badge">' + m.badge + '</div>' : '';
++  var html = '<div class="popup-name">' + m.name + '</div>'
++    + '<div class="popup-sub">' + m.subtitle + '</div>' + badge
++    + '<button class="popup-btn" onclick="sendVenue(\\'' + m.id + '\\')">See events</button>';
++  L.marker([m.lat, m.lng]).addTo(map).bindPopup(html);
++});
++function sendVenue(id) {
++  if (window.ReactNativeWebView) {
++    window.ReactNativeWebView.postMessage('venue:' + id);
++  }
++}
++</script></body></html>`;
++}
+diff --git a/bownd/package-lock.json b/bownd/package-lock.json
+index 8c88241..fa209da 100644
+--- a/bownd/package-lock.json
++++ b/bownd/package-lock.json
+@@ -31,7 +31,8 @@
+         "react-native-qrcode-svg": "^6.3.21",
+         "react-native-safe-area-context": "~5.6.0",
+         "react-native-screens": "~4.16.0",
+-        "react-native-svg": "15.12.1"
++        "react-native-svg": "15.12.1",
++        "react-native-webview": "^13.15.0"
+       },
+       "devDependencies": {
+         "@types/react": "~19.1.10",
+@@ -4020,7 +4021,7 @@
+       "version": "19.1.17",
+       "resolved": "https://registry.npmjs.org/@types/react/-/react-19.1.17.tgz",
+       "integrity": "sha512-Qec1E3mhALmaspIrhWt9jkQMNdw6bReVu64mjvhbhq2NFPftLPVr+l1SZgmw/66WwBNpDh7ao5AT6gF5v41PFA==",
+-      "devOptional": true,
++      "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "csstype": "^3.0.2"
+@@ -5129,7 +5130,7 @@
+       "version": "3.2.3",
+       "resolved": "https://registry.npmjs.org/csstype/-/csstype-3.2.3.tgz",
+       "integrity": "sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==",
+-      "devOptional": true,
++      "dev": true,
+       "license": "MIT"
+     },
+     "node_modules/debug": {
+@@ -9142,19 +9143,6 @@
+         "ws": "^7"
+       }
+     },
+-    "node_modules/react-dom": {
+-      "version": "19.3.0",
+-      "resolved": "https://registry.npmjs.org/react-dom/-/react-dom-19.3.0.tgz",
+-      "integrity": "sha512-JDk8dgif51OjFoDE70+OT9ICyYr+69HlmihNwp1+Nsfbna3t5sIiCa9ZJktDmQ4/1b/rn26hIAR2uYXDMr5r0Q==",
+-      "license": "MIT",
+-      "peer": true,
+-      "dependencies": {
+-        "scheduler": "^0.28.0"
+-      },
+-      "peerDependencies": {
+-        "react": "^19.3.0"
+-      }
+-    },
+     "node_modules/react-fast-compare": {
+       "version": "3.2.2",
+       "resolved": "https://registry.npmjs.org/react-fast-compare/-/react-fast-compare-3.2.2.tgz",
+@@ -9302,6 +9290,20 @@
+         "react-native": "*"
+       }
+     },
++    "node_modules/react-native-webview": {
++      "version": "13.15.0",
++      "resolved": "https://registry.npmjs.org/react-native-webview/-/react-native-webview-13.15.0.tgz",
++      "integrity": "sha512-Vzjgy8mmxa/JO6l5KZrsTC7YemSdq+qB01diA0FqjUTaWGAGwuykpJ73MDj3+mzBSlaDxAEugHzTtkUQkQEQeQ==",
++      "license": "MIT",
++      "dependencies": {
++        "escape-string-regexp": "^4.0.0",
++        "invariant": "2.2.4"
++      },
++      "peerDependencies": {
++        "react": "*",
++        "react-native": "*"
++      }
++    },
+     "node_modules/react-native/node_modules/@react-native/virtualized-lists": {
+       "version": "0.81.5",
+       "resolved": "https://registry.npmjs.org/@react-native/virtualized-lists/-/virtualized-lists-0.81.5.tgz",
+@@ -9733,13 +9735,6 @@
+         "node": ">=11.0.0"
+       }
+     },
+-    "node_modules/scheduler": {
+-      "version": "0.28.0",
+-      "resolved": "https://registry.npmjs.org/scheduler/-/scheduler-0.28.0.tgz",
+-      "integrity": "sha512-juorfCmIkIw8tT+p5BXSm6PJjQF/ycEYmKyzURCIt/RaZIhL+PulbQ9Yu2z1HdOJDdqDTlxA1+xKBmHXJsczAw==",
+-      "license": "MIT",
+-      "peer": true
+-    },
+     "node_modules/semver": {
+       "version": "7.8.5",
+       "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.5.tgz",
+@@ -10495,7 +10490,7 @@
+       "version": "5.9.3",
+       "resolved": "https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz",
+       "integrity": "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==",
+-      "devOptional": true,
++      "dev": true,
+       "license": "Apache-2.0",
+       "bin": {
+         "tsc": "bin/tsc",
+diff --git a/bownd/package.json b/bownd/package.json
+index 7d497db..3a2141c 100644
+--- a/bownd/package.json
++++ b/bownd/package.json
+@@ -34,7 +34,8 @@
+     "react-native-qrcode-svg": "^6.3.21",
+     "react-native-safe-area-context": "~5.6.0",
+     "react-native-screens": "~4.16.0",
+-    "react-native-svg": "15.12.1"
++    "react-native-svg": "15.12.1",
++    "react-native-webview": "^13.15.0"
+   },
+   "devDependencies": {
+     "@types/react": "~19.1.10",

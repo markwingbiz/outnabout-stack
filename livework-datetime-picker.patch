@@ -1,0 +1,454 @@
+diff --git a/livework/app.json b/livework/app.json
+index b8a66a8..58a4648 100644
+--- a/livework/app.json
++++ b/livework/app.json
+@@ -21,7 +21,8 @@
+     "orientation": "portrait",
+     "plugins": [
+       "expo-router",
+-      "expo-font"
++      "expo-font",
++      "@react-native-community/datetimepicker"
+     ],
+     "scheme": "livework",
+     "slug": "livework",
+diff --git a/livework/app/add-event.tsx b/livework/app/add-event.tsx
+index 454be9c..5fd9db0 100644
+--- a/livework/app/add-event.tsx
++++ b/livework/app/add-event.tsx
+@@ -1,7 +1,8 @@
+ // Livework — Add New Event form (Phase 5 + Phase 7 Slice 1).
+ // Ticket tiers are real and editable, and saved in the existing
+-// `events.price_label` column ("GA — $25; VIP — $50"). Date is validated
+-// before save. No fake success: unconfigured Supabase shows an error and
++// `events.price_label` column ("GA — $25; VIP — $50"). Date comes from
++// the native picker (components/DateTimeField) — no free-text parsing.
++// No fake success: unconfigured Supabase shows an error and
+ // does NOT navigate back; success is shown only after the insert
+ // confirms. Event Image stays disabled (needs expo-image-picker +
+ // Supabase Storage — not installed yet).
+@@ -30,6 +31,7 @@ import {
+ import { Ionicons } from "@expo/vector-icons";
+ import { useRouter } from "expo-router";
+ import { THEME } from "../lib/theme";
++import DateTimeField from "../components/DateTimeField";
+ import { supabase, supabaseConfigured } from "../lib/supabase";
+ import { useAuth } from "../lib/auth";
+ import { getUserVenues, type TenantVenue } from "../lib/tenant";
+@@ -69,7 +71,9 @@ export default function AddEventScreen() {
+   const router = useRouter();
+   const { session, loading: authLoading } = useAuth();
+   const [title, setTitle] = useState("");
+-  const [date, setDate] = useState("");
++  // The picker hands us a real Date — no free-text parsing (Hermes'
++  // Date.parse rejected many typed formats on Android). null = not picked.
++  const [date, setDate] = useState<Date | null>(null);
+   const [dateError, setDateError] = useState<string | null>(null);
+   const [eventType, setEventType] = useState("General Admission");
+   const [performers, setPerformers] = useState("");
+@@ -94,17 +98,6 @@ export default function AddEventScreen() {
+     if (session) void loadVenues();
+   }, [session, loadVenues]);
+ 
+-  function validateDate(value: string): string | null {
+-    const trimmed = value.trim();
+-    // events.start_ts is NOT NULL with no default — a date is required.
+-    if (!trimmed) return "Enter a date & time.";
+-    const parsed = new Date(trimmed);
+-    if (Number.isNaN(parsed.getTime())) {
+-      return "Enter a valid date & time (e.g. May 24, 2026, 8:00 PM).";
+-    }
+-    return null;
+-  }
+-
+   function updateTier(id: string, patch: Partial<Tier>) {
+     setTiers((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+   }
+@@ -118,9 +111,12 @@ export default function AddEventScreen() {
+       Alert.alert("Missing title", "Enter an event title.");
+       return;
+     }
+-    const err = validateDate(date);
+-    setDateError(err);
+-    if (err) return;
++    // events.start_ts is NOT NULL with no default — a date is required.
++    if (!date) {
++      setDateError("Pick a date & time.");
++      return;
++    }
++    setDateError(null);
+     const selectedVenue = (venues ?? []).find((v) => v.id === selectedVenueId) ?? null;
+     if (!selectedVenue) {
+       Alert.alert("Missing venue", "Select a venue for this event.");
+@@ -154,7 +150,7 @@ export default function AddEventScreen() {
+         venue_id: selectedVenue.id,
+         title: title.trim(),
+         description: performers.trim() || null,
+-        start_ts: new Date(date.trim()).toISOString(),
++        start_ts: date.toISOString(),
+         price_label: priceLabel,
+         event_type: eventType,
+         status: "draft",
+@@ -276,17 +272,14 @@ export default function AddEventScreen() {
+         </Field>
+ 
+         <Field label="Date & Time">
+-          <TextInput
++          <DateTimeField
+             value={date}
+-            onChangeText={(v) => {
+-              setDate(v);
+-              setDateError(validateDate(v));
++            onChange={(d) => {
++              setDate(d);
++              setDateError(null);
+             }}
+-            placeholder="May 24, 2026, 8:00 PM"
+-            placeholderTextColor={THEME.textFaint}
+-            style={styles.input}
++            error={dateError}
+           />
+-          {!!dateError && <Text style={styles.inlineError}>{dateError}</Text>}
+         </Field>
+ 
+         <Field label="Event Type">
+diff --git a/livework/app/edit-event.tsx b/livework/app/edit-event.tsx
+index 9ea2297..acab39f 100644
+--- a/livework/app/edit-event.tsx
++++ b/livework/app/edit-event.tsx
+@@ -10,7 +10,7 @@
+ // The existing status is preserved untouched.
+ //
+ // Mirrors add-event.tsx's form (tiers ↔ price_label, performers ↔
+-// description, free-text date). A future slice may extract a shared
++// description, picker date). A future slice may extract a shared
+ // event form; this slice keeps add-event untouched.
+ import React, { useCallback, useEffect, useState } from "react";
+ import {
+@@ -30,6 +30,7 @@ import { THEME } from "../lib/theme";
+ import { supabase, supabaseConfigured } from "../lib/supabase";
+ import { describeError } from "../lib/errors";
+ import { useAuth } from "../lib/auth";
++import DateTimeField from "../components/DateTimeField";
+ import { getUserTenantIds, getUserVenues, type TenantVenue } from "../lib/tenant";
+ 
+ function Field({ label, children }: { label: string; children: React.ReactNode }) {
+@@ -69,17 +70,11 @@ function parsePriceLabel(priceLabel: string | null): Tier[] {
+   });
+ }
+ 
+-function formatDateForInput(iso: string | null): string {
+-  if (!iso) return "";
++function parseStartTs(iso: string | null): Date | null {
++  if (!iso) return null;
++  // ISO strings always parse (no free-text parsing anywhere now).
+   const d = new Date(iso);
+-  if (Number.isNaN(d.getTime())) return "";
+-  return d.toLocaleString("en-US", {
+-    month: "long",
+-    day: "numeric",
+-    year: "numeric",
+-    hour: "numeric",
+-    minute: "2-digit",
+-  });
++  return Number.isNaN(d.getTime()) ? null : d;
+ }
+ 
+ const EVENT_TYPES = ["General Admission", "Ticketed", "Free"];
+@@ -93,7 +88,8 @@ export default function EditEventScreen() {
+   const [loading, setLoading] = useState(true);
+   const [loadError, setLoadError] = useState<string | null>(null);
+   const [title, setTitle] = useState("");
+-  const [date, setDate] = useState("");
++  // Real Date from the picker — never a parsed string.
++  const [date, setDate] = useState<Date | null>(null);
+   const [dateError, setDateError] = useState<string | null>(null);
+   const [eventType, setEventType] = useState("General Admission");
+   const [eventTypeOptions, setEventTypeOptions] = useState<string[]>(EVENT_TYPES);
+@@ -130,7 +126,7 @@ export default function EditEventScreen() {
+       }
+       setTitle(typeof data.title === "string" ? data.title : "");
+       setPerformers(typeof data.description === "string" ? data.description : "");
+-      setDate(formatDateForInput(typeof data.start_ts === "string" ? data.start_ts : null));
++      setDate(parseStartTs(typeof data.start_ts === "string" ? data.start_ts : null));
+       const existingType = typeof data.event_type === "string" && data.event_type ? data.event_type : "General Admission";
+       setEventType(existingType);
+       // Keep a legacy/unknown event_type selectable instead of silently
+@@ -152,16 +148,6 @@ export default function EditEventScreen() {
+     else setLoading(false);
+   }, [session, load]);
+ 
+-  function validateDate(value: string): string | null {
+-    const trimmed = value.trim();
+-    if (!trimmed) return "Enter a date & time.";
+-    const parsed = new Date(trimmed);
+-    if (Number.isNaN(parsed.getTime())) {
+-      return "Enter a valid date & time (e.g. May 24, 2026, 8:00 PM).";
+-    }
+-    return null;
+-  }
+-
+   function updateTier(tierId: string, patch: Partial<Tier>) {
+     setTiers((prev) => prev.map((t) => (t.id === tierId ? { ...t, ...patch } : t)));
+   }
+@@ -175,9 +161,11 @@ export default function EditEventScreen() {
+       Alert.alert("Missing title", "Enter an event title.");
+       return;
+     }
+-    const err = validateDate(date);
+-    setDateError(err);
+-    if (err) return;
++    if (!date) {
++      setDateError("Pick a date & time.");
++      return;
++    }
++    setDateError(null);
+     const selectedVenue = (venues ?? []).find((v) => v.id === selectedVenueId) ?? null;
+     if (!selectedVenue) {
+       Alert.alert("Missing venue", "Select a venue for this event.");
+@@ -216,7 +204,7 @@ export default function EditEventScreen() {
+         .update({
+           title: title.trim(),
+           description: performers.trim() || null,
+-          start_ts: new Date(date.trim()).toISOString(),
++          start_ts: date.toISOString(),
+           price_label: priceLabel,
+           event_type: eventType,
+           venue_id: selectedVenue.id,
+@@ -320,17 +308,14 @@ export default function EditEventScreen() {
+         </Field>
+ 
+         <Field label="Date & Time">
+-          <TextInput
++          <DateTimeField
+             value={date}
+-            onChangeText={(v) => {
+-              setDate(v);
+-              setDateError(validateDate(v));
++            onChange={(d) => {
++              setDate(d);
++              setDateError(null);
+             }}
+-            placeholder="May 24, 2026, 8:00 PM"
+-            placeholderTextColor={THEME.textFaint}
+-            style={styles.input}
++            error={dateError}
+           />
+-          {!!dateError && <Text style={styles.inlineError}>{dateError}</Text>}
+         </Field>
+ 
+         <Field label="Event Type">
+diff --git a/livework/app/index.tsx b/livework/app/index.tsx
+index 3c5d034..faef4fb 100644
+--- a/livework/app/index.tsx
++++ b/livework/app/index.tsx
+@@ -302,6 +302,17 @@ export default function DashboardScreen() {
+           </Pressable>
+         </View>
+ 
++        {/* Create Event — prominent entry point at the very top of the
++            dashboard. Previously the only way in was the "Add New Event"
++            card buried mid-scroll, so creating an event was hard to find.
++            This button just opens the same add-event form. In demo mode
++            it creates a REAL event in the form (saving works as usual) —
++            the demo banner explains the dashboard data is sample. */}
++        <Pressable style={styles.createEventTopBtn} onPress={() => router.push("/add-event")}>
++          <Ionicons name="add-circle" size={20} color="#fff" />
++          <Text style={styles.createEventTopText}>Create Event</Text>
++        </Pressable>
++
+         {/* Operator-only demo toggle. While demo is on, the whole
+             dashboard shows the bundled sample dataset (lib/demo.ts)
+             — no real queries run and nothing on screen is real. */}
+@@ -945,6 +956,17 @@ const styles = StyleSheet.create({
+     alignItems: "center",
+     marginTop: 4,
+   },
++  createEventTopBtn: {
++    backgroundColor: THEME.purple,
++    borderRadius: 12,
++    height: 52,
++    flexDirection: "row",
++    alignItems: "center",
++    justifyContent: "center",
++    gap: 8,
++    marginTop: 14,
++  },
++  createEventTopText: { color: "#fff", fontWeight: "900", fontSize: 16 },
+   createBtnText: { color: "#fff", fontWeight: "900", fontSize: 15 },
+   addEventNote: { color: THEME.textFaint, fontSize: 11 },
+   boostCard: {
+diff --git a/livework/components/DateTimeField.tsx b/livework/components/DateTimeField.tsx
+new file mode 100644
+index 0000000..4034ffd
+--- /dev/null
++++ b/livework/components/DateTimeField.tsx
+@@ -0,0 +1,168 @@
++// Livework — DateTimeField: native date + time picker for the event forms.
++//
++// Replaces the old free-text date input. On Android, Hermes' Date.parse
++// rejects many typed formats, so events failed to save with a confusing
++// error. The picker hands the form a real Date — no parsing, no format
++// errors, and the value shown is always exactly what will be saved.
++//
++// Android: two-step native dialogs (date, then time). Dismissing either
++// dialog keeps the previous value — no partial save.
++// iOS: inline spinner with Done / Cancel.
++import React, { useState } from "react";
++import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
++import { Ionicons } from "@expo/vector-icons";
++import DateTimePicker, {
++  type DateTimePickerEvent,
++} from "@react-native-community/datetimepicker";
++import { THEME } from "../lib/theme";
++
++export function formatDateTime(d: Date): string {
++  return d.toLocaleString("en-US", {
++    month: "long",
++    day: "numeric",
++    year: "numeric",
++    hour: "numeric",
++    minute: "2-digit",
++  });
++}
++
++// Sensible default when nothing is picked yet: the next full hour.
++function nextHour(): Date {
++  const d = new Date();
++  d.setMinutes(0, 0, 0);
++  d.setHours(d.getHours() + 1);
++  return d;
++}
++
++export default function DateTimeField({
++  value,
++  onChange,
++  error,
++}: {
++  value: Date | null;
++  onChange: (d: Date) => void;
++  error: string | null;
++}) {
++  const [show, setShow] = useState(false);
++  const [mode, setMode] = useState<"date" | "time">("date");
++  const [temp, setTemp] = useState<Date>(value ?? nextHour());
++
++  function open() {
++    setTemp(value ?? nextHour());
++    setMode("date");
++    setShow(true);
++  }
++
++  function onAndroidChange(e: DateTimePickerEvent, selected?: Date) {
++    if (e.type === "dismissed") {
++      // Dismissing either dialog keeps the previous value.
++      setShow(false);
++      return;
++    }
++    const picked = selected ?? temp;
++    if (mode === "date") {
++      // Keep the current time-of-day, then open the time dialog.
++      const merged = new Date(temp);
++      merged.setFullYear(picked.getFullYear(), picked.getMonth(), picked.getDate());
++      setTemp(merged);
++      setMode("time");
++      // show stays true: the picker re-renders as the time dialog.
++    } else {
++      const merged = new Date(temp);
++      merged.setHours(picked.getHours(), picked.getMinutes(), 0, 0);
++      setShow(false);
++      onChange(merged);
++    }
++  }
++
++  return (
++    <View>
++      <Pressable
++        style={[styles.field, error ? styles.fieldError : null]}
++        onPress={open}
++        accessibilityRole="button"
++        accessibilityLabel="Pick event date and time"
++      >
++        <Text style={value ? styles.value : styles.placeholder}>
++          {value ? formatDateTime(value) : "Tap to pick a date & time"}
++        </Text>
++        <Ionicons name="calendar-outline" size={20} color={THEME.textMuted} />
++      </Pressable>
++      {!!error && <Text style={styles.inlineError}>{error}</Text>}
++
++      {show && Platform.OS === "android" && (
++        <DateTimePicker
++          value={temp}
++          mode={mode}
++          is24Hour={false}
++          onChange={onAndroidChange}
++        />
++      )}
++
++      {show && Platform.OS === "ios" && (
++        <View style={styles.iosWrap}>
++          <DateTimePicker
++            value={temp}
++            mode="datetime"
++            display="spinner"
++            textColor="#fff"
++            onChange={(_, selected) => {
++              if (selected) setTemp(selected);
++            }}
++          />
++          <View style={styles.iosBtns}>
++            <Pressable style={styles.iosBtn} onPress={() => setShow(false)}>
++              <Text style={styles.iosBtnText}>Cancel</Text>
++            </Pressable>
++            <Pressable
++              style={[styles.iosBtn, styles.iosDone]}
++              onPress={() => {
++                setShow(false);
++                onChange(temp);
++              }}
++            >
++              <Text style={[styles.iosBtnText, styles.iosDoneText]}>Done</Text>
++            </Pressable>
++          </View>
++        </View>
++      )}
++    </View>
++  );
++}
++
++const styles = StyleSheet.create({
++  field: {
++    backgroundColor: THEME.card,
++    borderWidth: 1,
++    borderColor: THEME.cardBorder,
++    borderRadius: 12,
++    paddingHorizontal: 14,
++    height: 50,
++    flexDirection: "row",
++    alignItems: "center",
++    justifyContent: "space-between",
++  },
++  fieldError: { borderColor: "#F9A8D4" },
++  value: { color: "#fff", fontSize: 15 },
++  placeholder: { color: THEME.textFaint, fontSize: 15 },
++  inlineError: { color: "#F9A8D4", fontSize: 12, marginTop: 6, lineHeight: 16 },
++  iosWrap: {
++    backgroundColor: THEME.card,
++    borderWidth: 1,
++    borderColor: THEME.cardBorder,
++    borderRadius: 12,
++    marginTop: 8,
++    padding: 8,
++  },
++  iosBtns: { flexDirection: "row", justifyContent: "flex-end", gap: 8, padding: 4 },
++  iosBtn: {
++    borderWidth: 1,
++    borderColor: THEME.cardBorder,
++    borderRadius: 999,
++    paddingHorizontal: 18,
++    paddingVertical: 10,
++  },
++  iosBtnText: { color: THEME.textMuted, fontSize: 14, fontWeight: "700" },
++  iosDone: { backgroundColor: THEME.purple, borderColor: THEME.purple },
++  iosDoneText: { color: "#fff" },
++});

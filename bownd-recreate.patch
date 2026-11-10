@@ -1,0 +1,3119 @@
+From bae069c1dd34a8c6b9fd45e87b1652cc8b9cf0cf Mon Sep 17 00:00:00 2001
+From: Muse <muse@meta.ai>
+Date: Fri, 16 Oct 2026 06:45:49 +0000
+Subject: [PATCH] Bownd: recreate Home, Events, Personal UI one-for-one from
+ reference mockup
+
+---
+ bownd/app/(tabs)/events.tsx   | 611 ++++++++--------------
+ bownd/app/(tabs)/home.tsx     | 572 +++++++--------------
+ bownd/app/(tabs)/personal.tsx | 926 +++++++++++++++++-----------------
+ bownd/app/ui/recreate.tsx     | 318 ++++++++++++
+ 4 files changed, 1159 insertions(+), 1268 deletions(-)
+ create mode 100644 bownd/app/ui/recreate.tsx
+
+diff --git a/bownd/app/(tabs)/events.tsx b/bownd/app/(tabs)/events.tsx
+index 45425c7..007138d 100644
+--- a/bownd/app/(tabs)/events.tsx
++++ b/bownd/app/(tabs)/events.tsx
+@@ -1,35 +1,32 @@
+ // app/(tabs)/events.tsx
+-// Phase 6 fix notes (see FIX-PLAN.md):
+-// - MiniEventCard / BigEventRow navigate to the real detail screen
+-//   (/detail?id=...&kind=event). VenueCard navigates to Events filtered
+-//   to that venue (params.venue). No more dead cards.
+-// - Section chevrons are now functional: tapping collapses/expands the
+-//   section (previously a plain non-pressable <Text>).
++// Bownd recreate restyle (Events screen) — layout/styles match the reference
++// mockup via the shared design system in app/ui/recreate.tsx. Behavior is
++// preserved from the pre-restyle screen:
++// - Event cards navigate to the real detail screen
++//   (/detail?id=...&kind=event). Venue cards filter Events to that venue.
++// - Section chevrons collapse/expand their section.
+ // - Favorite toggle (heart) on every event card, wired to
+-//   toggleFavorite() in lib/store.ts (previously zero UI call sites).
++//   toggleFavorite() in lib/store.ts.
+ // - Accepts params { q, venue } (from Home search + venue orbs +
+ //   Personal favorite venues) and applies them as filters, with a
+ //   visible "Venue: X" chip that can be cleared.
+-// - Top nav + Change Persona point at the CANONICAL (tabs) routes
+-//   (previously /events and /persona, which were the bundled-only
+-//   duplicate screens — deleted in Phase 6).
++// - Top nav + Change Persona point at the canonical (tabs) routes.
+ // - Events + venues come from Firestore ONLY. No bundled demo fallback:
+ //   an empty catalog shows "No events yet", never demo events.
+-// - Visual design is UNCHANGED: same layout, styles, and components.
+-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
++// - Spotlight hero uses the shared PhotoCard gradient placeholder —
++//   mockup photos are baked into the reference JPG at low resolution
++//   and cannot be extracted. Never present it as a real photo.
++import React, { useCallback, useEffect, useMemo, useState } from "react";
+ import {
+   View,
+   Text,
+   StyleSheet,
+   SafeAreaView,
+   Pressable,
+-  TextInput,
+   FlatList,
+-  Animated,
+   StatusBar,
+   Alert,
+ } from "react-native";
+-import { LinearGradient } from "expo-linear-gradient";
+ import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
+ 
+ import { loadPersona, PersonaProfile, DEFAULT_PERSONA } from "../../lib/personaStore";
+@@ -43,6 +40,20 @@ import {
+   type FavoriteItem,
+ } from "../../lib/store";
+ import { useAuth } from "../../lib/auth";
++import {
++  SearchBar,
++  SegmentedTabs,
++  BottomNav,
++  FilterPill,
++  TagPill,
++  PhotoCard,
++  rc,
++  rr,
++  rs,
++  rtype,
++  rshadow,
++  type TabKey,
++} from "../ui/recreate";
+ 
+ type TimeChip = "tonight" | "tomorrow" | "weekend" | "week" | "all";
+ 
+@@ -171,55 +182,6 @@ function matchesPersona(e: EventItem, persona: PersonaProfile) {
+   return audienceOK && vibeOK;
+ }
+ 
+-function TopNavButton({
+-  label,
+-  active,
+-  onPress,
+-}: {
+-  label: string;
+-  active?: boolean;
+-  onPress: () => void;
+-}) {
+-  return (
+-    <Pressable onPress={onPress} style={[styles.navBtn, active && styles.navBtnActive]}>
+-      <Text style={[styles.navBtnText, active && styles.navBtnTextActive]}>{label}</Text>
+-    </Pressable>
+-  );
+-}
+-
+-function Chip({
+-  label,
+-  active,
+-  onPress,
+-  mode = "primary",
+-}: {
+-  label: string;
+-  active?: boolean;
+-  onPress: () => void;
+-  mode?: "primary" | "secondary";
+-}) {
+-  return (
+-    <Pressable
+-      onPress={onPress}
+-      style={[
+-        styles.chip,
+-        mode === "secondary" && styles.chipSecondary,
+-        active && styles.chipActive,
+-      ]}
+-    >
+-      <Text
+-        style={[
+-          styles.chipText,
+-          mode === "secondary" && styles.chipTextSecondary,
+-          active && styles.chipTextActive,
+-        ]}
+-      >
+-        {label}
+-      </Text>
+-    </Pressable>
+-  );
+-}
+-
+ // Favorite heart. Rendered as a SIBLING of the card Pressable (not
+ // nested inside it) so tapping the heart never also opens the detail.
+ function FavButton({ isFav, onToggle }: { isFav: boolean; onToggle: () => void }) {
+@@ -246,12 +208,6 @@ function MiniEventCard({
+   return (
+     <View style={styles.miniCard}>
+       <Pressable onPress={onOpen} style={StyleSheet.absoluteFill} />
+-      <LinearGradient
+-        colors={["rgba(255,255,255,0.16)", "rgba(255,255,255,0.08)"]}
+-        start={{ x: 0, y: 0 }}
+-        end={{ x: 1, y: 1 }}
+-        style={StyleSheet.absoluteFill}
+-      />
+       <Text style={styles.miniWhen}>{formatWhen(item.startISO)}</Text>
+       <Text style={styles.miniTitle} numberOfLines={2}>
+         {item.title}
+@@ -263,9 +219,7 @@ function MiniEventCard({
+         {uniq([...(item.vibeTags || []), ...(item.audienceTags || [])])
+           .slice(0, 3)
+           .map((t) => (
+-            <View key={`${item.id}_${t}`} style={styles.tagPill}>
+-              <Text style={styles.tagText}>{t}</Text>
+-            </View>
++            <TagPill key={`${item.id}_${t}`} label={t} />
+           ))}
+       </View>
+       <FavButton isFav={isFav} onToggle={onToggleFav} />
+@@ -276,12 +230,6 @@ function MiniEventCard({
+ function VenueCard({ name, onOpen }: { name: string; onOpen: () => void }) {
+   return (
+     <Pressable style={styles.venueCard} onPress={onOpen}>
+-      <LinearGradient
+-        colors={["rgba(255,255,255,0.14)", "rgba(255,255,255,0.06)"]}
+-        start={{ x: 0, y: 0 }}
+-        end={{ x: 1, y: 1 }}
+-        style={StyleSheet.absoluteFill}
+-      />
+       <Text style={styles.venueName} numberOfLines={2}>
+         {name}
+       </Text>
+@@ -306,7 +254,9 @@ export default function EventsScreen() {
+ 
+   // Chips behavior
+   const [timeChip, setTimeChip] = useState<TimeChip>("tonight");
+-  const [personalizedOn, setPersonalizedOn] = useState<boolean>(false);
++  // Mockup default: Personalized selected. matchesPersona allows all when
++  // the persona has no audience/vibe set, so this is safe with no persona.
++  const [personalizedOn, setPersonalizedOn] = useState<boolean>(true);
+ 
+   // Collapsible sections (chevrons toggle these)
+   const [tailoredOpen, setTailoredOpen] = useState(true);
+@@ -316,8 +266,6 @@ export default function EventsScreen() {
+   // Favorites (Set of `event:<id>`)
+   const [favKeys, setFavKeys] = useState<Set<string>>(new Set());
+ 
+-  const drift = useRef(new Animated.Value(0)).current;
+-
+   // Persona + favorites refresh whenever the screen gains focus
+   // (persona may have changed on the picker; favorites may have
+   // changed on Detail / Personal).
+@@ -364,21 +312,6 @@ export default function EventsScreen() {
+     if (typeof params.venue === "string" && params.venue.trim()) setVenueFilter(params.venue);
+   }, [params.q, params.venue]);
+ 
+-  useEffect(() => {
+-    const anim = Animated.loop(
+-      Animated.sequence([
+-        Animated.timing(drift, { toValue: 1, duration: 4200, useNativeDriver: true }),
+-        Animated.timing(drift, { toValue: 0, duration: 4200, useNativeDriver: true }),
+-      ])
+-    );
+-    anim.start();
+-    return () => anim.stop();
+-  }, [drift]);
+-
+-  const driftX = drift.interpolate({ inputRange: [0, 1], outputRange: [-18, 18] });
+-  const driftY = drift.interpolate({ inputRange: [0, 1], outputRange: [8, -8] });
+-  const glowOpacity = drift.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0.18] });
+-
+   const venueNameById = useMemo(() => {
+     const map = new Map<string, string>();
+     for (const v of venues) {
+@@ -392,6 +325,12 @@ export default function EventsScreen() {
+     return venueNameById.get(e.venueId) ?? (e.venueId || "Venue");
+   }
+ 
++  function goTab(t: TabKey) {
++    if (t === "home") router.replace("/(tabs)/home");
++    else if (t === "personal") router.replace("/(tabs)/personal");
++    else router.replace("/(tabs)/events");
++  }
++
+   function openEvent(id: string) {
+     router.push({ pathname: "/detail", params: { id, kind: "event" } });
+   }
+@@ -475,24 +414,16 @@ export default function EventsScreen() {
+   }, [personalizedOn, timeChip]);
+ 
+   const Header = (
+-    <View style={{ paddingHorizontal: 16, paddingTop: 10 }}>
+-      {/* ✅ SEARCH BAR NOW ABOVE the Home/Events/Personal tabs */}
+-      <View style={styles.exploreWrap}>
+-        <TextInput
+-          value={query}
+-          onChangeText={setQuery}
+-          placeholder="Explore events, venues, vibes..."
+-          placeholderTextColor="rgba(255,255,255,0.55)"
+-          style={styles.exploreInput}
+-          returnKeyType="search"
+-        />
+-      </View>
++    <View style={styles.headerWrap}>
++      <SearchBar
++        value={query}
++        onChangeText={setQuery}
++        placeholder="Explore events, venues, vibes..."
++      />
+ 
+-      {/* Top nav row (Home / Events / Personal) — canonical (tabs) routes */}
+-      <View style={styles.topNavRow}>
+-        <TopNavButton label="Home" onPress={() => router.replace("/(tabs)")} />
+-        <TopNavButton label="Events" active onPress={() => router.replace("/(tabs)/events")} />
+-        <TopNavButton label="Personal" onPress={() => router.replace("/(tabs)/personal")} />
++      {/* Segmented tabs: Home | Events (selected) | Personal */}
++      <View style={styles.segWrap}>
++        <SegmentedTabs active="events" onSelect={goTab} />
+       </View>
+ 
+       {/* Venue filter chip (from Home orbs / Personal favorites) */}
+@@ -507,62 +438,40 @@ export default function EventsScreen() {
+         </View>
+       )}
+ 
+-      {/* Living header (ambient motion + glass + context + chips) */}
+-      <View style={styles.livingHeaderWrap}>
+-        <Animated.View
+-          pointerEvents="none"
+-          style={[
+-            styles.glowBlob,
+-            {
+-              opacity: glowOpacity,
+-              transform: [{ translateX: driftX }, { translateY: driftY }],
+-            },
+-          ]}
+-        >
+-          <LinearGradient
+-            colors={[
+-              "rgba(255, 90, 190, 0.55)",
+-              "rgba(120, 90, 255, 0.35)",
+-              "rgba(60, 200, 255, 0.25)",
+-              "rgba(0,0,0,0)",
+-            ]}
+-            start={{ x: 0.1, y: 0.2 }}
+-            end={{ x: 0.9, y: 0.9 }}
+-            style={StyleSheet.absoluteFill}
+-          />
+-        </Animated.View>
+-
+-        <View style={styles.glassCard}>
+-          <Text style={styles.hTitle}>Events</Text>
+-          <Text style={styles.hSub}>{headerSubtitle}</Text>
+-
+-          <View style={styles.chipsRow}>
+-            <Chip label="Tonight" active={timeChip === "tonight"} onPress={() => setTimeChip("tonight")} />
+-            <Chip label="Tomorrow" active={timeChip === "tomorrow"} onPress={() => setTimeChip("tomorrow")} />
+-            <Chip label="Weekend" active={timeChip === "weekend"} onPress={() => setTimeChip("weekend")} />
+-            <Chip label="This Week" active={timeChip === "week"} onPress={() => setTimeChip("week")} />
+-          </View>
+-
+-          <View style={styles.chipsRow2}>
+-            <Chip
+-              label="Personalized"
+-              mode="secondary"
+-              active={personalizedOn}
+-              onPress={() => setPersonalizedOn((v) => !v)}
+-            />
+-            <Chip
+-              label="All"
+-              mode="secondary"
+-              active={timeChip === "all" && !personalizedOn}
+-              onPress={() => {
+-                setTimeChip("all");
+-                setPersonalizedOn(false);
+-              }}
+-            />
+-            <Pressable onPress={() => router.push("/(tabs)/persona")} style={styles.changePersonaBtn}>
+-              <Text style={styles.changePersonaText}>Change persona</Text>
+-            </Pressable>
+-          </View>
++      <Text style={styles.pageTitle}>Events</Text>
++      <Text style={styles.pageSub}>{headerSubtitle}</Text>
++
++      {/* Filter pills row 1: Tonight | Tomorrow | Weekend */}
++      <View style={styles.filterRow}>
++        <FilterPill label="Tonight" selected={timeChip === "tonight"} onPress={() => setTimeChip("tonight")} />
++        <FilterPill label="Tomorrow" selected={timeChip === "tomorrow"} onPress={() => setTimeChip("tomorrow")} />
++        <FilterPill label="Weekend" selected={timeChip === "weekend"} onPress={() => setTimeChip("weekend")} />
++      </View>
++
++      {/* Filter pills row 2: This Week */}
++      <View style={styles.filterRow}>
++        <FilterPill label="This Week" selected={timeChip === "week"} onPress={() => setTimeChip("week")} />
++      </View>
++
++      {/* Personalized | All + right-aligned Change persona */}
++      <View style={styles.personaRow}>
++        <FilterPill
++          label="Personalized"
++          selected={personalizedOn}
++          onPress={() => setPersonalizedOn((v) => !v)}
++        />
++        <FilterPill
++          label="All"
++          selected={timeChip === "all" && !personalizedOn}
++          onPress={() => {
++            setTimeChip("all");
++            setPersonalizedOn(false);
++          }}
++        />
++        <View style={styles.changePersonaWrap}>
++          <Pressable onPress={() => router.push("/(tabs)/persona")} style={styles.changePersonaBtn}>
++            <Text style={styles.changePersonaText}>Change persona</Text>
++          </Pressable>
+         </View>
+       </View>
+ 
+@@ -599,22 +508,40 @@ export default function EventsScreen() {
+         onToggle={() => setSpotlightOpen((v) => !v)}
+       />
+       {spotlightOpen && (
+-        <FlatList
+-          data={spotlight}
+-          keyExtractor={(i) => i.id}
+-          horizontal
+-          showsHorizontalScrollIndicator={false}
+-          contentContainerStyle={{ paddingVertical: 10, paddingRight: 16 }}
+-          renderItem={({ item }) => (
+-            <MiniEventCard
+-              item={item}
+-              venueName={venueNameFor(item)}
+-              isFav={favKeys.has(`event:${item.id}`)}
+-              onToggleFav={() => onToggleFav(item)}
+-              onOpen={() => openEvent(item.id)}
+-            />
++        <View>
++          {spotlight.length > 0 && (
++            <View style={styles.spotlightHeroWrap}>
++              <PhotoCard
++                title={spotlight[0].title}
++                subtitle={venueNameFor(spotlight[0])}
++                badge={`★ ${formatWhen(spotlight[0].startISO).split(" • ")[0]}`}
++                gradient={["#7C3AED", "#140B2A"]}
++                height={220}
++                onPress={() => openEvent(spotlight[0].id)}
++              />
++              <FavButton
++                isFav={favKeys.has(`event:${spotlight[0].id}`)}
++                onToggle={() => onToggleFav(spotlight[0])}
++              />
++            </View>
+           )}
+-        />
++          <FlatList
++            data={spotlight.slice(1)}
++            keyExtractor={(i) => i.id}
++            horizontal
++            showsHorizontalScrollIndicator={false}
++            contentContainerStyle={{ paddingVertical: 10, paddingRight: 16 }}
++            renderItem={({ item }) => (
++              <MiniEventCard
++                item={item}
++                venueName={venueNameFor(item)}
++                isFav={favKeys.has(`event:${item.id}`)}
++                onToggleFav={() => onToggleFav(item)}
++                onOpen={() => openEvent(item.id)}
++              />
++            )}
++          />
++        </View>
+       )}
+ 
+       <SectionTitle
+@@ -643,25 +570,12 @@ export default function EventsScreen() {
+     <SafeAreaView style={styles.safe}>
+       <StatusBar barStyle="light-content" />
+       <View style={styles.bg}>
+-        <LinearGradient
+-          colors={["#070811", "#0b0b18", "#120a18", "#0a0c16"]}
+-          start={{ x: 0.15, y: 0.1 }}
+-          end={{ x: 0.85, y: 0.95 }}
+-          style={StyleSheet.absoluteFill}
+-        />
+-        <LinearGradient
+-          colors={["rgba(0,0,0,0.0)", "rgba(0,0,0,0.55)"]}
+-          start={{ x: 0.5, y: 0.2 }}
+-          end={{ x: 0.5, y: 1 }}
+-          style={StyleSheet.absoluteFill}
+-        />
+-
+         <FlatList
+           data={allEvents}
+           keyExtractor={(i) => i.id}
+           ListHeaderComponent={Header}
+           ListEmptyComponent={
+-            <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
++            <View style={{ paddingHorizontal: rs.page, paddingTop: 12 }}>
+               <Text style={styles.emptyText}>
+                 {events.length === 0
+                   ? "No events yet — check back soon."
+@@ -669,10 +583,10 @@ export default function EventsScreen() {
+               </Text>
+             </View>
+           }
+-          contentContainerStyle={{ paddingBottom: 22 }}
++          contentContainerStyle={{ paddingBottom: 16 }}
+           showsVerticalScrollIndicator={false}
+           renderItem={({ item }) => (
+-            <View style={{ paddingHorizontal: 16, paddingBottom: 10 }}>
++            <View style={{ paddingHorizontal: rs.page, paddingBottom: 10 }}>
+               <BigEventRow
+                 item={item}
+                 venueName={venueNameFor(item)}
+@@ -683,6 +597,7 @@ export default function EventsScreen() {
+             </View>
+           )}
+         />
++        <BottomNav active="events" onSelect={goTab} />
+       </View>
+     </SafeAreaView>
+   );
+@@ -732,12 +647,6 @@ function BigEventRow({
+   return (
+     <View style={styles.bigRow}>
+       <Pressable onPress={onOpen} style={StyleSheet.absoluteFill} />
+-      <LinearGradient
+-        colors={["rgba(255,255,255,0.14)", "rgba(255,255,255,0.06)"]}
+-        start={{ x: 0.1, y: 0.1 }}
+-        end={{ x: 0.95, y: 0.95 }}
+-        style={StyleSheet.absoluteFill}
+-      />
+       <View style={{ flex: 1 }}>
+         <Text style={styles.bigWhen}>{formatWhen(item.startISO)}</Text>
+         <Text style={styles.bigTitle} numberOfLines={2}>
+@@ -750,9 +659,7 @@ function BigEventRow({
+           {uniq([...(item.vibeTags || []), ...(item.audienceTags || [])])
+             .slice(0, 4)
+             .map((t) => (
+-              <View key={`${item.id}_big_${t}`} style={styles.tagPill}>
+-                <Text style={styles.tagText}>{t}</Text>
+-              </View>
++              <TagPill key={`${item.id}_big_${t}`} label={t} />
+             ))}
+         </View>
+       </View>
+@@ -767,53 +674,37 @@ function BigEventRow({
+ }
+ 
+ const styles = StyleSheet.create({
+-  safe: { flex: 1, backgroundColor: "#05060A" },
+-  bg: { flex: 1 },
++  safe: { flex: 1, backgroundColor: rc.bg },
++  bg: { flex: 1, backgroundColor: rc.bg },
+ 
+-  // Explore (now placed above top nav)
+-  exploreWrap: {
+-    borderRadius: 16,
+-    backgroundColor: "rgba(255,255,255,0.07)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.12)",
+-    paddingHorizontal: 14,
+-    paddingVertical: 10,
+-  },
+-  exploreInput: {
+-    color: "rgba(255,255,255,0.95)",
+-    fontSize: 15,
+-    fontWeight: "600",
+-  },
++  headerWrap: { paddingHorizontal: rs.page, paddingTop: 10 },
++  segWrap: { marginTop: 12 },
++  pageTitle: { ...rtype.display, color: rc.text, marginTop: 18 },
++  pageSub: { ...rtype.small, color: rc.subtext, marginTop: 4 },
+ 
+-  // Top nav
+-  topNavRow: {
++  filterRow: {
++    marginTop: 12,
+     flexDirection: "row",
+-    gap: 10,
+-    paddingTop: 12, // ✅ slight spacing after search bar
+-    paddingBottom: 12,
++    flexWrap: "wrap",
++    gap: 8,
+   },
+-  navBtn: {
+-    flex: 1,
+-    height: 40,
+-    borderRadius: 14,
++  personaRow: {
++    marginTop: 12,
++    flexDirection: "row",
++    flexWrap: "wrap",
++    gap: 8,
+     alignItems: "center",
+-    justifyContent: "center",
+-    backgroundColor: "rgba(255,255,255,0.06)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.10)",
+-  },
+-  navBtnActive: {
+-    backgroundColor: "rgba(255,255,255,0.14)",
+-    borderColor: "rgba(255,255,255,0.18)",
+   },
+-  navBtnText: {
+-    color: "rgba(255,255,255,0.78)",
+-    fontWeight: "700",
+-    letterSpacing: 0.2,
+-  },
+-  navBtnTextActive: {
+-    color: "rgba(255,255,255,0.95)",
++  changePersonaWrap: { marginLeft: "auto" },
++  changePersonaBtn: {
++    paddingHorizontal: 16,
++    paddingVertical: 9,
++    borderRadius: rr.pill,
++    backgroundColor: "rgba(255,255,255,0.05)",
++    borderWidth: 1,
++    borderColor: rc.border,
+   },
++  changePersonaText: { color: rc.text, fontWeight: "700", fontSize: 13 },
+ 
+   // Venue filter chip
+   venueFilterRow: {
+@@ -823,178 +714,79 @@ const styles = StyleSheet.create({
+     gap: 10,
+     paddingHorizontal: 12,
+     paddingVertical: 10,
+-    borderRadius: 14,
+-    backgroundColor: "rgba(255,255,255,0.08)",
++    borderRadius: rr.cardSm,
++    backgroundColor: rc.surfaceStrong,
+     borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.12)",
+-    marginBottom: 12,
++    borderColor: rc.border,
++    marginTop: 12,
+   },
+   venueFilterText: {
+     flex: 1,
+-    color: "rgba(255,255,255,0.90)",
++    color: rc.text,
+     fontWeight: "800",
+     fontSize: 13,
+   },
+   venueFilterClear: {
+-    color: "rgba(255,255,255,0.75)",
++    color: rc.subtext,
+     fontWeight: "900",
+     fontSize: 13,
+   },
+ 
+   emptyText: {
+-    color: "rgba(255,255,255,0.72)",
++    color: rc.subtext,
+     fontSize: 14,
+     fontWeight: "800",
+   },
+ 
+-  // Living header
+-  livingHeaderWrap: {
+-    marginTop: 14,
+-    marginBottom: 10,
+-    borderRadius: 22,
+-    overflow: "hidden",
+-  },
+-  glowBlob: {
+-    position: "absolute",
+-    left: -40,
+-    top: -30,
+-    width: 420,
+-    height: 240,
+-    borderRadius: 999,
+-  },
+-  glassCard: {
+-    borderRadius: 22,
+-    padding: 16,
+-    backgroundColor: "rgba(255,255,255,0.08)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.14)",
+-  },
+-  hTitle: {
+-    color: "rgba(255,255,255,0.95)",
+-    fontSize: 24,
+-    fontWeight: "900",
+-    letterSpacing: 0.3,
+-  },
+-  hSub: {
+-    marginTop: 4,
+-    color: "rgba(255,255,255,0.72)",
+-    fontSize: 13,
+-    fontWeight: "700",
+-  },
+-
+-  // Chips
+-  chipsRow: {
+-    marginTop: 12,
+-    flexDirection: "row",
+-    flexWrap: "wrap",
+-    gap: 8,
+-  },
+-  chipsRow2: {
+-    marginTop: 10,
+-    flexDirection: "row",
+-    flexWrap: "wrap",
+-    gap: 8,
+-    alignItems: "center",
+-  },
+-  chip: {
+-    paddingHorizontal: 12,
+-    paddingVertical: 9,
+-    borderRadius: 999,
+-    backgroundColor: "rgba(255,255,255,0.08)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.12)",
+-  },
+-  chipSecondary: {
+-    backgroundColor: "rgba(255,255,255,0.06)",
+-  },
+-  chipActive: {
+-    backgroundColor: "rgba(255,255,255,0.18)",
+-    borderColor: "rgba(255,255,255,0.22)",
+-  },
+-  chipText: {
+-    color: "rgba(255,255,255,0.82)",
+-    fontWeight: "800",
+-    fontSize: 13,
+-  },
+-  chipTextSecondary: {
+-    fontWeight: "800",
+-  },
+-  chipTextActive: {
+-    color: "rgba(255,255,255,0.96)",
+-  },
+-  changePersonaBtn: {
+-    marginLeft: "auto",
+-    paddingHorizontal: 12,
+-    paddingVertical: 9,
+-    borderRadius: 999,
+-    backgroundColor: "rgba(0,0,0,0.20)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.12)",
+-  },
+-  changePersonaText: {
+-    color: "rgba(255,255,255,0.86)",
+-    fontWeight: "900",
+-    fontSize: 13,
+-  },
+-
+   // Sections
+   sectionTitleRow: {
+-    marginTop: 14,
++    marginTop: 18,
+     flexDirection: "row",
+     alignItems: "center",
+     gap: 10,
+   },
+-  sectionTitle: {
+-    color: "rgba(255,255,255,0.92)",
+-    fontSize: 17,
+-    fontWeight: "900",
+-    letterSpacing: 0.2,
+-  },
+-  sectionSub: {
+-    marginTop: 2,
+-    color: "rgba(255,255,255,0.62)",
+-    fontSize: 12,
+-    fontWeight: "700",
+-  },
++  sectionTitle: { ...rtype.section, color: rc.text },
++  sectionSub: { ...rtype.caption, color: rc.muted, marginTop: 2 },
+   sectionChevronBtn: {
+     padding: 4,
+     marginLeft: 4,
+   },
+   sectionChevron: {
+-    color: "rgba(255,255,255,0.55)",
++    color: rc.muted,
+     fontSize: 26,
+     marginLeft: 4,
+     transform: [{ translateY: -1 }],
+   },
+ 
+-  // Mini cards (horizontal rails)
++  // Dark event cards (Tailored rail, Spotlight rail, All Events rows)
+   miniCard: {
+     width: 220,
+     marginRight: 12,
+-    borderRadius: 18,
++    borderRadius: rr.card,
+     overflow: "hidden",
+-    padding: 14,
++    padding: rs.md,
+     borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.12)",
+-    backgroundColor: "rgba(0,0,0,0.20)",
++    borderColor: rc.border,
++    backgroundColor: "#171126",
++    ...rshadow.soft,
+   },
+   miniWhen: {
+-    color: "rgba(255,255,255,0.70)",
+-    fontSize: 12,
+-    fontWeight: "900",
++    ...rtype.caption,
++    color: rc.subtext,
++    fontWeight: "700",
+   },
+   miniTitle: {
+     marginTop: 6,
+-    color: "rgba(255,255,255,0.95)",
++    color: rc.text,
+     fontSize: 16,
+-    fontWeight: "900",
++    fontWeight: "800",
+     lineHeight: 20,
+   },
+   miniVenue: {
+     marginTop: 6,
+-    color: "rgba(255,255,255,0.70)",
++    color: rc.muted,
+     fontSize: 12,
+-    fontWeight: "800",
++    fontWeight: "500",
+   },
+ 
+   // Favorite heart (sibling of the card pressable, top-right)
+@@ -1005,88 +797,81 @@ const styles = StyleSheet.create({
+     padding: 4,
+   },
+   favBtnText: {
+-    color: "rgba(255,255,255,0.95)",
++    color: rc.text,
+     fontSize: 20,
+     fontWeight: "900",
+   },
+ 
++  // Spotlight hero photo card
++  spotlightHeroWrap: {
++    position: "relative",
++    marginTop: 10,
++  },
++
+   // Venue cards
+   venueCard: {
+     width: 190,
+     marginRight: 12,
+-    borderRadius: 18,
++    borderRadius: rr.card,
+     overflow: "hidden",
+-    padding: 14,
++    padding: rs.md,
+     borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.12)",
+-    backgroundColor: "rgba(0,0,0,0.18)",
++    borderColor: rc.border,
++    backgroundColor: "#171126",
+     justifyContent: "space-between",
++    ...rshadow.soft,
+   },
+   venueName: {
+-    color: "rgba(255,255,255,0.95)",
++    color: rc.text,
+     fontSize: 16,
+-    fontWeight: "900",
++    fontWeight: "800",
+     lineHeight: 20,
+   },
+   venueMeta: {
+     marginTop: 10,
+-    color: "rgba(255,255,255,0.62)",
++    color: rc.muted,
+     fontSize: 12,
+-    fontWeight: "800",
++    fontWeight: "500",
+   },
+ 
+-  // Tags
++  // Tags (row layout only — pill visuals come from shared TagPill)
+   tagRow: {
+     marginTop: 10,
+     flexDirection: "row",
+     flexWrap: "wrap",
+     gap: 6,
+   },
+-  tagPill: {
+-    paddingHorizontal: 10,
+-    paddingVertical: 6,
+-    borderRadius: 999,
+-    backgroundColor: "rgba(255,255,255,0.10)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.12)",
+-  },
+-  tagText: {
+-    color: "rgba(255,255,255,0.80)",
+-    fontWeight: "900",
+-    fontSize: 11,
+-    letterSpacing: 0.2,
+-    textTransform: "capitalize",
+-  },
+ 
+   // Big list rows (All Events)
+   bigRow: {
+-    borderRadius: 18,
++    borderRadius: rr.card,
+     overflow: "hidden",
+-    padding: 14,
++    padding: rs.md,
+     borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.12)",
+-    backgroundColor: "rgba(0,0,0,0.20)",
++    borderColor: rc.border,
++    backgroundColor: "#171126",
+     flexDirection: "row",
+     gap: 12,
+     alignItems: "center",
++    ...rshadow.soft,
+   },
+   bigWhen: {
+-    color: "rgba(255,255,255,0.70)",
+-    fontSize: 12,
+-    fontWeight: "900",
++    ...rtype.caption,
++    color: rc.subtext,
++    fontWeight: "700",
+   },
+   bigTitle: {
+     marginTop: 6,
+-    color: "rgba(255,255,255,0.96)",
++    color: rc.text,
+     fontSize: 16,
+-    fontWeight: "900",
++    fontWeight: "800",
+     lineHeight: 20,
+   },
+   bigVenue: {
+     marginTop: 6,
+-    color: "rgba(255,255,255,0.70)",
++    color: rc.muted,
+     fontSize: 12,
+-    fontWeight: "800",
++    fontWeight: "500",
+   },
+   bigRight: {
+     alignItems: "flex-end",
+@@ -1095,13 +880,13 @@ const styles = StyleSheet.create({
+     gap: 8,
+   },
+   priceText: {
+-    color: "rgba(255,255,255,0.75)",
+-    fontWeight: "900",
++    color: rc.subtext,
++    fontWeight: "700",
+     fontSize: 12,
+   },
+   moreText: {
+-    color: "rgba(255,255,255,0.90)",
+-    fontWeight: "900",
++    color: rc.text,
++    fontWeight: "700",
+     fontSize: 12,
+   },
+ });
+diff --git a/bownd/app/(tabs)/home.tsx b/bownd/app/(tabs)/home.tsx
+index 9865e88..134093f 100644
+--- a/bownd/app/(tabs)/home.tsx
++++ b/bownd/app/(tabs)/home.tsx
+@@ -1,37 +1,50 @@
+ // app/(tabs)/home.tsx
+-// Phase 6 fix notes (see FIX-PLAN.md):
++// Bownd recreate — Home screen restyle (see REFERENCE-ANALYSIS.md).
++// Layout + visuals use the shared design system in app/ui/recreate.tsx
++// (SearchBar, SegmentedTabs, BottomNav, PhotoCard, rc/rr/rs/rtype/rshadow).
++// Photo cards use gradient placeholders: the mockup's photos are baked into
++// the reference JPG at low resolution and cannot be extracted, so the
++// gradients stand in until real photo assets are provided. They are never
++// presented as real photos.
++// Behavior preserved from the previous version:
+ // - Home search is WIRED: typing filters spotlight/featured events and
+ //   venues in place (title, venue, vibe/audience tags). A "See results in
+-//   Events" row navigates to /(tabs)/events with the query prefilled.
+-// - Spotlight / featured cards navigate to the real detail screen
+-//   (/detail?id=...&kind=event) instead of generically replacing to
+-//   /(tabs)/events and losing which event was tapped.
+-// - Venue orbs navigate to /(tabs)/events filtered to that venue.
++//   Events" row navigates to /(tabs)/events with the query prefilled, and
++//   submitting the search does the same.
++// - Photo cards navigate to the real detail screen (/detail?id=...&kind=event).
++// - Venue cards navigate to /(tabs)/events filtered to that venue.
+ // - Events + venues come from Firestore ONLY (lib/store.ts). No bundled
+ //   demo fallback: an empty catalog shows "No events yet", never demo
+ //   events presented as real.
+-// - Visual design is UNCHANGED: same layout, styles, and components.
++// - The "Featured:" heading renders ONCE (the mockup duplicates it; that
++//   duplication is a mockup error and is not reproduced here). Its title is
++//   the real featured event's title, never a hardcoded demo title.
+ import React, { useEffect, useMemo, useState } from "react";
+ import {
+   View,
+   Text,
+   StyleSheet,
+-  ImageBackground,
+   SafeAreaView,
+-  TextInput,
+   Pressable,
+   FlatList,
+   StatusBar,
+-  Platform,
+   ScrollView,
+ } from "react-native";
+-import { Ionicons } from "@expo/vector-icons";
+-import { LinearGradient } from "expo-linear-gradient";
+ import { useRouter } from "expo-router";
+ 
+ import { fetchEvents, fetchVenues, type EventItem, type Venue } from "../../lib/store";
+-
+-type TabKey = "home" | "events" | "personal";
++import {
++  SearchBar,
++  SegmentedTabs,
++  BottomNav,
++  PhotoCard,
++  rc,
++  rr,
++  rs,
++  rtype,
++  rshadow,
++  type TabKey,
++} from "../ui/recreate";
+ 
+ function pickFeatured(events: EventItem[]) {
+   return events.find((e) => e.category === "featured") ?? events[1] ?? events[0];
+@@ -41,18 +54,12 @@ function getVenueNameFromEvent(e: EventItem, venues: Venue[]) {
+   return v?.name ?? (e.venueId || "Venue");
+ }
+ 
+-function titleToTwoLines(title: string) {
+-  // Helps mimic the mock’s bigger “headline” look without overflowing.
+-  const parts = title.split(":");
+-  if (parts.length >= 2) {
+-    const left = parts[0].trim() + ":";
+-    const right = parts.slice(1).join(":").trim();
+-    return { line1: left, line2: right };
+-  }
+-  const words = title.split(" ");
+-  if (words.length <= 3) return { line1: title, line2: "" };
++/** Split a venue name across two balanced lines for the small venue cards. */
++function venueLabel(name: string) {
++  const words = name.split(" ");
++  if (words.length < 2) return name;
+   const mid = Math.ceil(words.length / 2);
+-  return { line1: words.slice(0, mid).join(" "), line2: words.slice(mid).join(" ") };
++  return words.slice(0, mid).join(" ") + "\n" + words.slice(mid).join(" ");
+ }
+ 
+ function matchesHomeSearch(e: EventItem, venueName: string, q: string) {
+@@ -66,6 +73,37 @@ function matchesHomeSearch(e: EventItem, venueName: string, q: string) {
+   );
+ }
+ 
++/** Badge text computed from the event's REAL data: "Tonight" when the real
++ *  start time falls on today, otherwise the real vibe/audience tags, with
++ *  the real category as a last resort. Never hardcoded per event. */
++function badgeForEvent(e: EventItem): string {
++  const start = new Date(e.startISO);
++  const now = new Date();
++  const isToday =
++    !Number.isNaN(start.getTime()) &&
++    start.getFullYear() === now.getFullYear() &&
++    start.getMonth() === now.getMonth() &&
++    start.getDate() === now.getDate();
++  if (isToday) return "★ Tonight";
++  const tags = [...(e.vibeTags || []), ...(e.audienceTags || [])].filter(Boolean);
++  if (tags.length > 0) return "★ " + tags.slice(0, 2).join(" | ");
++  if (e.category === "featured") return "★ Featured";
++  if (e.category === "spotlight") return "★ Spotlight";
++  return "★ Event";
++}
++
++// Gradient placeholders for photo cards (see header note: not real photos).
++const HERO_GRADIENTS: [string, string][] = [
++  ["#7C3AED", "#1E1B4B"],
++  ["#4F46E5", "#0E7490"],
++  ["#A855F7", "#312E81"],
++];
++const VENUE_GRADIENTS: [string, string][] = [
++  ["#3B82F6", "#1E3A8A"],
++  ["#0EA5A5", "#134E4A"],
++  ["#A855F7", "#4C1D95"],
++];
++
+ export default function Home() {
+   const router = useRouter();
+   const [q, setQ] = useState("");
+@@ -105,23 +143,38 @@ export default function Home() {
+     [venues, qNorm]
+   );
+ 
+-  // ✅ Spotlight events list for horizontal scroll
+   const spotlightEvents = useMemo(
+     () => visibleEvents.filter((e) => e.category === "spotlight"),
+     [visibleEvents]
+   );
+ 
+-  // keep your single "featured" for the header row text (unchanged UI)
+-  const featured = useMemo(() => pickFeatured(visibleEvents), [visibleEvents]);
+-
+-  const topVenues = useMemo(() => visibleVenues.slice(0, 3), [visibleVenues]);
+-
+-  // all featured events for the vertical menu
++  // all featured events
+   const featuredEvents = useMemo(
+     () => visibleEvents.filter((e) => e.category === "featured"),
+     [visibleEvents]
+   );
+ 
++  // Stacked hero cards: up to 3 real events, spotlight first then featured,
++  // deduplicated. Falls back to the first real visible events when nothing
++  // is tagged spotlight/featured. Never invents filler cards.
++  const heroEvents = useMemo(() => {
++    const picked: EventItem[] = [];
++    const seen = new Set<string>();
++    for (const e of [...spotlightEvents, ...featuredEvents]) {
++      if (!seen.has(e.id)) {
++        seen.add(e.id);
++        picked.push(e);
++      }
++    }
++    if (picked.length > 0) return picked.slice(0, 3);
++    return visibleEvents.slice(0, 3);
++  }, [spotlightEvents, featuredEvents, visibleEvents]);
++
++  // keep your single "featured" for the header row text
++  const featured = useMemo(() => pickFeatured(visibleEvents), [visibleEvents]);
++
++  const topVenues = useMemo(() => visibleVenues.slice(0, 3), [visibleVenues]);
++
+   function go(tab: TabKey) {
+     setActiveTab(tab);
+     router.replace(`/(tabs)/${tab}`);
+@@ -142,23 +195,9 @@ export default function Home() {
+   const nothingFound = !loading && qNorm.length > 0 && visibleEvents.length === 0 && visibleVenues.length === 0;
+ 
+   return (
+-    <ImageBackground
+-      source={require("../../assets/backgrounds/home-bg.jpg")}
+-      resizeMode="cover"
+-      style={styles.bg}
+-    >
++    <View style={styles.root}>
+       <StatusBar translucent backgroundColor="transparent" barStyle="light-content" />
+ 
+-      {/* Dark vignette like the mock */}
+-      <LinearGradient
+-        colors={[
+-          "rgba(0,0,0,0.55)",
+-          "rgba(0,0,0,0.35)",
+-          "rgba(0,0,0,0.55)",
+-        ]}
+-        style={StyleSheet.absoluteFill}
+-      />
+-
+       <SafeAreaView style={styles.safe}>
+         <ScrollView
+           showsVerticalScrollIndicator={false}
+@@ -166,45 +205,26 @@ export default function Home() {
+           keyboardShouldPersistTaps="handled"
+         >
+           {/* Search */}
+-          <View style={styles.searchWrap}>
+-            <Ionicons name="search" size={18} color="rgba(255,255,255,0.75)" />
+-            <TextInput
+-              value={q}
+-              onChangeText={setQ}
+-              placeholder="Explore"
+-              placeholderTextColor="rgba(255,255,255,0.55)"
+-              style={styles.searchInput}
+-              returnKeyType="search"
+-              onSubmitEditing={openSearchInEvents}
+-            />
++          <SearchBar
++            value={q}
++            onChangeText={setQ}
++            placeholder="Explore"
++            onSubmit={openSearchInEvents}
++          />
++
++          {/* Top tabs */}
++          <View style={styles.tabsWrap}>
++            <SegmentedTabs active={activeTab} onSelect={go} />
+           </View>
+ 
+           {/* See full search results in Events (only while searching) */}
+           {!!qNorm && (
+             <Pressable onPress={openSearchInEvents} style={styles.seeResultsRow}>
+               <Text style={styles.seeResultsText}>See all results in Events</Text>
+-              <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.75)" />
++              <Text style={styles.chevron}>›</Text>
+             </Pressable>
+           )}
+ 
+-          {/* Top tabs pill group */}
+-          <View style={styles.tabsPill}>
+-            {(["home", "events", "personal"] as TabKey[]).map((t) => {
+-              const active = activeTab === t;
+-              return (
+-                <Pressable
+-                  key={t}
+-                  onPress={() => go(t)}
+-                  style={[styles.tabBtn, active && styles.tabBtnActive]}
+-                >
+-                  <Text style={[styles.tabText, active && styles.tabTextActive]}>
+-                    {t.charAt(0).toUpperCase() + t.slice(1)}
+-                  </Text>
+-                </Pressable>
+-              );
+-            })}
+-          </View>
+-
+           {loading ? (
+             <Text style={styles.emptyText}>Loading…</Text>
+           ) : events.length === 0 ? (
+@@ -213,51 +233,31 @@ export default function Home() {
+             <Text style={styles.emptyText}>No matches for “{q.trim()}”.</Text>
+           ) : (
+             <>
+-              {/* Spotlight list (vertical stack, like the mock) */}
+-              <View style={styles.spotlightListWrap}>
+-                {spotlightEvents.map((item) => {
+-                  const venue = getVenueNameFromEvent(item, venues);
+-                  const t = titleToTwoLines(item.title);
+-
+-                  return (
+-                    <Pressable
+-                      key={item.id}
+-                      onPress={() => openEvent(item.id)}
+-                      style={[styles.cardOuter, styles.spotlightCardOuter]}
+-                    >
+-                        <ImageBackground
+-                          source={require("../../assets/backgrounds/home-bg.jpg")}
+-                          resizeMode="cover"
+-                          style={styles.heroCard}
+-                          imageStyle={styles.heroImageStyle}
+-                        >
+-                          <LinearGradient
+-                            colors={["rgba(0,0,0,0.10)", "rgba(0,0,0,0.65)"]}
+-                            style={StyleSheet.absoluteFill}
+-                          />
+-
+-                          <View style={styles.heroTextWrap}>
+-                            <Text style={styles.heroTitle}>
+-                              {t.line1}
+-                              {!!t.line2 ? "\n" : ""}
+-                              {!!t.line2 ? t.line2 : ""}
+-                            </Text>
+-
+-                            <Text numberOfLines={1} style={styles.heroSub}>
+-                              {venue} - Spotlight
+-                            </Text>
+-
+-                            <View style={styles.heroMetaRow}>
+-                              <Text style={styles.heroStar}>★</Text>
+-                              <Text style={styles.heroMeta}>Tonight</Text>
+-                            </View>
+-                          </View>
+-                        </ImageBackground>
+-                      </Pressable>
+-                    );
+-                })}
++              {/* Stacked full-width photo cards (up to 3 real events) */}
++              <View style={styles.heroList}>
++                {heroEvents.map((item, index) => (
++                  <PhotoCard
++                    key={item.id}
++                    title={item.title}
++                    subtitle={getVenueNameFromEvent(item, venues)}
++                    badge={badgeForEvent(item)}
++                    gradient={HERO_GRADIENTS[index % HERO_GRADIENTS.length]}
++                    height={190}
++                    onPress={() => openEvent(item.id)}
++                  />
++                ))}
+               </View>
+ 
++              {/* Featured header row — rendered ONCE (mockup duplicates it) */}
++              {featured && (
++                <Pressable onPress={() => router.replace("/(tabs)/events")} style={styles.featureHeader}>
++                  <Text numberOfLines={1} style={styles.featureHeaderText}>
++                    Featured: {featured.title}
++                  </Text>
++                  <Text style={styles.chevron}>›</Text>
++                </Pressable>
++              )}
++
+               {/* Top Venues (only when venues exist) */}
+               {topVenues.length > 0 && (
+                 <>
+@@ -267,132 +267,51 @@ export default function Home() {
+                     horizontal
+                     showsHorizontalScrollIndicator={false}
+                     data={topVenues}
+-                    keyExtractor={(v, i) => String((v as any)?.id ?? (v as any)?.name ?? i)}
++                    keyExtractor={(v, i) => String(v?.id ?? v?.name ?? i)}
+                     contentContainerStyle={styles.venuesRow}
+                     renderItem={({ item, index }) => {
+-                      const name = (item as any)?.name ?? "Venue";
+-                      const icon =
+-                        index === 0 ? "wine-outline" : index === 1 ? "triangle-outline" : "business-outline";
+-
++                      const name = item?.name || "Venue";
++                      const label = venueLabel(name);
+                       return (
+-                        <Pressable onPress={() => openVenue(name)} style={styles.venueItem}>
+-                          <LinearGradient
+-                            colors={
+-                              index === 0
+-                                ? ["rgba(60,120,255,0.50)", "rgba(40,60,130,0.45)"]
+-                                : index === 1
+-                                ? ["rgba(80,220,210,0.40)", "rgba(50,120,140,0.40)"]
+-                                : ["rgba(170,120,255,0.45)", "rgba(90,60,170,0.40)"]
+-                            }
+-                            style={styles.venueOrb}
+-                          >
+-                            <Ionicons name={icon as any} size={22} color="rgba(255,255,255,0.90)" />
+-                          </LinearGradient>
+-
+-                          <Text numberOfLines={1} style={styles.venueName}>
+-                            {name}
+-                          </Text>
+-                        </Pressable>
++                        <View style={styles.venueCardWrap}>
++                          <PhotoCard
++                            title={label}
++                            gradient={VENUE_GRADIENTS[index % VENUE_GRADIENTS.length]}
++                            height={120}
++                            onPress={() => openVenue(name)}
++                          />
++                        </View>
+                       );
+                     }}
+                   />
+                 </>
+               )}
+-
+-              {/* Featured header row (UNCHANGED UI) */}
+-              {featured && (
+-                <Pressable onPress={() => router.replace("/(tabs)/events")} style={styles.featureHeader}>
+-                  <Text style={styles.featureHeaderLeft}>Featured:</Text>
+-                  <Text numberOfLines={1} style={styles.featureHeaderRight}>
+-                    {featured.title}
+-                  </Text>
+-                  <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.65)" />
+-                </Pressable>
+-              )}
+-
+-              {/* Featured vertical menu (UNCHANGED) */}
+-              <View style={styles.featureMenuWrap}>
+-                <FlatList
+-                  data={featuredEvents}
+-                  keyExtractor={(item) => item.id}
+-                  showsVerticalScrollIndicator={false}
+-                  scrollEnabled={true}
+-                  nestedScrollEnabled={true}
+-                  contentContainerStyle={styles.featureMenuContent}
+-                  renderItem={({ item }) => {
+-                    const venue = getVenueNameFromEvent(item, venues);
+-
+-                    return (
+-                      <Pressable onPress={() => openEvent(item.id)} style={styles.cardOuter}>
+-                        <ImageBackground
+-                          source={require("../../assets/backgrounds/home-bg.jpg")}
+-                          resizeMode="cover"
+-                          style={styles.featureCard}
+-                          imageStyle={styles.featureImageStyle}
+-                        >
+-                          <LinearGradient
+-                            colors={["rgba(0,0,0,0.15)", "rgba(0,0,0,0.70)"]}
+-                            style={StyleSheet.absoluteFill}
+-                          />
+-
+-                          <View style={styles.featureBottomRow}>
+-                            <View style={{ flex: 1, paddingRight: 10 }}>
+-                              <Text numberOfLines={1} style={styles.featureTitle}>
+-                                {item.title}
+-                              </Text>
+-                              <Text numberOfLines={1} style={styles.featureSub}>
+-                                {venue}
+-                              </Text>
+-                            </View>
+-
+-                            <View style={styles.badge}>
+-                              <Text style={styles.badgeText}>FEATURED</Text>
+-                            </View>
+-                          </View>
+-                        </ImageBackground>
+-                      </Pressable>
+-                    );
+-                  }}
+-                />
+-              </View>
+             </>
+           )}
+ 
+-          {/* bottom breathing room so it “moves” like the mock */}
++          {/* bottom breathing room */}
+           <View style={{ height: 26 }} />
+         </ScrollView>
++
++        <BottomNav active={activeTab} onSelect={go} />
+       </SafeAreaView>
+-    </ImageBackground>
++    </View>
+   );
+ }
+ 
+ const styles = StyleSheet.create({
+-  bg: { flex: 1 },
++  root: { flex: 1, backgroundColor: rc.bg },
+   safe: { flex: 1 },
+ 
+   content: {
+-    paddingTop: Platform.select({ ios: 6, android: 12 }),
+-    paddingHorizontal: 18,
+-    paddingBottom: 28,
++    paddingTop: rs.sm,
++    paddingHorizontal: rs.page,
++    paddingBottom: rs.lg,
+   },
+ 
+-  // Search (dark glass)
+-  searchWrap: {
+-    height: 52,
+-    borderRadius: 22,
+-    paddingHorizontal: 16,
+-    flexDirection: "row",
+-    alignItems: "center",
+-    gap: 10,
+-    backgroundColor: "rgba(255,255,255,0.10)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.10)",
+-    marginBottom: 12,
+-  },
+-  searchInput: {
+-    flex: 1,
+-    fontSize: 16,
+-    color: "rgba(255,255,255,0.92)",
++  tabsWrap: {
++    marginTop: rs.md,
++    marginBottom: rs.lg,
+   },
+ 
+   // "See all results in Events" row (only while searching)
+@@ -404,208 +323,63 @@ const styles = StyleSheet.create({
+     marginBottom: 6,
+   },
+   seeResultsText: {
+-    color: "rgba(255,255,255,0.85)",
++    color: rc.text,
+     fontWeight: "800",
+     fontSize: 14,
+   },
++  chevron: {
++    color: rc.muted,
++    fontSize: 20,
++    fontWeight: "700",
++    marginTop: -2,
++  },
+ 
+   emptyText: {
+     marginTop: 24,
+-    color: "rgba(255,255,255,0.75)",
++    color: rc.muted,
+     fontSize: 15,
+     fontWeight: "700",
+     textAlign: "center",
+   },
+ 
+-  // Tabs group (single pill container like the mock)
+-  tabsPill: {
+-    height: 44,
+-    borderRadius: 22,
+-    backgroundColor: "rgba(255,255,255,0.10)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.10)",
+-    flexDirection: "row",
+-    padding: 4,
+-    marginBottom: 16,
+-  },
+-  tabBtn: {
+-    flex: 1,
+-    borderRadius: 18,
+-    alignItems: "center",
+-    justifyContent: "center",
+-  },
+-  tabBtnActive: {
+-    backgroundColor: "rgba(255,255,255,0.16)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.10)",
+-  },
+-  tabText: {
+-    color: "rgba(255,255,255,0.70)",
+-    fontWeight: "800",
+-    fontSize: 14,
+-  },
+-  tabTextActive: {
+-    color: "rgba(255,255,255,0.95)",
+-  },
+-
+-  // Cards
+-  cardOuter: {
+-    borderRadius: 22,
+-    overflow: "hidden",
+-    backgroundColor: "rgba(255,255,255,0.06)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.10)",
+-  },
+-
+-  // Spotlight vertical list (stacked full-width cards, like the mock)
+-  spotlightListWrap: {
+-    gap: 14,
+-  },
+-  spotlightCardOuter: {
+-    width: "100%",
+-  },
+-
+-  heroCard: {
+-    height: 190,
+-    borderRadius: 22,
+-    overflow: "hidden",
+-    justifyContent: "flex-end",
+-  },
+-  heroImageStyle: {
+-    borderRadius: 22,
+-  },
+-  heroTextWrap: {
+-    padding: 16,
+-  },
+-  heroTitle: {
+-    color: "rgba(255,255,255,0.95)",
+-    fontSize: 28,
+-    fontWeight: "900",
+-    lineHeight: 30,
+-  },
+-  heroSub: {
+-    marginTop: 8,
+-    color: "rgba(255,255,255,0.78)",
+-    fontSize: 14,
+-    fontWeight: "700",
+-  },
+-  heroMetaRow: {
+-    marginTop: 10,
+-    flexDirection: "row",
+-    alignItems: "center",
+-    gap: 8,
+-  },
+-  heroStar: {
+-    color: "rgba(255,215,140,0.95)",
+-    fontSize: 16,
+-    marginTop: -1,
+-  },
+-  heroMeta: {
+-    color: "rgba(255,255,255,0.90)",
+-    fontWeight: "900",
+-    fontSize: 15,
+-  },
+-
+-  sectionLabel: {
+-    marginTop: 16,
+-    marginBottom: 10,
+-    color: "rgba(255,255,255,0.88)",
+-    fontSize: 18,
+-    fontWeight: "900",
+-  },
+-
+-  venuesRow: {
+-    paddingBottom: 12,
+-    gap: 18,
+-  },
+-  venueItem: {
+-    width: 110,
+-    alignItems: "center",
+-  },
+-  venueOrb: {
+-    width: 84,
+-    height: 58,
+-    borderRadius: 29,
+-    alignItems: "center",
+-    justifyContent: "center",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.14)",
+-  },
+-  venueName: {
+-    marginTop: 10,
+-    color: "rgba(255,255,255,0.75)",
+-    fontWeight: "800",
+-    fontSize: 13,
+-    textAlign: "center",
++  // Stacked full-width photo cards
++  heroList: {
++    gap: rs.md,
+   },
+ 
++  // Featured header row — rendered ONCE
+   featureHeader: {
+-    marginTop: 4,
+-    marginBottom: 12,
++    marginTop: rs.lg,
++    marginBottom: rs.sm,
+     flexDirection: "row",
+     alignItems: "center",
+     gap: 10,
+     paddingVertical: 10,
+     borderTopWidth: 1,
+-    borderTopColor: "rgba(255,255,255,0.10)",
++    borderTopColor: rc.border,
+   },
+-  featureHeaderLeft: {
+-    color: "rgba(255,255,255,0.90)",
+-    fontWeight: "900",
+-    fontSize: 18,
+-  },
+-  featureHeaderRight: {
++  featureHeaderText: {
+     flex: 1,
+-    color: "rgba(255,255,255,0.70)",
++    color: rc.text,
+     fontWeight: "800",
+-    fontSize: 16,
+-  },
+-
+-  // Vertical menu container
+-  featureMenuWrap: {
+-    height: 340,
+-  },
+-  featureMenuContent: {
+-    gap: 12,
+-    paddingBottom: 6,
++    fontSize: 18,
++    lineHeight: 24,
+   },
+ 
+-  featureCard: {
+-    height: 155,
+-    borderRadius: 22,
+-    overflow: "hidden",
+-    justifyContent: "flex-end",
+-  },
+-  featureImageStyle: {
+-    borderRadius: 22,
+-  },
+-  featureBottomRow: {
+-    padding: 14,
+-    flexDirection: "row",
+-    alignItems: "center",
+-  },
+-  featureTitle: {
+-    color: "rgba(255,255,255,0.92)",
+-    fontWeight: "900",
+-    fontSize: 20,
+-  },
+-  featureSub: {
+-    marginTop: 4,
+-    color: "rgba(255,255,255,0.72)",
+-    fontWeight: "700",
+-    fontSize: 13,
++  sectionLabel: {
++    marginTop: rs.sm,
++    marginBottom: rs.sm,
++    color: rc.text,
++    ...rtype.section,
+   },
+ 
+-  badge: {
+-    backgroundColor: "rgba(255,255,255,0.88)",
+-    paddingHorizontal: 12,
+-    paddingVertical: 7,
+-    borderRadius: 14,
++  venuesRow: {
++    paddingBottom: 12,
++    gap: rs.page,
+   },
+-  badgeText: {
+-    color: "rgba(0,0,0,0.85)",
+-    fontWeight: "900",
+-    fontSize: 12,
+-    letterSpacing: 0.4,
++  venueCardWrap: {
++    width: 160,
++    borderRadius: rr.card,
++    ...rshadow.card,
+   },
+ });
+diff --git a/bownd/app/(tabs)/personal.tsx b/bownd/app/(tabs)/personal.tsx
+index b02182b..33ac923 100644
+--- a/bownd/app/(tabs)/personal.tsx
++++ b/bownd/app/(tabs)/personal.tsx
+@@ -1,20 +1,27 @@
+ // app/(tabs)/personal.tsx
+-// Phase 6 fix notes (see FIX-PLAN.md):
+-// - REMOVED demoAdventures: guests no longer see 3 fake adventures
+-//   ("Jazz + Dessert Hop", "Downtown Lights", "Family Fun Run") presented
+-//   as "Recent Adventures". Guests see a sign-in prompt; signed-in users
+-//   see real redemption history (or an honest empty state).
+-// - Favorite venue tiles navigate to /(tabs)/events filtered to that
+-//   venue. Favorite event tiles navigate to /detail. Previously both
+-//   had onPress={() => {}} (dead).
+-// - Adventure rows are redemption-history records, not navigable
+-//   content: they are now plain rows (no onPress, no chevron) instead
+-//   of dead pressables with a misleading chevron.
+-// - Change Persona points at the canonical /(tabs)/persona route
+-//   (the root /persona duplicate is deleted in Phase 6).
+-// - Rewards "Redeem" button relabeled "Show QR": it scrolls to the QR
+-//   section; it never redeemed anything, and the old label implied it
+-//   did. Visual design is otherwise UNCHANGED.
++// Bownd recreate restyle (Personal screen) — visual restyle only.
++// Behavior preserved from the pre-restyle file (see notes below):
++// - Guests never see demo adventures: signed-in users see real redemption
++//   history, guests see a sign-in prompt (never fake demo adventures).
++// - Favorite venue tiles navigate to /(tabs)/events filtered to that venue.
++//   Favorite event tiles navigate to /detail. Previously both were dead.
++// - Adventure rows are redemption-history records, not navigable content:
++//   plain rows (no onPress, no chevron).
++// - "Change Persona" points at the canonical /(tabs)/persona route.
++// - Rewards "Show QR" scrolls to the QR section; it never redeems anything.
++//   The old "Redeem" label implied it did, so the label says what it does.
++// - All points / tokens / QR values come from the real backend
++//   (profile, lib/store generateQrToken, lib/store redeemCode).
++//   No mockup example values are hardcoded anywhere in this file.
++// - Tabs adapted to the mockup set All | QR | Rewards | Venue:
++//   All shows every section; QR shows QR only; Rewards shows Rewards only;
++//   Venue shows the venue-related sections (Favorite Venues + Favorite
++//   Events). Favorite Events and Adventures content is unchanged and still
++//   reachable under All. Home / Events navigation moved to SegmentedTabs
++//   (top) and BottomNav (bottom), same destinations as the old pills.
++// - Gear icon: no dedicated settings route exists in this app, so the gear
++//   reuses the existing /(tabs)/persona route (the file's settings-adjacent
++//   destination) instead of inventing a new route.
+ import React, { useCallback, useMemo, useRef, useState } from "react";
+ import {
+   View,
+@@ -44,9 +51,26 @@ import {
+   type FavoriteItem,
+   type RedemptionHistoryItem,
+ } from "../../lib/store";
++import {
++  SearchBar,
++  SegmentedTabs,
++  BottomNav,
++  TagPill,
++  PhotoCard,
++  rc,
++  rr,
++  rs,
++  rtype,
++  rshadow,
++  type TabKey,
++} from "../ui/recreate";
+ 
+ const { width: SCREEN_W } = Dimensions.get("window");
+ 
++const VENUE_GRADIENT: [string, string] = ["#7C3AED", "#4F46E5"];
++const EVENT_GRADIENT: [string, string] = ["#F6A58A", "#7C3AED"];
++const PROFILE_GRADIENT: [string, string, string] = ["#7C3AED", "#A855F7", "#F6A58A"];
++
+ type FavoriteVenue = { id: string; name: string; neighborhood?: string; badge?: string };
+ type FavoriteEvent = { id: string; title: string; venue: string; when: string; badge?: string };
+ type Adventure = { id: string; title: string; subtitle: string; dateLabel: string };
+@@ -56,14 +80,9 @@ export default function PersonalScreen() {
+   const scrollRef = useRef<ScrollView>(null);
+   const { user, profile, signOut, refreshProfile } = useAuth();
+ 
+-  // ✅ Top search + pills
+   const [searchText, setSearchText] = useState("");
+-  // NOTE:
+-  // - "events" pill now routes to Events page
+-  // - "favs" pill does what the old "events" pill did (opens Favorite Events section)
+-  const [activePill, setActivePill] = useState<"all" | "home" | "qr" | "rewards" | "venues" | "favs" | "adventures">(
+-    "all"
+-  );
++  // Mockup tabs: All | QR | Rewards | Venue.
++  const [activePill, setActivePill] = useState<"all" | "qr" | "rewards" | "venue">("all");
+ 
+   // collapsible sections
+   const [rewardsOpen, setRewardsOpen] = useState(true);
+@@ -149,7 +168,7 @@ export default function PersonalScreen() {
+     [user, history]
+   );
+ 
+-  // ✅ Search filtering (no UI changes, only filters data)
++  // Search filtering (filters data only).
+   const q = searchText.trim().toLowerCase();
+ 
+   const filteredVenues = useMemo(() => {
+@@ -232,21 +251,19 @@ export default function PersonalScreen() {
+     router.push("/scan");
+   }
+ 
+-  // ✅ Pills behavior
+-  function applyPill(next: typeof activePill) {
+-    // Home pill routes home (personal page only logic)
+-    if (next === "home") {
++  function goToTab(t: TabKey) {
++    if (t === "home") {
+       router.replace("/(tabs)");
+       return;
+     }
+-
+-    // Events pill routes to Events page
+-    if (next === "events" as any) {
+-      // (kept for safety if someone passes "events" manually)
++    if (t === "events") {
+       router.replace("/(tabs)/events");
+       return;
+     }
++    scrollRef.current?.scrollTo({ y: 0, animated: true });
++  }
+ 
++  function applyPill(next: typeof activePill) {
+     setActivePill(next);
+ 
+     if (next === "all") {
+@@ -258,9 +275,10 @@ export default function PersonalScreen() {
+     } else {
+       setQrOpen(next === "qr");
+       setRewardsOpen(next === "rewards");
+-      setVenuesOpen(next === "venues");
+-      setEventsOpen(next === "favs"); // ✅ "Favs" controls Favorite Events section
+-      setAdventuresOpen(next === "adventures");
++      // Venue tab shows the venue-related sections.
++      setVenuesOpen(next === "venue");
++      setEventsOpen(next === "venue");
++      setAdventuresOpen(false);
+     }
+ 
+     requestAnimationFrame(() => {
+@@ -268,311 +286,326 @@ export default function PersonalScreen() {
+     });
+   }
+ 
+-  // ✅ route handler for Events pill (keeps pill row clean)
+-  function goToEvents() {
+-    router.replace("/(tabs)/events");
+-  }
+-
+   return (
+     <View style={styles.root}>
+-      {/* Hero */}
+-      <LinearGradient
+-        colors={["#6A35FF", "#B46CFF", "#FFD57A"]}
+-        start={{ x: 0.1, y: 0.0 }}
+-        end={{ x: 0.9, y: 1.0 }}
+-        style={styles.hero}
+-      >
+-        <SafeAreaView style={styles.safe}>
++      <SafeAreaView style={styles.safe}>
++        <ScrollView
++          ref={scrollRef}
++          contentContainerStyle={styles.scrollContent}
++          showsVerticalScrollIndicator={false}
++        >
++          {/* Header */}
+           <View style={styles.headerRow}>
+             <View>
+               <Text style={styles.heroTitle}>Personal</Text>
+-              <Text style={styles.heroSubtitle}>Rewards • Favorites • Adventures</Text>
++              <Text style={styles.heroSubtitle}>Rewards · Favorites · Adventures</Text>
+             </View>
+-
+-            <Pressable style={styles.changePersonaBtn} onPress={() => router.push("/(tabs)/persona")}>
+-              <Ionicons name="sparkles-outline" size={16} color="#fff" />
+-              <Text style={styles.changePersonaText}>Change Persona</Text>
++            <Pressable
++              style={styles.gearBtn}
++              onPress={() => router.push("/(tabs)/persona")}
++              accessibilityLabel="Settings"
++              accessibilityRole="button"
++            >
++              <Ionicons name="settings-outline" size={22} color="#fff" />
+             </Pressable>
+           </View>
+ 
+-          <View style={styles.illustrationWrap}>
+-            <View style={styles.orb} />
+-            <View style={styles.avatarRing}>
+-              <View style={styles.avatarInner}>
+-                <Ionicons name="person" size={42} color="#FFFFFF" />
++          <View style={styles.searchWrap}>
++            <SearchBar
++              value={searchText}
++              onChangeText={setSearchText}
++              placeholder="Search rewards, venues, events..."
++            />
++          </View>
++
++          <View style={styles.segWrap}>
++            <SegmentedTabs active="personal" onSelect={goToTab} />
++          </View>
++
++          {/* Profile: violet-to-peach gradient panel, concentric glow circles,
++              dark avatar circle with person silhouette, real backend points. */}
++          <LinearGradient
++            colors={PROFILE_GRADIENT}
++            start={{ x: 0.1, y: 0.0 }}
++            end={{ x: 0.9, y: 1.0 }}
++            style={styles.profilePanel}
++          >
++            <View style={styles.glowOuter}>
++              <View style={styles.glowMid}>
++                <View style={styles.avatar}>
++                  <Ionicons name="person" size={42} color="#FFFFFF" />
++                </View>
+               </View>
+             </View>
+ 
+             <Text style={styles.heroBigStat}>{points} pts</Text>
+             <Text style={styles.heroSmallStat}>Next tier at {nextTierAt}</Text>
++            <View style={styles.tierRow}>
++              <TagPill label={tier} />
++            </View>
++
++            <Pressable style={styles.changePersonaBtn} onPress={() => router.push("/(tabs)/persona")}>
++              <Ionicons name="sparkles-outline" size={16} color="#fff" />
++              <Text style={styles.changePersonaText}>Change Persona</Text>
++            </Pressable>
++
+             {user ? (
+-              <Pressable onPress={() => signOut()} style={{ marginTop: 8, padding: 6 }}>
+-                <Text style={{ color: "rgba(255,255,255,0.9)", fontWeight: "800", fontSize: 12 }}>
+-                  Sign out
+-                </Text>
++              <Pressable onPress={() => signOut()} style={styles.authLink}>
++                <Text style={styles.authLinkText}>Sign out</Text>
+               </Pressable>
+             ) : (
+-              <Pressable onPress={() => router.push("/(auth)/login")} style={{ marginTop: 8, padding: 6 }}>
+-                <Text style={{ color: "rgba(255,255,255,0.9)", fontWeight: "800", fontSize: 12 }}>
+-                  Sign in to save rewards →
+-                </Text>
++              <Pressable onPress={() => router.push("/(auth)/login")} style={styles.authLink}>
++                <Text style={styles.authLinkText}>Sign in to save rewards →</Text>
+               </Pressable>
+             )}
+-          </View>
+-        </SafeAreaView>
+-      </LinearGradient>
+-
+-      {/* White sheet */}
+-      <View style={styles.sheet}>
+-        <ScrollView ref={scrollRef} contentContainerStyle={styles.sheetContent} showsVerticalScrollIndicator={false}>
+-          {/* ✅ Top Search Bar + Pills */}
+-          <View style={styles.topToolsWrap}>
+-            <View style={styles.searchWrap}>
+-              <Ionicons name="search-outline" size={18} color="#6F6F6F" />
+-              <TextInput
+-                value={searchText}
+-                onChangeText={setSearchText}
+-                placeholder="Search rewards, venues, events..."
+-                placeholderTextColor="#9A9A9A"
+-                style={styles.searchInput}
+-                returnKeyType="search"
+-                clearButtonMode="while-editing"
+-              />
+-              {!!searchText && (
+-                <Pressable onPress={() => setSearchText("")} hitSlop={10} style={styles.clearBtn}>
+-                  <Ionicons name="close-circle" size={18} color="#9A9A9A" />
+-                </Pressable>
+-              )}
+-            </View>
++          </LinearGradient>
+ 
+-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillsRow}>
+-              <Pill label="Home" active={activePill === "home"} onPress={() => applyPill("home")} />
++          {/* Lower panel: light off-white / pale-lavender, overlapping gradient. */}
++          <View style={styles.lightPanel}>
++            {/* Tabs: All (selected) | QR | Rewards | Venue */}
++            <ScrollView
++              horizontal
++              showsHorizontalScrollIndicator={false}
++              contentContainerStyle={styles.tabsRow}
++            >
++              <TabPill label="All" active={activePill === "all"} onPress={() => applyPill("all")} />
++              <TabPill label="QR" active={activePill === "qr"} onPress={() => applyPill("qr")} />
++              <TabPill
++                label="Rewards"
++                active={activePill === "rewards"}
++                onPress={() => applyPill("rewards")}
++              />
++              <TabPill
++                label="Venue"
++                active={activePill === "venue"}
++                onPress={() => applyPill("venue")}
++              />
++              <Ionicons
++                name="chevron-forward"
++                size={16}
++                color={rc.lightPanelSub}
++                style={styles.tabsChevron}
++              />
++            </ScrollView>
+ 
+-{/* 👇 swapped */}
+-<Pill label="Events" active={false} onPress={goToEvents} />
+-<Pill label="All" active={activePill === "all"} onPress={() => applyPill("all")} />
++            {/* QR */}
++            <SectionHeader title="QR Codes" open={qrOpen} onPress={() => setQrOpen((s) => !s)} />
++            {qrOpen && (
++              <View style={styles.card}>
++                <Text style={styles.qrHint}>
++                  Generate a code to show a venue, or redeem a code from a venue.
++                </Text>
+ 
+-<Pill label="QR" active={activePill === "qr"} onPress={() => applyPill("qr")} />
+-<Pill label="Rewards" active={activePill === "rewards"} onPress={() => applyPill("rewards")} />
+-<Pill label="Venues" active={activePill === "venues"} onPress={() => applyPill("venues")} />
+-<Pill label="Favs" active={activePill === "favs"} onPress={() => applyPill("favs")} />
+-<Pill label="Adventures" active={activePill === "adventures"} onPress={() => applyPill("adventures")} />
++                {/* Generator */}
++                <View>
++                  <View style={styles.qrTopRow}>
++                    <Text style={styles.qrBlockTitle}>Your QR Token</Text>
++                    <Pressable style={styles.newBtn} onPress={onGenerateQr}>
++                      <Ionicons name="refresh-outline" size={16} color="#fff" />
++                      <Text style={styles.newBtnText}>New</Text>
++                    </Pressable>
++                  </View>
+ 
+-            </ScrollView>
+-          </View>
++                  <View style={styles.qrToken}>
++                    <Text style={styles.qrTokenText} numberOfLines={1}>
++                      {generatedCode || "—"}
++                    </Text>
++                  </View>
+ 
+-          {/* QR */}
+-          <SectionHeader title="QR Codes" open={qrOpen} onPress={() => setQrOpen((s) => !s)} />
+-          {qrOpen && (
+-            <View style={styles.qrCard}>
+-              <Text style={styles.qrHint}>Generate a code to show a venue, or redeem a code from a venue.</Text>
+-
+-              {/* Generator */}
+-              <View style={styles.qrBlock}>
+-                <View style={styles.qrTopRow}>
+-                  <Text style={styles.qrBlockTitle}>Your QR Token</Text>
+-                  <Pressable style={styles.smallBtn} onPress={onGenerateQr}>
+-                    <Ionicons name="refresh-outline" size={16} color="#fff" />
+-                    <Text style={styles.smallBtnText}>New</Text>
+-                  </Pressable>
++                  <View style={styles.qrDisplay}>
++                    {qrValue ? (
++                      <View style={styles.qrBox}>
++                        <QRCode value={qrValue} size={160} />
++                      </View>
++                    ) : (
++                      <>
++                        <Ionicons name="qr-code-outline" size={80} color="rgba(0,0,0,0.55)" />
++                        <Text style={styles.qrEmptyText}>
++                          {user ? "Tap New to generate your code" : "Sign in to generate a code"}
++                        </Text>
++                      </>
++                    )}
++                  </View>
+                 </View>
+ 
+-                <View style={styles.qrToken}>
+-                  <Text style={styles.qrTokenText} numberOfLines={1}>
+-                    {generatedCode || "—"}
+-                  </Text>
+-                </View>
++                {/* Redeemer */}
++                <View>
++                  <Text style={styles.qrBlockTitle}>Redeem a Code</Text>
++                  <View style={styles.redeemRow}>
++                    <TextInput
++                      value={redeemInput}
++                      onChangeText={setRedeemInput}
++                      placeholder="Paste or type code"
++                      placeholderTextColor="#9A9A9A"
++                      style={styles.redeemInput}
++                      autoCapitalize="characters"
++                    />
++                    <Pressable onPress={onRedeem}>
++                      <LinearGradient
++                        colors={[rc.indigo, rc.violet]}
++                        start={{ x: 0, y: 0 }}
++                        end={{ x: 1, y: 0 }}
++                        style={styles.redeemBtn}
++                      >
++                        <Text style={styles.redeemBtnText}>Redeem</Text>
++                      </LinearGradient>
++                    </Pressable>
++                  </View>
+ 
+-                <View style={styles.qrFake}>
+-                  {qrValue ? (
+-                    <View style={styles.qrBox}>
+-                      <QRCode value={qrValue} size={160} />
+-                    </View>
+-                  ) : (
+-                    <>
+-                      <Ionicons name="qr-code-outline" size={80} color="rgba(0,0,0,0.55)" />
+-                      <Text style={styles.qrFakeText}>
+-                        {user ? "Tap New to generate your code" : "Sign in to generate a code"}
+-                      </Text>
+-                    </>
+-                  )}
++                  <Pressable style={styles.scanBtn} onPress={onOpenScanner}>
++                    <Ionicons name="scan-outline" size={18} color="#fff" />
++                    <Text style={styles.scanBtnText}>Open Camera Scanner</Text>
++                  </Pressable>
+                 </View>
+               </View>
++            )}
++
++            {/* Rewards */}
++            <SectionHeader
++              title="Rewards"
++              open={rewardsOpen}
++              onPress={() => setRewardsOpen((s) => !s)}
++            />
++            {rewardsOpen && (
++              <View style={styles.card}>
++                <View style={styles.rewardsTopRow}>
++                  <View>
++                    <Text style={styles.rewardsPoints}>{points} points</Text>
++                    <Text style={styles.rewardsHint}>
++                      Earn points by redeeming offers + going on adventures.
++                    </Text>
++                  </View>
+ 
+-              {/* Redeemer */}
+-              <View style={styles.qrBlock}>
+-                <Text style={styles.qrBlockTitle}>Redeem a Code</Text>
+-                <View style={styles.redeemRow}>
+-                  <TextInput
+-                    value={redeemInput}
+-                    onChangeText={setRedeemInput}
+-                    placeholder="Paste or type code"
+-                    placeholderTextColor="#9A9A9A"
+-                    style={styles.redeemInput}
+-                    autoCapitalize="characters"
+-                  />
+-                  <Pressable style={styles.redeemBtn} onPress={onRedeem}>
+-                    <Text style={styles.redeemBtnText}>Redeem</Text>
++                  {/* Scrolls to the QR section. Label says what it does —
++                      the old "Redeem" label implied it redeemed something. */}
++                  <Pressable style={styles.claimBtn} onPress={() => applyPill("qr")}>
++                    <Text style={styles.claimBtnText}>Show QR</Text>
+                   </Pressable>
+                 </View>
+ 
+-                <Pressable style={styles.scanBtn} onPress={onOpenScanner}>
+-                  <Ionicons name="scan-outline" size={18} color="#fff" />
+-                  <Text style={styles.scanBtnText}>Open Camera Scanner</Text>
+-                </Pressable>
+-              </View>
+-            </View>
+-          )}
+-
+-          {/* Rewards */}
+-          <SectionHeader title="Rewards" open={rewardsOpen} onPress={() => setRewardsOpen((s) => !s)} />
+-          {rewardsOpen && (
+-            <View style={styles.rewardsCard}>
+-              <View style={styles.rewardsTopRow}>
+-                <View>
+-                  <Text style={styles.rewardsPoints}>{points} points</Text>
+-                  <Text style={styles.rewardsHint}>Earn points by redeeming offers + going on adventures.</Text>
++                <View style={styles.progressTrack}>
++                  <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+                 </View>
+ 
+-                {/* Scrolls to the QR section. Label says what it does —
+-                    the old "Redeem" label implied it redeemed something. */}
+-                <Pressable style={styles.claimBtn} onPress={() => applyPill("qr")}>
+-                  <Text style={styles.claimBtnText}>Show QR</Text>
+-                </Pressable>
+-              </View>
+-
+-              <View style={styles.progressTrack}>
+-                <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
++                <View style={styles.rewardsMetaRow}>
++                  <Text style={styles.metaText}>Current: {tier}</Text>
++                  <Text style={styles.metaText}>Next: {tier === "VIP" ? "Max" : "VIP"}</Text>
++                </View>
+               </View>
++            )}
+ 
+-              <View style={styles.rewardsMetaRow}>
+-                <Text style={styles.metaText}>Current: {tier}</Text>
+-                <Text style={styles.metaText}>Next: {tier === "VIP" ? "Max" : "VIP"}</Text>
+-              </View>
+-            </View>
+-          )}
+-
+-          {/* Favorite Venues */}
+-          <SectionHeader title="Favorite Venues" open={venuesOpen} onPress={() => setVenuesOpen((s) => !s)} />
+-          {venuesOpen && (
+-            <FlatList
+-              data={filteredVenues}
+-              keyExtractor={(item) => item.id}
+-              horizontal
+-              showsHorizontalScrollIndicator={false}
+-              contentContainerStyle={styles.hListPad}
+-              renderItem={({ item }) => (
+-                <Pressable
+-                  style={styles.tile}
+-                  onPress={() => router.push({ pathname: "/(tabs)/events", params: { venue: item.name } })}
+-                >
+-                  <LinearGradient
+-                    colors={["#A56CFF", "#6A35FF", "#2D6BFF"]}
+-                    start={{ x: 0.0, y: 0.0 }}
+-                    end={{ x: 1.0, y: 1.0 }}
+-                    style={styles.tileBg}
+-                  >
+-                    <Text style={styles.tileBadge}>{item.badge ?? "Favorite"}</Text>
+-                    <Text style={styles.tileTitle} numberOfLines={2}>
+-                      {item.name}
+-                    </Text>
+-                    <Text style={styles.tileSub} numberOfLines={1}>
+-                      {item.neighborhood ?? "Kansas City"}
+-                    </Text>
+-                  </LinearGradient>
+-                </Pressable>
+-              )}
++            {/* Favorite Venues */}
++            <SectionHeader
++              title="Favorite Venues"
++              open={venuesOpen}
++              onPress={() => setVenuesOpen((s) => !s)}
+             />
+-          )}
+-
+-          {/* Favorite Events */}
+-          <SectionHeader title="Favorite Events" open={eventsOpen} onPress={() => setEventsOpen((s) => !s)} />
+-          {eventsOpen && (
+-            <FlatList
+-              data={filteredEvents}
+-              keyExtractor={(item) => item.id}
+-              horizontal
+-              showsHorizontalScrollIndicator={false}
+-              contentContainerStyle={styles.hListPad}
+-              renderItem={({ item }) => (
+-                <Pressable
+-                  style={[styles.tile, { width: Math.min(240, SCREEN_W * 0.62) }]}
+-                  onPress={() => router.push({ pathname: "/detail", params: { id: item.id, kind: "event" } })}
+-                >
+-                  <LinearGradient
+-                    colors={["#FFD57A", "#B46CFF", "#6A35FF"]}
+-                    start={{ x: 0.0, y: 0.1 }}
+-                    end={{ x: 1.0, y: 1.0 }}
+-                    style={styles.tileBg}
+-                  >
+-                    <View style={styles.eventBadgeRow}>
+-                      <Text style={styles.tileBadge}>{item.badge ?? "Saved"}</Text>
+-                    </View>
+-
+-                    <Text style={styles.tileTitle} numberOfLines={2}>
+-                      {item.title}
+-                    </Text>
+-
+-                    <Text style={styles.tileSub} numberOfLines={1}>
+-                      {item.venue}
+-                    </Text>
++            {venuesOpen && (
++              <FlatList
++                data={filteredVenues}
++                keyExtractor={(item) => item.id}
++                horizontal
++                showsHorizontalScrollIndicator={false}
++                contentContainerStyle={styles.hListPad}
++                renderItem={({ item }) => (
++                  <View style={styles.favItemWrap}>
++                    <PhotoCard
++                      title={item.name}
++                      subtitle={item.neighborhood ?? "Kansas City"}
++                      badge={item.badge ?? "Favorite"}
++                      gradient={VENUE_GRADIENT}
++                      height={150}
++                      onPress={() =>
++                        router.push({ pathname: "/(tabs)/events", params: { venue: item.name } })
++                      }
++                    />
++                  </View>
++                )}
++              />
++            )}
+ 
+-                    <Text style={styles.eventWhen} numberOfLines={1}>
+-                      {item.when}
+-                    </Text>
+-                  </LinearGradient>
+-                </Pressable>
+-              )}
++            {/* Favorite Events */}
++            <SectionHeader
++              title="Favorite Events"
++              open={eventsOpen}
++              onPress={() => setEventsOpen((s) => !s)}
+             />
+-          )}
+-
+-          {/* Recent Adventures — real redemption history only. */}
+-          <SectionHeader title="Recent Adventures" open={adventuresOpen} onPress={() => setAdventuresOpen((s) => !s)} />
+-          {adventuresOpen && (
+-            <View style={styles.listWrap}>
+-              {!user && (
+-                <Text style={{ fontSize: 13, color: "#6F6F6F", fontWeight: "800", padding: 4 }}>
+-                  Sign in to see your adventures.
+-                </Text>
+-              )}
+-              {user && filteredAdventures.length === 0 && (
+-                <Text style={{ fontSize: 13, color: "#6F6F6F", fontWeight: "800", padding: 4 }}>
+-                  No adventures yet — redeem an offer to start earning.
+-                </Text>
+-              )}
+-              {/* History records are display-only (not navigable content),
+-                  so rows are plain Views with no chevron — previously dead
+-                  pressables with a misleading chevron. */}
+-              {filteredAdventures.map((a) => (
+-                <View key={a.id} style={styles.rowCard}>
+-                  <View style={styles.rowLeft}>
+-                    <LinearGradient
+-                      colors={["#6A35FF", "#B46CFF", "#FFD57A"]}
+-                      start={{ x: 0, y: 0 }}
+-                      end={{ x: 1, y: 1 }}
+-                      style={styles.rowIcon}
+-                    >
+-                      <Ionicons name="sparkles" size={18} color="#FFFFFF" />
+-                    </LinearGradient>
++            {eventsOpen && (
++              <FlatList
++                data={filteredEvents}
++                keyExtractor={(item) => item.id}
++                horizontal
++                showsHorizontalScrollIndicator={false}
++                contentContainerStyle={styles.hListPad}
++                renderItem={({ item }) => (
++                  <View style={styles.favEventWrap}>
++                    <PhotoCard
++                      title={item.title}
++                      subtitle={item.when ? `${item.venue} · ${item.when}` : item.venue}
++                      badge={item.badge ?? "Saved"}
++                      gradient={EVENT_GRADIENT}
++                      height={150}
++                      onPress={() =>
++                        router.push({ pathname: "/detail", params: { id: item.id, kind: "event" } })
++                      }
++                    />
+                   </View>
++                )}
++              />
++            )}
+ 
+-                  <View style={styles.rowMid}>
+-                    <Text style={styles.rowTitle} numberOfLines={1}>
+-                      {a.title}
+-                    </Text>
+-                    <Text style={styles.rowSub} numberOfLines={1}>
+-                      {a.subtitle}
+-                    </Text>
+-                    <Text style={styles.rowMeta}>{a.dateLabel}</Text>
++            {/* Recent Adventures — real redemption history only. */}
++            <SectionHeader
++              title="Recent Adventures"
++              open={adventuresOpen}
++              onPress={() => setAdventuresOpen((s) => !s)}
++            />
++            {adventuresOpen && (
++              <View style={styles.listWrap}>
++                {!user && (
++                  <Text style={styles.emptyText}>Sign in to see your adventures.</Text>
++                )}
++                {user && filteredAdventures.length === 0 && (
++                  <Text style={styles.emptyText}>
++                    No adventures yet — redeem an offer to start earning.
++                  </Text>
++                )}
++                {/* History records are display-only (not navigable content),
++                    so rows are plain Views with no chevron — previously dead
++                    pressables with a misleading chevron. */}
++                {filteredAdventures.map((a) => (
++                  <View key={a.id} style={styles.rowCard}>
++                    <View style={styles.rowLeft}>
++                      <LinearGradient
++                        colors={["#6A35FF", "#B46CFF", "#FFD57A"]}
++                        start={{ x: 0, y: 0 }}
++                        end={{ x: 1, y: 1 }}
++                        style={styles.rowIcon}
++                      >
++                        <Ionicons name="sparkles" size={18} color="#FFFFFF" />
++                      </LinearGradient>
++                    </View>
++
++                    <View style={styles.rowMid}>
++                      <Text style={styles.rowTitle} numberOfLines={1}>
++                        {a.title}
++                      </Text>
++                      <Text style={styles.rowSub} numberOfLines={1}>
++                        {a.subtitle}
++                      </Text>
++                      <Text style={styles.rowMeta}>{a.dateLabel}</Text>
++                    </View>
+                   </View>
+-                </View>
+-              ))}
+-            </View>
+-          )}
++                ))}
++              </View>
++            )}
+ 
+-          <View style={{ height: 26 }} />
++            <View style={{ height: 10 }} />
++          </View>
+         </ScrollView>
+-      </View>
++      </SafeAreaView>
++
++      <BottomNav active="personal" onSelect={goToTab} />
+     </View>
+   );
+ }
+@@ -581,125 +614,133 @@ function SectionHeader({ title, open, onPress }: { title: string; open: boolean;
+   return (
+     <Pressable style={styles.sectionHeader} onPress={onPress}>
+       <Text style={styles.sectionTitle}>{title}</Text>
+-      <Ionicons name={open ? "chevron-down" : "chevron-forward"} size={18} color="#9A9A9A" />
++      <Ionicons
++        name={open ? "chevron-down" : "chevron-forward"}
++        size={18}
++        color={rc.lightPanelSub}
++      />
+     </Pressable>
+   );
+ }
+ 
+-function Pill({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
++/** Light-panel tab pill: selected = dark pill per the mockup. Built with
++ *  shared rc tokens; FilterPill (dark-theme) is unreadable on this surface. */
++function TabPill({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+   return (
+-    <Pressable onPress={onPress} style={[styles.pill, active && styles.pillActive]}>
+-      <Text style={[styles.pillText, active && styles.pillTextActive]}>{label}</Text>
++    <Pressable onPress={onPress} style={[styles.tabPill, active && styles.tabPillActive]}>
++      <Text style={[styles.tabPillText, active && styles.tabPillTextActive]}>{label}</Text>
+     </Pressable>
+   );
+ }
+ 
+ const styles = StyleSheet.create({
+-  root: { flex: 1, backgroundColor: "#0B0B12" },
+-
+-  hero: {
+-    height: 320,
+-    borderBottomLeftRadius: 28,
+-    borderBottomRightRadius: 28,
+-    overflow: "hidden",
+-  },
+-  safe: { flex: 1, paddingHorizontal: 18, paddingTop: 6 },
++  root: { flex: 1, backgroundColor: rc.bg },
++  safe: { flex: 1 },
++  scrollContent: { paddingHorizontal: rs.page, paddingTop: 8, paddingBottom: 16 },
+ 
+   headerRow: {
+     flexDirection: "row",
+     alignItems: "flex-start",
+     justifyContent: "space-between",
+     paddingTop: 10,
++    marginBottom: 16,
+     gap: 12,
+   },
+-  heroTitle: { color: "#fff", fontSize: 30, fontWeight: "900" },
+-  heroSubtitle: { color: "rgba(255,255,255,0.88)", fontSize: 12, marginTop: 6, fontWeight: "700" },
++  heroTitle: { ...rtype.display, color: "#fff" },
++  heroSubtitle: { ...rtype.small, color: rc.subtext, marginTop: 4 },
++  gearBtn: {
++    width: 44,
++    height: 44,
++    borderRadius: 22,
++    backgroundColor: rc.surface,
++    borderWidth: 1,
++    borderColor: rc.border,
++    alignItems: "center",
++    justifyContent: "center",
++  },
+ 
+-  changePersonaBtn: {
+-    flexDirection: "row",
++  searchWrap: { marginBottom: 12 },
++  segWrap: { marginBottom: 16 },
++
++  // Profile gradient panel
++  profilePanel: {
++    borderRadius: rr.panel,
++    overflow: "hidden",
++    padding: 20,
++    paddingBottom: 48,
+     alignItems: "center",
+-    gap: 8,
+-    paddingHorizontal: 12,
+-    paddingVertical: 10,
+-    borderRadius: 14,
+-    backgroundColor: "rgba(255,255,255,0.18)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.22)",
+-    marginLeft: -39,
++    ...rshadow.card,
+   },
+-  changePersonaText: { color: "#fff", fontWeight: "900", fontSize: 12 },
+-
+-  illustrationWrap: { flex: 1, alignItems: "center", justifyContent: "center", paddingBottom: 16 },
+-  orb: {
+-    position: "absolute",
+-    width: 240,
+-    height: 240,
+-    borderRadius: 120,
+-    backgroundColor: "rgba(255,255,255,0.18)",
+-    transform: [{ translateY: 8 }],
++  glowOuter: {
++    width: 260,
++    height: 260,
++    borderRadius: 130,
++    backgroundColor: "rgba(255,255,255,0.10)",
++    alignItems: "center",
++    justifyContent: "center",
++    marginBottom: 14,
+   },
+-  avatarRing: {
+-    width: 98,
+-    height: 98,
+-    borderRadius: 49,
+-    backgroundColor: "rgba(255,255,255,0.25)",
++  glowMid: {
++    width: 200,
++    height: 200,
++    borderRadius: 100,
++    backgroundColor: "rgba(255,255,255,0.12)",
+     alignItems: "center",
+     justifyContent: "center",
+-    marginBottom: 10,
+   },
+-  avatarInner: {
+-    width: 82,
+-    height: 82,
+-    borderRadius: 41,
+-    backgroundColor: "rgba(30,30,45,0.35)",
++  avatar: {
++    width: 92,
++    height: 92,
++    borderRadius: 46,
++    backgroundColor: "#1E1B2E",
+     alignItems: "center",
+     justifyContent: "center",
+     borderWidth: 1,
+     borderColor: "rgba(255,255,255,0.35)",
+   },
+-  heroBigStat: { color: "#fff", fontSize: 26, fontWeight: "900", marginTop: 4 },
+-  heroSmallStat: { color: "rgba(255,255,255,0.9)", fontSize: 12, marginTop: 4, fontWeight: "800" },
+-
+-  sheet: {
+-    flex: 1,
+-    marginTop: -34,
+-    backgroundColor: "#fff",
+-    borderTopLeftRadius: 26,
+-    borderTopRightRadius: 26,
+-    overflow: "hidden",
+-  },
+-  sheetContent: { paddingHorizontal: 18, paddingTop: 14 },
+-
+-  // top search + pills
+-  topToolsWrap: { gap: 10, marginBottom: 6 },
+-  searchWrap: {
+-    height: 46,
+-    borderRadius: 14,
+-    backgroundColor: "#F7F7FB",
+-    paddingHorizontal: 12,
+-    borderWidth: 1,
+-    borderColor: "rgba(0,0,0,0.06)",
++  heroBigStat: { color: "#fff", fontSize: 30, fontWeight: "900", marginTop: 4 },
++  heroSmallStat: { color: "rgba(255,255,255,0.85)", fontSize: 13, marginTop: 4, fontWeight: "700" },
++  tierRow: { marginTop: 10 },
++  changePersonaBtn: {
+     flexDirection: "row",
+     alignItems: "center",
+-    gap: 10,
++    gap: 8,
++    paddingHorizontal: 14,
++    paddingVertical: 10,
++    borderRadius: rr.pill,
++    backgroundColor: "rgba(255,255,255,0.18)",
++    borderWidth: 1,
++    borderColor: "rgba(255,255,255,0.25)",
++    marginTop: 14,
++  },
++  changePersonaText: { color: "#fff", fontWeight: "800", fontSize: 13 },
++  authLink: { marginTop: 10, padding: 6 },
++  authLinkText: { color: "rgba(255,255,255,0.9)", fontWeight: "800", fontSize: 12 },
++
++  // Lower light panel overlapping the gradient
++  lightPanel: {
++    marginTop: -28,
++    backgroundColor: rc.lightPanel,
++    borderRadius: rr.panel,
++    padding: 16,
++    ...rshadow.card,
+   },
+-  searchInput: { flex: 1, height: "100%", fontWeight: "800", color: "#1B1B1B" },
+-  clearBtn: { paddingLeft: 2 },
+ 
+-  pillsRow: { paddingVertical: 2, gap: 10, paddingRight: 8 },
+-  pill: {
+-    height: 34,
+-    paddingHorizontal: 12,
+-    borderRadius: 999,
+-    backgroundColor: "#F7F7FB",
++  tabsRow: { gap: 8, paddingBottom: 4, marginBottom: 4, alignItems: "center" },
++  tabPill: {
++    paddingHorizontal: 16,
++    paddingVertical: 9,
++    borderRadius: rr.pill,
++    backgroundColor: "#FFFFFF",
+     borderWidth: 1,
+-    borderColor: "rgba(0,0,0,0.06)",
++    borderColor: rc.lightBorder,
+     alignItems: "center",
+     justifyContent: "center",
+   },
+-  pillActive: { backgroundColor: "#2D6BFF", borderColor: "rgba(45,107,255,0.25)" },
+-  pillText: { fontWeight: "900", fontSize: 12, color: "#1B1B1B" },
+-  pillTextActive: { color: "#fff" },
++  tabPillActive: { backgroundColor: "#1E1B2E", borderColor: "#1E1B2E" },
++  tabPillText: { fontSize: 13, fontWeight: "700", color: rc.lightPanelText },
++  tabPillTextActive: { color: "#fff" },
++  tabsChevron: { marginLeft: 2 },
+ 
+   sectionHeader: {
+     paddingVertical: 12,
+@@ -707,59 +748,52 @@ const styles = StyleSheet.create({
+     alignItems: "center",
+     justifyContent: "space-between",
+   },
+-  sectionTitle: { fontSize: 16, fontWeight: "900", color: "#1B1B1B" },
++  sectionTitle: { ...rtype.section, color: rc.lightPanelText },
+ 
+-  // QR
+-  qrCard: {
+-    backgroundColor: "#F7F7FB",
+-    borderRadius: 18,
++  // Cards on the light panel
++  card: {
++    backgroundColor: "#FFFFFF",
++    borderRadius: rr.card,
+     padding: 14,
+     borderWidth: 1,
+-    borderColor: "rgba(0,0,0,0.06)",
++    borderColor: rc.lightBorder,
+     marginBottom: 8,
+     gap: 12,
+   },
+-  qrHint: { fontSize: 12, color: "#6F6F6F", fontWeight: "700", lineHeight: 16 },
+-  qrBlock: {
+-    backgroundColor: "#FFFFFF",
+-    borderRadius: 16,
+-    padding: 12,
+-    borderWidth: 1,
+-    borderColor: "rgba(0,0,0,0.06)",
+-  },
++  qrHint: { ...rtype.small, color: rc.lightPanelSub },
+   qrTopRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+-  qrBlockTitle: { fontSize: 13, fontWeight: "900", color: "#1B1B1B" },
+-  smallBtn: {
++  qrBlockTitle: { fontSize: 14, fontWeight: "800", color: rc.lightPanelText },
++  newBtn: {
+     flexDirection: "row",
+     alignItems: "center",
+     gap: 6,
+-    backgroundColor: "#2D6BFF",
+-    paddingHorizontal: 10,
++    backgroundColor: rc.violet,
++    paddingHorizontal: 12,
+     paddingVertical: 8,
+-    borderRadius: 12,
++    borderRadius: rr.pill,
+   },
+-  smallBtnText: { color: "#fff", fontWeight: "900", fontSize: 12 },
++  newBtnText: { color: "#fff", fontWeight: "800", fontSize: 12 },
+ 
+   qrToken: {
+     marginTop: 10,
+-    borderRadius: 14,
+-    backgroundColor: "#F7F7FB",
++    borderRadius: rr.cardSm,
++    backgroundColor: rc.lightPanel,
+     paddingVertical: 10,
+     paddingHorizontal: 12,
+   },
+-  qrTokenText: { fontWeight: "900", color: "#1B1B1B" },
++  qrTokenText: { fontWeight: "800", color: rc.lightPanelText },
+ 
+-  qrFake: {
++  qrDisplay: {
+     marginTop: 12,
+-    height: 150,
+-    borderRadius: 16,
+-    backgroundColor: "#F7F7FB",
++    minHeight: 170,
++    borderRadius: rr.cardSm,
++    backgroundColor: rc.lightPanel,
+     alignItems: "center",
+     justifyContent: "center",
+     gap: 8,
++    padding: 12,
+   },
+-  qrFakeText: { fontSize: 11, color: "#9A9A9A", fontWeight: "800" },
+-
++  qrEmptyText: { fontSize: 12, color: rc.lightPanelSub, fontWeight: "600", textAlign: "center" },
+   qrBox: {
+     padding: 10,
+     borderRadius: 12,
+@@ -771,93 +805,73 @@ const styles = StyleSheet.create({
+     flex: 1,
+     height: 46,
+     borderRadius: 14,
+-    backgroundColor: "#F7F7FB",
++    backgroundColor: rc.lightPanel,
+     paddingHorizontal: 12,
+     borderWidth: 1,
+-    borderColor: "rgba(0,0,0,0.06)",
+-    fontWeight: "800",
+-    color: "#1B1B1B",
++    borderColor: rc.lightBorder,
++    fontWeight: "700",
++    color: rc.lightPanelText,
+   },
+   redeemBtn: {
+     height: 46,
+-    paddingHorizontal: 14,
++    paddingHorizontal: 16,
+     borderRadius: 14,
+-    backgroundColor: "#6A35FF",
+     alignItems: "center",
+     justifyContent: "center",
+   },
+-  redeemBtnText: { color: "#fff", fontWeight: "900", fontSize: 12 },
++  redeemBtnText: { color: "#fff", fontWeight: "800", fontSize: 13 },
+ 
+   scanBtn: {
+     marginTop: 10,
+     height: 46,
+     borderRadius: 14,
+-    backgroundColor: "#2D6BFF",
++    backgroundColor: rc.indigo,
+     alignItems: "center",
+     justifyContent: "center",
+     flexDirection: "row",
+     gap: 8,
+   },
+-  scanBtnText: { color: "#fff", fontWeight: "900", fontSize: 12 },
++  scanBtnText: { color: "#fff", fontWeight: "800", fontSize: 13 },
+ 
+   // Rewards
+-  rewardsCard: {
+-    backgroundColor: "#F7F7FB",
+-    borderRadius: 18,
+-    padding: 14,
+-    borderWidth: 1,
+-    borderColor: "rgba(0,0,0,0.06)",
+-    marginBottom: 8,
+-  },
+   rewardsTopRow: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 12 },
+-  rewardsPoints: { fontSize: 18, fontWeight: "900", color: "#141414" },
+-  rewardsHint: { marginTop: 6, fontSize: 12, color: "#6F6F6F", maxWidth: 230, lineHeight: 16 },
+-  claimBtn: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 14, backgroundColor: "#2D6BFF" },
+-  claimBtnText: { color: "#fff", fontWeight: "900", fontSize: 12 },
++  rewardsPoints: { fontSize: 20, fontWeight: "800", color: rc.lightPanelText },
++  rewardsHint: { ...rtype.small, color: rc.lightPanelSub, marginTop: 6, maxWidth: 230 },
++  claimBtn: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 14, backgroundColor: rc.indigo },
++  claimBtnText: { color: "#fff", fontWeight: "800", fontSize: 12 },
+ 
+-  progressTrack: { marginTop: 12, height: 10, borderRadius: 10, backgroundColor: "rgba(0,0,0,0.08)", overflow: "hidden" },
+-  progressFill: { height: "100%", borderRadius: 10, backgroundColor: "#6A35FF" },
++  progressTrack: {
++    marginTop: 12,
++    height: 10,
++    borderRadius: 10,
++    backgroundColor: "rgba(30,27,46,0.10)",
++    overflow: "hidden",
++  },
++  progressFill: { height: "100%", borderRadius: 10, backgroundColor: rc.violet },
+   rewardsMetaRow: { marginTop: 10, flexDirection: "row", justifyContent: "space-between" },
+-  metaText: { fontSize: 12, color: "#6F6F6F", fontWeight: "800" },
++  metaText: { fontSize: 12, color: rc.lightPanelSub, fontWeight: "700" },
+ 
+-  // lists
++  // Favorites lists
+   hListPad: { paddingBottom: 6, paddingTop: 2, paddingRight: 8, gap: 12 },
+-  tile: { width: Math.min(200, SCREEN_W * 0.55), height: 150, borderRadius: 18, overflow: "hidden" },
+-  tileBg: { flex: 1, padding: 14, justifyContent: "flex-end" },
+-  tileBadge: {
+-    alignSelf: "flex-start",
+-    backgroundColor: "rgba(255,255,255,0.22)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.35)",
+-    paddingHorizontal: 10,
+-    paddingVertical: 6,
+-    borderRadius: 999,
+-    color: "#fff",
+-    fontWeight: "900",
+-    fontSize: 11,
+-    marginBottom: 10,
+-  },
+-  tileTitle: { color: "#fff", fontSize: 16, fontWeight: "900", lineHeight: 20 },
+-  tileSub: { color: "rgba(255,255,255,0.9)", marginTop: 6, fontSize: 12, fontWeight: "800" },
+-
+-  eventBadgeRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+-  eventWhen: { marginTop: 8, color: "rgba(255,255,255,0.95)", fontSize: 12, fontWeight: "900" },
++  favItemWrap: { width: Math.min(200, SCREEN_W * 0.55) },
++  favEventWrap: { width: Math.min(240, SCREEN_W * 0.62) },
+ 
+   listWrap: { gap: 10, paddingBottom: 8 },
++  emptyText: { fontSize: 13, color: rc.lightPanelSub, fontWeight: "700", padding: 4 },
+   rowCard: {
+     flexDirection: "row",
+     alignItems: "center",
+     gap: 12,
+-    backgroundColor: "#F7F7FB",
+-    borderRadius: 16,
++    backgroundColor: "#FFFFFF",
++    borderRadius: rr.cardSm,
+     padding: 12,
+     borderWidth: 1,
+-    borderColor: "rgba(0,0,0,0.06)",
++    borderColor: rc.lightBorder,
+   },
+   rowLeft: { width: 36, alignItems: "center", justifyContent: "center" },
+   rowIcon: { width: 32, height: 32, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+   rowMid: { flex: 1 },
+-  rowTitle: { fontSize: 14, fontWeight: "900", color: "#1B1B1B" },
+-  rowSub: { marginTop: 3, fontSize: 12, color: "#6F6F6F", fontWeight: "800" },
+-  rowMeta: { marginTop: 6, fontSize: 11, color: "#9A9A9A", fontWeight: "900" },
++  rowTitle: { fontSize: 14, fontWeight: "800", color: rc.lightPanelText },
++  rowSub: { marginTop: 3, fontSize: 12, color: rc.lightPanelSub, fontWeight: "700" },
++  rowMeta: { marginTop: 6, fontSize: 11, color: rc.lightPanelSub, fontWeight: "700" },
+ });
+diff --git a/bownd/app/ui/recreate.tsx b/bownd/app/ui/recreate.tsx
+new file mode 100644
+index 0000000..2bb8669
+--- /dev/null
++++ b/bownd/app/ui/recreate.tsx
+@@ -0,0 +1,318 @@
++// app/ui/recreate.tsx — Bownd recreate shared design system (Phase 2).
++// Tokens + small shared components matching the 3-screen reference mockup.
++// Screens import from here; they must NOT restyle these primitives per-screen.
++// Photo cards use gradient placeholders: the mockup's photos are baked into
++// the reference JPG at low resolution and cannot be extracted (see
++// REFERENCE-ANALYSIS.md limitation #1). Never claim these are real photos.
++import React from "react";
++import { View, Text, StyleSheet, Pressable, TextInput } from "react-native";
++import { LinearGradient } from "expo-linear-gradient";
++
++export const rc = {
++  bg: "#0A0614",
++  bgMid: "#140B2A",
++  surface: "rgba(255,255,255,0.06)",
++  surfaceStrong: "rgba(255,255,255,0.10)",
++  border: "rgba(255,255,255,0.12)",
++  borderStrong: "rgba(255,255,255,0.20)",
++  text: "rgba(255,255,255,0.95)",
++  subtext: "rgba(196,181,253,0.80)",
++  muted: "rgba(255,255,255,0.55)",
++  violet: "#7C3AED",
++  violetLight: "#A855F7",
++  indigo: "#4F46E5",
++  blue: "#3B82F6",
++  peach: "#F6A58A",
++  peachLight: "#FBD5C3",
++  lightPanel: "#F1EFFA",
++  lightPanelText: "#1E1B2E",
++  lightPanelSub: "rgba(30,27,46,0.62)",
++  lightBorder: "rgba(30,27,46,0.10)",
++  gold: "#FBBF24",
++};
++
++export const rr = { card: 20, cardSm: 16, pill: 999, panel: 28 };
++
++export const rs = { xs: 6, sm: 10, md: 14, lg: 18, xl: 24, page: 18 };
++
++export const rtype = {
++  display: { fontSize: 28, fontWeight: "800" as const, lineHeight: 34 },
++  title: { fontSize: 22, fontWeight: "800" as const, lineHeight: 28 },
++  section: { fontSize: 18, fontWeight: "800" as const, lineHeight: 24 },
++  body: { fontSize: 15, fontWeight: "500" as const, lineHeight: 21 },
++  small: { fontSize: 13, fontWeight: "500" as const, lineHeight: 18 },
++  caption: { fontSize: 12, fontWeight: "500" as const, lineHeight: 16 },
++  tiny: { fontSize: 11, fontWeight: "600" as const, lineHeight: 15 },
++};
++
++export const rshadow = {
++  card: {
++    shadowColor: "#000",
++    shadowOpacity: 0.35,
++    shadowRadius: 18,
++    shadowOffset: { width: 0, height: 10 },
++    elevation: 10,
++  },
++  soft: {
++    shadowColor: "#000",
++    shadowOpacity: 0.18,
++    shadowRadius: 10,
++    shadowOffset: { width: 0, height: 4 },
++    elevation: 4,
++  },
++};
++
++const styles = StyleSheet.create({
++  searchWrap: {
++    flexDirection: "row",
++    alignItems: "center",
++    backgroundColor: "rgba(255,255,255,0.08)",
++    borderWidth: 1,
++    borderColor: rc.border,
++    borderRadius: rr.pill,
++    paddingHorizontal: 16,
++    paddingVertical: 12,
++  },
++  searchIcon: { fontSize: 16, color: rc.muted, marginRight: 8 },
++  searchInput: { flex: 1, color: rc.text, fontSize: 15, padding: 0 },
++  segWrap: {
++    flexDirection: "row",
++    backgroundColor: "rgba(255,255,255,0.06)",
++    borderWidth: 1,
++    borderColor: rc.border,
++    borderRadius: rr.pill,
++    padding: 4,
++  },
++  segBtn: { flex: 1, alignItems: "center", paddingVertical: 9, borderRadius: rr.pill },
++  segBtnActive: { backgroundColor: "rgba(255,255,255,0.16)" },
++  segText: { color: rc.muted, fontSize: 14, fontWeight: "600" },
++  segTextActive: { color: rc.text, fontWeight: "700" },
++  bottomNav: {
++    flexDirection: "row",
++    borderTopWidth: 1,
++    borderTopColor: rc.border,
++    backgroundColor: "#0D0918",
++    paddingHorizontal: 12,
++    paddingTop: 10,
++    paddingBottom: 18,
++  },
++  navBtn: { flex: 1, alignItems: "center", gap: 3 },
++  navIcon: { fontSize: 22 },
++  navLabel: { fontSize: 11, fontWeight: "600" },
++  pill: {
++    paddingHorizontal: 16,
++    paddingVertical: 9,
++    borderRadius: rr.pill,
++    borderWidth: 1,
++    borderColor: rc.border,
++    backgroundColor: "rgba(255,255,255,0.05)",
++  },
++  pillActive: { backgroundColor: "rgba(255,255,255,0.18)", borderColor: rc.borderStrong },
++  pillText: { color: rc.subtext, fontSize: 13, fontWeight: "600" },
++  pillTextActive: { color: rc.text, fontWeight: "700" },
++  photoCard: { borderRadius: rr.card, overflow: "hidden", ...rshadow.card },
++  photoOverlay: {
++    position: "absolute",
++    left: 0,
++    right: 0,
++    bottom: 0,
++    padding: 16,
++  },
++  photoTitle: { color: "#fff", fontSize: 20, fontWeight: "800", lineHeight: 26 },
++  photoSub: { color: "rgba(255,255,255,0.80)", fontSize: 13, fontWeight: "500", marginTop: 4 },
++  photoBadge: {
++    marginTop: 8,
++    alignSelf: "flex-start",
++    backgroundColor: "rgba(0,0,0,0.45)",
++    borderRadius: rr.pill,
++    paddingHorizontal: 10,
++    paddingVertical: 4,
++  },
++  photoBadgeText: { color: "#fff", fontSize: 12, fontWeight: "700" },
++  tagPill: {
++    paddingHorizontal: 10,
++    paddingVertical: 5,
++    borderRadius: rr.pill,
++    backgroundColor: "rgba(255,255,255,0.10)",
++    borderWidth: 1,
++    borderColor: rc.border,
++  },
++  tagText: { color: rc.subtext, fontSize: 12, fontWeight: "600" },
++});
++
++export function SearchBar({
++  value,
++  onChangeText,
++  placeholder,
++  onSubmit,
++}: {
++  value: string;
++  onChangeText: (t: string) => void;
++  placeholder: string;
++  onSubmit?: () => void;
++}) {
++  return (
++    <View style={styles.searchWrap}>
++      <Text style={styles.searchIcon}>{"\u{1F50D}"}</Text>
++      <TextInput
++        style={styles.searchInput}
++        value={value}
++        onChangeText={onChangeText}
++        placeholder={placeholder}
++        placeholderTextColor={rc.muted}
++        returnKeyType="search"
++        onSubmitEditing={onSubmit}
++      />
++    </View>
++  );
++}
++
++export type TabKey = "home" | "events" | "personal";
++
++export function SegmentedTabs({
++  active,
++  onSelect,
++}: {
++  active: TabKey;
++  onSelect: (t: TabKey) => void;
++}) {
++  const tabs: { key: TabKey; label: string }[] = [
++    { key: "home", label: "Home" },
++    { key: "events", label: "Events" },
++    { key: "personal", label: "Personal" },
++  ];
++  return (
++    <View style={styles.segWrap}>
++      {tabs.map((t) => (
++        <Pressable
++          key={t.key}
++          style={[styles.segBtn, active === t.key && styles.segBtnActive]}
++          onPress={() => onSelect(t.key)}
++        >
++          <Text style={[styles.segText, active === t.key && styles.segTextActive]}>{t.label}</Text>
++        </Pressable>
++      ))}
++    </View>
++  );
++}
++
++export function BottomNav({
++  active,
++  onSelect,
++}: {
++  active: TabKey;
++  onSelect: (t: TabKey) => void;
++}) {
++  const tabs: { key: TabKey; label: string; icon: string }[] = [
++    { key: "home", label: "Home", icon: "\u{1F3E0}" },
++    { key: "events", label: "Events", icon: "\u{1F4C5}" },
++    { key: "personal", label: "Personal", icon: "\u{1F464}" },
++  ];
++  return (
++    <View style={styles.bottomNav}>
++      {tabs.map((t) => (
++        <Pressable key={t.key} style={styles.navBtn} onPress={() => onSelect(t.key)}>
++          <Text style={[styles.navIcon, { opacity: active === t.key ? 1 : 0.55 }]}>{t.icon}</Text>
++          <Text
++            style={[
++              styles.navLabel,
++              { color: active === t.key ? rc.text : rc.muted },
++            ]}
++          >
++            {t.label}
++          </Text>
++        </Pressable>
++      ))}
++    </View>
++  );
++}
++
++export function FilterPill({
++  label,
++  selected,
++  onPress,
++}: {
++  label: string;
++  selected?: boolean;
++  onPress: () => void;
++}) {
++  return (
++    <Pressable style={[styles.pill, selected && styles.pillActive]} onPress={onPress}>
++      <Text style={[styles.pillText, selected && styles.pillTextActive]}>{label}</Text>
++    </Pressable>
++  );
++}
++
++export function TagPill({ label }: { label: string }) {
++  return (
++    <View style={styles.tagPill}>
++      <Text style={styles.tagText}>{label}</Text>
++    </View>
++  );
++}
++
++/** Gradient placeholder for a photo card. Mockup photos are low-res JPG-baked
++ *  assets that cannot be extracted — this gradient + glow treatment stands in
++ *  until real photo assets are provided. Never present it as a real photo. */
++export function PhotoCard({
++  title,
++  subtitle,
++  badge,
++  gradient,
++  height,
++  onPress,
++}: {
++  title: string;
++  subtitle?: string;
++  badge?: string;
++  gradient: [string, string];
++  height: number;
++  onPress?: () => void;
++}) {
++  return (
++    <Pressable style={[styles.photoCard, { height }]} onPress={onPress}>
++      <LinearGradient
++        colors={[gradient[0], gradient[1]]}
++        start={{ x: 0, y: 0 }}
++        end={{ x: 1, y: 1 }}
++        style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0 }}
++      />
++      {/* decorative glow orbs suggesting stage/event lighting */}
++      <View
++        style={{
++          position: "absolute",
++          width: 180,
++          height: 180,
++          borderRadius: 90,
++          backgroundColor: "rgba(255,255,255,0.12)",
++          right: -40,
++          top: -50,
++        }}
++      />
++      <View
++        style={{
++          position: "absolute",
++          width: 120,
++          height: 120,
++          borderRadius: 60,
++          backgroundColor: "rgba(0,0,0,0.18)",
++          left: -30,
++          bottom: -30,
++        }}
++      />
++      <LinearGradient
++        colors={["transparent", "rgba(0,0,0,0.55)", "rgba(0,0,0,0.78)"]}
++        style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: height * 0.62 }}
++      />
++      <View style={styles.photoOverlay}>
++        <Text style={styles.photoTitle}>{title}</Text>
++        {subtitle ? <Text style={styles.photoSub}>{subtitle}</Text> : null}
++        {badge ? (
++          <View style={styles.photoBadge}>
++            <Text style={styles.photoBadgeText}>{badge}</Text>
++          </View>
++        ) : null}
++      </View>
++    </Pressable>
++  );
++}
+-- 
+2.43.0
+

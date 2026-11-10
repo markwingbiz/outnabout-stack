@@ -1,0 +1,395 @@
+diff --git a/supabase/functions/bownd-sync/index.ts b/supabase/functions/bownd-sync/index.ts
+index 1e1ac11..0dc0e5f 100644
+--- a/supabase/functions/bownd-sync/index.ts
++++ b/supabase/functions/bownd-sync/index.ts
+@@ -1,6 +1,6 @@
+ // bownd-sync — Bownd <-> Supabase bridge (Phase B).
+ //
+-// POST { direction: 'publish' | 'mirror', limit?, collections? }
++// POST { direction: 'publish' | 'mirror' | 'discovered', limit?, collections? }
+ //
+ // 'publish' (Supabase -> Firestore): processes pending rows in
+ //   bownd_publish_requests. Validates the referenced Supabase venue/event,
+@@ -26,6 +26,23 @@
+ //   on metadata.bownd_token = the Firestore doc id. Never deletes Supabase
+ //   rows. Docs missing expected fields are skipped and recorded.
+ //
++// 'discovered' (scanner staging -> Firestore): drains the
++//   discovered_events staging table (Scoutwave's link-out-only web finds;
++//   design: forge-design/scanner-pipeline-design.md, schema per the
++//   staging migration draft). Rows in 'approved'/'published' are upserted
++//   to Firestore events with deterministic doc id 'disc_<staging id>' and
++//   sourceRef 'supabase:<staging id>' — the prefix mirror already skips,
++//   so discovered docs never mirror back into Supabase. Rows in
++//   'expired'/'removed'/'superseded' that still carry a firestore_doc_id
++//   get that doc DELETED — the only delete in this function, hard-scoped
++//   to the disc_ namespace: a stored ref that is not exactly
++//   'disc_<row id>' is refused, never deleted. No tenant mapping and no
++//   venue verification gate apply — discovered events carry no tenant,
++//   belong to no venue, and make no venue claim. An approved/published
++//   row whose matched_event_id is set has lost to a venue-submitted twin
++//   and is retired as superseded instead of written (the fuzzy matching
++//   itself happens scanner-side; the drain honors a recorded match).
++//
+ // TENANT RULE (hard): the function NEVER guesses a tenant mapping. Publish
+ //   looks up the Supabase row's tenant_id in bownd_tenant_map; mirror looks
+ //   up the Firestore doc's tenantRef / event / venue refs in
+@@ -493,6 +510,16 @@ class FirestoreRest {
+     return restDocToFirestoreDoc(res);
+   }
+ 
++  /**
++   * Delete a doc, via a commit delete write — the same write vehicle as
++   * every other mutation in this client. Deleting a doc that does not
++   * exist is a successful no-op in Firestore commit semantics, so
++   * removal drains are naturally idempotent.
++   */
++  async deleteDoc(collection: string, docId: string): Promise<void> {
++    await this.commitWrite({ delete: this.docPath(collection, docId) });
++  }
++
+   async listDocs(collection: string): Promise<FirestoreDoc[]> {
+     const out: FirestoreDoc[] = [];
+     let pageToken: string | undefined;
+@@ -1021,6 +1048,325 @@ async function runPublish(
+   };
+ }
+ 
++// ------------------------------------------------------------- Discovered ---
++
++// Scanner staging drain (design: forge-design/scanner-pipeline-design.md).
++// Reads discovered_events directly with the service role — no publish
++// request queue, no tenant map, no verification gate (discovered events
++// have no tenant and make no venue claim). Idempotent end to end:
++// upserts are set-with-merge on the deterministic doc id, deletes are
++// commit deletes of that same id, and the staging stamps converge on
++// re-runs. A removal row is drained at most once: the removal fetch only
++// takes rows whose removed_at is still NULL, and a successful drain sets
++// it — a failed stamp leaves it NULL so the next drain retries.
++
++const DISCOVERED_UPSERT_STATUSES = ["approved", "published"] as const;
++const DISCOVERED_REMOVAL_STATUSES = ["expired", "removed", "superseded"] as const;
++
++interface DiscoveredResult {
++  staging_id: string;
++  action: "upsert" | "delete";
++  status: "done" | "failed" | "skipped";
++  bownd_ref: string | null;
++  error: string | null;
++}
++
++/** The only Firestore doc id this direction may ever write or delete. */
++function discoveredDocId(stagingId: string): string {
++  return `disc_${stagingId}`;
++}
++
++/**
++ * Staging row -> Firestore event doc, in the reconciled rendering shape
++ * (design §5): venueId carries the venue NAME string (no Bownd venue doc
++ * exists for a discovered event; the app renders the raw venueId string
++ * as the venue name), category is always 'standard', featured is NEVER
++ * set, and photoUrl is present only when the staging row holds an
++ * image_url. priceLabel is display-only text exactly as the source
++ * stated it — it never implies Bownd sells the event. sourceRef uses
++ * the 'supabase:' prefix, which mirror skips (see mirrorCollection).
++ */
++function discoveredEventToFirestore(row: Record<string, unknown>): Record<string, unknown> {
++  const doc: Record<string, unknown> = {
++    title: asNonEmptyString(row.title) ?? "Untitled event",
++    startISO: asNonEmptyString(row.starts_at) ?? new Date().toISOString(),
++    venueId: asNonEmptyString(row.venue_name) ?? "",
++    priceLabel: asNonEmptyString(row.price_label) ?? "",
++    vibeTags: [],
++    audienceTags: [],
++    category: "standard",
++    discovered: true,
++    sourceName: asNonEmptyString(row.source_name) ?? "",
++    sourceUrl: asNonEmptyString(row.source_url) ?? "",
++    isTest: false,
++    sourceRef: `supabase:${String(row.id)}`,
++    updatedAt: SERVER_TIMESTAMP,
++  };
++  const photoUrl = asNonEmptyString(row.image_url);
++  if (photoUrl) doc.photoUrl = photoUrl;
++  return doc;
++}
++
++async function fetchDiscoveredRows(
++  service: SupabaseClient,
++  statuses: readonly string[],
++  limit: number,
++  removal: boolean,
++): Promise<Array<Record<string, unknown>>> {
++  const base = () =>
++    service.from("discovered_events").select("*").in("status", [...statuses]);
++  const { data, error } = removal
++    ? await base()
++      .not("firestore_doc_id", "is", null)
++      .is("removed_at", null)
++      .order("starts_at", { ascending: true })
++      .limit(limit)
++    : await base().order("starts_at", { ascending: true }).limit(limit);
++  if (error) throw new Error(`Discovered staging read failed: ${error.message}`);
++  return (data ?? []) as Array<Record<string, unknown>>;
++}
++
++/**
++ * removal_reason for a removal stamp: keep the reason the scanner
++ * recorded when it set the terminal status; otherwise derive only the
++ * two statuses that ARE reasons ('expired', 'superseded'). A bare
++ * 'removed' with no recorded reason keeps NULL — 'cancelled' / 'killed'
++ * / 'source_gone' are the scanner's call to record, not the drain's to
++ * guess.
++ */
++function discoveredRemovalReason(
++  row: Record<string, unknown>,
++  effectiveStatus: string,
++): string | null {
++  const existing = asNonEmptyString(row.removal_reason);
++  if (existing) return existing;
++  if (effectiveStatus === "expired") return "expired";
++  if (effectiveStatus === "superseded") return "superseded";
++  return null;
++}
++
++async function discoveredUpsertOne(
++  service: SupabaseClient,
++  db: FirestoreDb,
++  userId: string,
++  row: Record<string, unknown>,
++): Promise<DiscoveredResult> {
++  const stagingId = String(row.id);
++  const docId = discoveredDocId(stagingId);
++  const base: DiscoveredResult = {
++    staging_id: stagingId,
++    action: "upsert",
++    status: "failed",
++    bownd_ref: docId,
++    error: null,
++  };
++
++  try {
++    await db.setDoc("events", docId, discoveredEventToFirestore(row));
++  } catch (err) {
++    const detail = err instanceof Error ? err.message : String(err);
++    await safeAudit(service, {
++      actorUserId: userId,
++      action: "bownd.discovered.failed",
++      entityType: "discovered_event",
++      entityId: stagingId,
++      metadata: { action: "upsert", firestore_doc_id: docId, error: "firestore_write_failed", detail },
++    });
++    return { ...base, error: `firestore_write_failed: ${detail}` };
++  }
++
++  // Stamp the staging row: 'approved' becomes 'published' (with
++  // published_at); an already-'published' row just has its doc ref
++  // re-affirmed. If the stamp fails, the Firestore write already landed —
++  // report done-with-warning (the publish direction's convention):
++  // re-running the drain converges on the same deterministic doc.
++  const patch: Record<string, unknown> = { firestore_doc_id: docId };
++  if (row.status === "approved") {
++    patch.status = "published";
++    patch.published_at = new Date().toISOString();
++  }
++  try {
++    await updateRowById(service, "discovered_events", stagingId, patch);
++  } catch (err) {
++    console.error("bownd-sync: discovered doc written but staging stamp failed:", err);
++    await safeAudit(service, {
++      actorUserId: userId,
++      action: "bownd.discovered.stamp_failed",
++      entityType: "discovered_event",
++      entityId: stagingId,
++      metadata: {
++        firestore_doc_id: docId,
++        error: err instanceof Error ? err.message : String(err),
++      },
++    });
++    return {
++      ...base,
++      status: "done",
++      error: "warning: staging stamp failed after Firestore write succeeded",
++    };
++  }
++
++  await safeAudit(service, {
++    actorUserId: userId,
++    action: "bownd.discovered.published",
++    entityType: "discovered_event",
++    entityId: stagingId,
++    before: { status: String(row.status) },
++    after: { status: "published", firestore_doc_id: docId },
++    metadata: {
++      source_key: asNonEmptyString(row.source_key),
++      source_name: asNonEmptyString(row.source_name),
++    },
++  });
++  return { ...base, status: "done" };
++}
++
++/**
++ * Retire one staging row: delete its Firestore doc (if it has one) and
++ * stamp removed_at (+ removal_reason). markSuperseded covers the
++ * in-drain dedupe guard — a row still in 'approved'/'published' that
++ * carries matched_event_id — which also flips the row's status to
++ * 'superseded'. The delete is hard-scoped: the stored firestore_doc_id
++ * must be exactly this writer's deterministic 'disc_<row id>'; anything
++ * else is refused, never deleted.
++ */
++async function discoveredRetireOne(
++  service: SupabaseClient,
++  db: FirestoreDb,
++  userId: string,
++  row: Record<string, unknown>,
++  markSuperseded: boolean,
++): Promise<DiscoveredResult> {
++  const stagingId = String(row.id);
++  const storedDocId = asNonEmptyString(row.firestore_doc_id);
++  const base: DiscoveredResult = {
++    staging_id: stagingId,
++    action: "delete",
++    status: "failed",
++    bownd_ref: storedDocId,
++    error: null,
++  };
++  const effectiveStatus = markSuperseded ? "superseded" : String(row.status);
++  const reason = discoveredRemovalReason(row, effectiveStatus);
++
++  const fail = async (code: string, detail: string): Promise<DiscoveredResult> => {
++    await safeAudit(service, {
++      actorUserId: userId,
++      action: "bownd.discovered.failed",
++      entityType: "discovered_event",
++      entityId: stagingId,
++      metadata: { action: "delete", firestore_doc_id: storedDocId, error: code, detail },
++    });
++    return { ...base, error: `${code}: ${detail}` };
++  };
++
++  let deleted = false;
++  if (storedDocId) {
++    if (storedDocId !== discoveredDocId(stagingId)) {
++      return await fail(
++        "unexpected_firestore_doc_id",
++        `Staging row ${stagingId} carries firestore_doc_id '${storedDocId}', which is not this writer's deterministic doc '${discoveredDocId(stagingId)}'. Refusing to delete a doc this direction did not create.`,
++      );
++    }
++    try {
++      await db.deleteDoc("events", storedDocId);
++      deleted = true;
++    } catch (err) {
++      // The row keeps its removal status with removed_at NULL, so the
++      // next drain retries the delete (design §5) — the failure is
++      // reported here and in the run summary, never silent.
++      return await fail(
++        "firestore_delete_failed",
++        err instanceof Error ? err.message : String(err),
++      );
++    }
++  }
++
++  const patch: Record<string, unknown> = { removed_at: new Date().toISOString() };
++  if (reason) patch.removal_reason = reason;
++  if (markSuperseded) patch.status = "superseded";
++  try {
++    await updateRowById(service, "discovered_events", stagingId, patch);
++  } catch (err) {
++    console.error("bownd-sync: discovered doc handled but removal stamp failed:", err);
++    await safeAudit(service, {
++      actorUserId: userId,
++      action: "bownd.discovered.stamp_failed",
++      entityType: "discovered_event",
++      entityId: stagingId,
++      metadata: {
++        firestore_doc_id: storedDocId,
++        error: err instanceof Error ? err.message : String(err),
++      },
++    });
++    return {
++      ...base,
++      status: "done",
++      error: "warning: removal stamp failed after Firestore delete succeeded",
++    };
++  }
++
++  await safeAudit(service, {
++    actorUserId: userId,
++    action: "bownd.discovered.removed",
++    entityType: "discovered_event",
++    entityId: stagingId,
++    before: { status: String(row.status), firestore_doc_id: storedDocId },
++    after: { status: effectiveStatus },
++    metadata: { firestore_doc_id: storedDocId, deleted, removal_reason: reason },
++  });
++  return { ...base, status: "done" };
++}
++
++async function runDiscovered(
++  service: SupabaseClient,
++  db: FirestoreDb,
++  userId: string,
++  limit: number,
++): Promise<Record<string, unknown>> {
++  const upsertRows = await fetchDiscoveredRows(service, DISCOVERED_UPSERT_STATUSES, limit, false);
++  const removalRows = await fetchDiscoveredRows(service, DISCOVERED_REMOVAL_STATUSES, limit, true);
++  const results: DiscoveredResult[] = [];
++
++  for (const row of upsertRows) {
++    // In-drain dedupe guard (design §8): a venue-submitted twin winning
++    // is recorded scanner-side as matched_event_id; a row that already
++    // carries one is retired as superseded instead of written.
++    if (asNonEmptyString(row.matched_event_id)) {
++      results.push(await discoveredRetireOne(service, db, userId, row, true));
++    } else {
++      results.push(await discoveredUpsertOne(service, db, userId, row));
++    }
++  }
++  for (const row of removalRows) {
++    results.push(await discoveredRetireOne(service, db, userId, row, false));
++  }
++
++  const summary = {
++    direction: "discovered",
++    processed: results.length,
++    done: results.filter((r) => r.status === "done").length,
++    failed: results.filter((r) => r.status === "failed").length,
++    skipped: results.filter((r) => r.status === "skipped").length,
++    results,
++  };
++  await safeAudit(service, {
++    actorUserId: userId,
++    action: "bownd.discovered.run",
++    entityType: "bownd_sync",
++    entityId: userId,
++    metadata: {
++      processed: summary.processed,
++      done: summary.done,
++      failed: summary.failed,
++      upserts: results.filter((r) => r.action === "upsert").length,
++      deletes: results.filter((r) => r.action === "delete").length,
++      failed_rows: results.filter((r) => r.status === "failed").slice(0, 20),
++    },
++  });
++  return summary;
++}
++
+ // ----------------------------------------------------------------- Mirror ---
+ 
+ interface MirrorCollectionSummary {
+@@ -1442,6 +1788,14 @@ Deno.serve((req) =>
+       return jsonResponse(await runMirror(service, db, user.id, collections));
+     }
+ 
+-    throw new HttpError(400, "direction must be 'publish' or 'mirror'");
++    if (direction === "discovered") {
++      // Firebase is required for discovered (Firestore writes + deletes).
++      const db = getFirestore();
++      const rawLimit = typeof body.limit === "number" ? body.limit : MAX_PUBLISH_BATCH;
++      const limit = Math.max(1, Math.min(MAX_PUBLISH_LIMIT, Math.floor(rawLimit)));
++      return jsonResponse(await runDiscovered(service, db, user.id, limit));
++    }
++
++    throw new HttpError(400, "direction must be 'publish', 'mirror' or 'discovered'");
+   })
+ );
