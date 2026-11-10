@@ -30,6 +30,7 @@ import {
   type FavoriteItem,
 } from "../lib/store";
 import { useAuth } from "../lib/auth";
+import { maybeAskForPushPermission } from "../lib/push";
 import {
   findShowcaseEvent,
   findShowcaseVenue,
@@ -158,6 +159,11 @@ export default function DetailScreen() {
     try {
       const nowFav = await toggleFavorite(user?.uid ?? null, item);
       setFav(nowFav);
+      // Plan §1.2 fallback moment: favoriting an event is the in-context
+      // permission ask (fires at most once; never after a refusal).
+      if (nowFav && item.kind === "event") {
+        void maybeAskForPushPermission(user?.uid ?? null);
+      }
     } catch {
       Alert.alert("Could not save favorite", "Try again.");
     }

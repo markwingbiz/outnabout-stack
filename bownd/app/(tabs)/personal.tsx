@@ -50,6 +50,7 @@ import {
   type RedemptionHistoryItem,
 } from "../../lib/store";
 import { BottomNav, refStyles } from "../ui/reference";
+import NotificationSettings from "../../components/push/NotificationSettings";
 import { MemberCode } from "../../components/ui/MemberCode";
 import { CardBackground } from "../../components/ui/CardBackground";
 import { resolveCardImage, categoryForVenueName, resolveEventCardImage } from "../../lib/placeholders";
@@ -459,6 +460,14 @@ export default function PersonalScreen() {
                     <Text style={styles.metaText}>Next: {tier === "VIP" ? "Max" : "VIP"}</Text>
                   </View>
                 </View>
+              </>
+            )}
+
+            {/* Notifications — push category toggles (plan §1.6) */}
+            {panel === "All" && (
+              <>
+                <Text style={[refStyles.darkHeading, styles.sectionHeading]}>Notifications</Text>
+                <NotificationSettings />
               </>
             )}
 

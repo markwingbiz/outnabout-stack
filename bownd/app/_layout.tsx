@@ -6,12 +6,24 @@
 // (detail, list, vibe, redeem, scan) are auto-registered by Expo Router
 // from their files — they need no explicit Stack.Screen entries.
 import React from "react";
-import { Stack } from "expo-router";
-import { AuthProvider } from "../lib/auth";
+import { Stack, useRouter } from "expo-router";
+import { AuthProvider, useAuth } from "../lib/auth";
+import { usePushBootstrap } from "../lib/push";
+
+// Push notifications bootstrap (push-notifications-plan.md §1.1): wires
+// the foreground handler, Android channels, tap deep-link routing, and
+// token registration on sign-in. Renders nothing.
+function PushBootstrap() {
+  const { user } = useAuth();
+  const router = useRouter();
+  usePushBootstrap(user?.uid ?? null, (route) => router.push(route as never));
+  return null;
+}
 
 export default function RootLayout() {
   return (
     <AuthProvider>
+      <PushBootstrap />
       <Stack
         screenOptions={{
           headerShown: false,
