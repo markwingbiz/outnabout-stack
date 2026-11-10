@@ -20,6 +20,8 @@ import {
   doc,
   getDoc,
   getDocs,
+  query,
+  where,
   setDoc,
   deleteDoc,
   serverTimestamp,
@@ -53,10 +55,14 @@ export function tierFor(points: number): Tier {
 /**
  * The operator's Bownd sign-in email. Test items (isTest) are visible
  * ONLY to this account — everyone else never receives them from
- * fetchEvents/fetchVenues. Note: Firestore rules still allow public
- * reads of the events/venues collections, so this is an app-level gate
- * (what the UI shows), not a security boundary — see firestore.rules
- * hardening in the Phase 9 prep doc for the optional rules change.
+ * fetchEvents/fetchVenues. The Firestore rules now enforce the same
+ * boundary server-side (bownd/firestore.rules: public read requires a
+ * non-test doc, venues also `verified`; test docs are operator-only).
+ * Rules are not filters, though: a list query is allowed only when
+ * its where() constraints prove every returned doc passes, so the
+ * non-operator fetches below query with isTest == false (venues also
+ * verified == true) and this client-side filter remains as a second
+ * layer. The rules deploy and this query change must ship together.
  */
 export const OPERATOR_EMAIL = "mr.marshall3@yahoo.com";
 
@@ -204,7 +210,14 @@ function toVenue(id: string, data: any): Venue {
 export async function fetchEvents(viewerEmail?: string | null): Promise<EventItem[]> {
   if (!db) return [];
   try {
-    const snap = await getDocs(collection(db, "events"));
+    // Non-operator queries must carry the isTest == false constraint
+    // so the Firestore rules can prove the list is public-only (rules
+    // are not filters — an unfiltered non-operator list is denied).
+    const snap = await getDocs(
+      isOperatorEmail(viewerEmail)
+        ? collection(db, "events")
+        : query(collection(db, "events"), where("isTest", "==", false)),
+    );
     if (snap.empty) return [];
     const rows = snap.docs.map((d) => toEventItem(d.id, d.data()));
     // Operator-only test data: non-operators never receive test items.
@@ -217,7 +230,18 @@ export async function fetchEvents(viewerEmail?: string | null): Promise<EventIte
 export async function fetchVenues(viewerEmail?: string | null): Promise<Venue[]> {
   if (!db) return [];
   try {
-    const snap = await getDocs(collection(db, "venues"));
+    // Same rules-proof constraint as fetchEvents, plus verified ==
+    // true: a public venue is a non-test, verified doc (see
+    // bownd/firestore.rules isPublicVenue).
+    const snap = await getDocs(
+      isOperatorEmail(viewerEmail)
+        ? collection(db, "venues")
+        : query(
+            collection(db, "venues"),
+            where("isTest", "==", false),
+            where("verified", "==", true),
+          ),
+    );
     if (snap.empty) return [];
     const rows = snap.docs.map((d) => toVenue(d.id, d.data()));
     return isOperatorEmail(viewerEmail) ? rows : rows.filter((r) => !r.isTest);
