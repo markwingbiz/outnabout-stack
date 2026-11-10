@@ -116,6 +116,8 @@ export default function TabsLayout() {
       {/* Phase 8 Slice 5: Forge Suggestions (revenue / internet-scan /
           data-scan), operator-gated. */}
       <Tabs.Screen name="suggestions" options={{ href: null }} />
+      {/* Push composer (plan §1.7): operator-only, hidden from the tab bar. */}
+      <Tabs.Screen name="push-composer" options={{ href: null }} />
       {/* Funnel detail (Phase 8 Slice 3): reachable from the Funnels list,
           hidden from the tab bar. */}
       <Tabs.Screen name="funnel-detail" options={{ href: null }} />

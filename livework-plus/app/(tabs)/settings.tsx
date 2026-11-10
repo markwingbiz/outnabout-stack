@@ -25,7 +25,17 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { THEME } from "../../lib/theme";
 import { useAuth } from "../../lib/auth";
-import { loadNotifPref, saveNotifPref } from "../../lib/local-store";
+import {
+  PUSH_CATEGORIES,
+  enablePushNotifications,
+  getPushPermissionState,
+  loadCategoryPrefs,
+  loadPushMasterOff,
+  saveCategoryPref,
+  unregisterPushToken,
+  type PushCategoryPrefs,
+  type PushPermissionState,
+} from "../../lib/push";
 
 const DISABLED_ROWS = [
   { icon: "lock-closed", title: "Privacy & Safety", sub: "Control your privacy settings" },
@@ -37,32 +47,47 @@ const DISABLED_ROWS = [
 export default function SettingsScreen() {
   const router = useRouter();
   const { session, user, loading: authLoading, signOut } = useAuth();
-  const [notifs, setNotifs] = useState(true);
-  const [notifsLoaded, setNotifsLoaded] = useState(false);
+  const [permission, setPermission] = useState<PushPermissionState>("undetermined");
+  const [masterOff, setMasterOff] = useState(false);
+  const [prefs, setPrefs] = useState<PushCategoryPrefs>({});
+  const [pushLoaded, setPushLoaded] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
 
   useEffect(() => {
     let alive = true;
-    loadNotifPref().then((v) => {
-      if (alive) {
-        setNotifs(v);
-        setNotifsLoaded(true);
-      }
-    });
+    Promise.all([getPushPermissionState(), loadPushMasterOff(), loadCategoryPrefs()]).then(
+      ([state, off, stored]) => {
+        if (alive) {
+          setPermission(state);
+          setMasterOff(off);
+          setPrefs(stored);
+          setPushLoaded(true);
+        }
+      },
+    );
     return () => {
       alive = false;
     };
   }, []);
 
-  async function onToggleNotifs(value: boolean) {
-    setNotifs(value);
-    try {
-      await saveNotifPref(value);
-    } catch {
-      // Preference write failed — revert the toggle so the UI never
-      // claims a save that did not happen.
-      setNotifs(!value);
+  const pushOn = permission === "granted" && !masterOff;
+
+  async function onToggleMaster(value: boolean) {
+    if (!user) return;
+    if (value) {
+      const next = await enablePushNotifications(user.id);
+      setPermission(next);
+      setMasterOff(next !== "granted");
+    } else {
+      await unregisterPushToken(user.id);
+      setMasterOff(true);
     }
+  }
+
+  async function onToggleCategory(key: string, value: boolean) {
+    setPrefs((prev) => ({ ...prev, [key]: value }));
+    const next = await saveCategoryPref(key, value);
+    setPrefs(next);
   }
 
   async function onSignOut() {
@@ -98,25 +123,66 @@ export default function SettingsScreen() {
         {/* Preferences — rows that work */}
         <Text style={styles.sectionLabel}>Preferences</Text>
         <View style={styles.group}>
-          {/* Notifications — preference persisted on-device; push not set up */}
+          {/* Notifications — real push registration (lib/push.ts) */}
           <View style={styles.row}>
             <View style={styles.rowIcon}>
               <Ionicons name="notifications" size={20} color={THEME.purpleBright} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle}>Notifications</Text>
-              <Text style={styles.rowSub}>Manage alerts and reminders</Text>
+              <Text style={styles.rowSub}>
+                {!pushLoaded
+                  ? "Loading…"
+                  : pushOn
+                    ? "On for this device"
+                    : permission === "denied"
+                      ? "Off — enable in system settings, or tap the switch to retry"
+                      : "Off — tap to enable"}
+              </Text>
             </View>
-            {!notifsLoaded ? (
+            {!pushLoaded ? (
               <ActivityIndicator color={THEME.purpleBright} />
             ) : (
               <Switch
-                value={notifs}
-                onValueChange={(v) => void onToggleNotifs(v)}
+                value={pushOn}
+                onValueChange={(v) => void onToggleMaster(v)}
                 trackColor={{ false: "#3B3B4D", true: THEME.purpleBright }}
               />
             )}
           </View>
+          {/* Push categories — written to the push_tokens registration */}
+          {PUSH_CATEGORIES.map((c) => (
+            <View key={c.key} style={styles.row}>
+              <View style={styles.rowIcon}>
+                <Ionicons
+                  name={c.key === "operator_private" ? "lock-closed" : "megaphone"}
+                  size={20}
+                  color={THEME.purpleBright}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rowTitle}>{c.label}</Text>
+                <Text style={styles.rowSub}>{c.description}</Text>
+              </View>
+              <Switch
+                value={pushOn && prefs[c.key] !== false}
+                disabled={!pushOn}
+                onValueChange={(v) => void onToggleCategory(c.key, v)}
+                trackColor={{ false: "#3B3B4D", true: THEME.purpleBright }}
+              />
+            </View>
+          ))}
+          {/* Admin composer (plan §1.7) */}
+          <Pressable style={styles.row} onPress={() => router.push("/(tabs)/push-composer")}>
+            <View style={styles.rowIcon}>
+              <Ionicons name="send" size={20} color={THEME.purpleBright} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowTitle}>Send a push notification</Text>
+              <Text style={styles.rowSub}>Compose for Bownd, Livework or Livework+</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={THEME.textFaint} />
+          </Pressable>
           {/* Account — real session */}
           <View style={[styles.row, styles.rowLast]}>
             <View style={styles.rowIcon}>
@@ -140,8 +206,9 @@ export default function SettingsScreen() {
           </View>
         </View>
         <Text style={styles.note}>
-          Push notifications are not set up yet (no notification service). This switch saves your
-          preference on this device only.
+          Pushes are sent by the push-send service. Category choices are saved to your notification
+          registration on this device and honored by the sender. Private reminders always use
+          generic wording — no details ever appear in the notification itself.
         </Text>
 
         {/* Your Settings — backend screens do not exist yet */}

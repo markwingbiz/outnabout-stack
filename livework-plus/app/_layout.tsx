@@ -13,7 +13,18 @@ import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { THEME } from "../lib/theme";
 import { AuthProvider, useAuth } from "../lib/auth";
+import { usePushBootstrap } from "../lib/push";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+
+// Push notifications bootstrap (push-notifications-plan.md §1.1): wires
+// the foreground handler, Android channels, tap deep-link routing,
+// token registration on sign-in, and the one-time first-sign-in ask.
+function PushBootstrap() {
+  const { session } = useAuth();
+  const router = useRouter();
+  usePushBootstrap(session?.user?.id ?? null, (route) => router.push(route as never));
+  return null;
+}
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { session, loading } = useAuth();
@@ -53,6 +64,7 @@ export default function RootLayout() {
       <AuthProvider>
       <AuthGate>
         <>
+          <PushBootstrap />
           <StatusBar style="light" />
           <Stack
             screenOptions={{
