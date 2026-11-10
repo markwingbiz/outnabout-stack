@@ -1,0 +1,4522 @@
+From def48c673796e2a0b44bef6d04cf8478ae0698ae Mon Sep 17 00:00:00 2001
+From: Muse <muse@meta.ai>
+Date: Fri, 16 Oct 2026 07:20:51 +0000
+Subject: [PATCH 1/2] Bownd: extract Home, Events, Personal UI from reference
+ App.tsx; wire to real backend
+
+---
+ bownd/app/(tabs)/events.tsx   | 990 ++++++++--------------------------
+ bownd/app/(tabs)/home.tsx     | 661 ++++++-----------------
+ bownd/app/(tabs)/personal.tsx | 970 +++++++++++----------------------
+ bownd/app/ui/reference.tsx    | 432 +++++++++++++++
+ 4 files changed, 1139 insertions(+), 1914 deletions(-)
+ create mode 100644 bownd/app/ui/reference.tsx
+
+diff --git a/bownd/app/(tabs)/events.tsx b/bownd/app/(tabs)/events.tsx
+index 45425c7..18ff6e0 100644
+--- a/bownd/app/(tabs)/events.tsx
++++ b/bownd/app/(tabs)/events.tsx
+@@ -1,38 +1,27 @@
+ // app/(tabs)/events.tsx
+-// Phase 6 fix notes (see FIX-PLAN.md):
+-// - MiniEventCard / BigEventRow navigate to the real detail screen
+-//   (/detail?id=...&kind=event). VenueCard navigates to Events filtered
+-//   to that venue (params.venue). No more dead cards.
+-// - Section chevrons are now functional: tapping collapses/expands the
+-//   section (previously a plain non-pressable <Text>).
+-// - Favorite toggle (heart) on every event card, wired to
+-//   toggleFavorite() in lib/store.ts (previously zero UI call sites).
+-// - Accepts params { q, venue } (from Home search + venue orbs +
+-//   Personal favorite venues) and applies them as filters, with a
+-//   visible "Venue: X" chip that can be cleared.
+-// - Top nav + Change Persona point at the CANONICAL (tabs) routes
+-//   (previously /events and /persona, which were the bundled-only
+-//   duplicate screens — deleted in Phase 6).
++// Reference visuals (App.tsx) + real backend wiring (lib/store.ts).
+ // - Events + venues come from Firestore ONLY. No bundled demo fallback:
+ //   an empty catalog shows "No events yet", never demo events.
+-// - Visual design is UNCHANGED: same layout, styles, and components.
+-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
++// - Favorite heart on every All Events row, wired to toggleFavorite().
++//   The heart is a SIBLING of the card pressable so it never opens detail.
++// - Accepts params { q, venue } (from Home search + venue orbs +
++//   Personal favorite venues) with a visible "Venue: X" chip to clear.
++// - Section chevrons collapse/expand their section.
++import React, { useCallback, useEffect, useMemo, useState } from "react";
+ import {
+   View,
+   Text,
+   StyleSheet,
+-  SafeAreaView,
+-  Pressable,
+-  TextInput,
+-  FlatList,
+-  Animated,
++  ScrollView,
+   StatusBar,
++  TouchableOpacity,
+   Alert,
+ } from "react-native";
+-import { LinearGradient } from "expo-linear-gradient";
++import { Ionicons } from "@expo/vector-icons";
+ import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
++import { useSafeAreaInsets } from "react-native-safe-area-context";
+ 
+-import { loadPersona, PersonaProfile, DEFAULT_PERSONA } from "../../lib/personaStore";
++import { loadPersona, type PersonaProfile, DEFAULT_PERSONA } from "../../lib/personaStore";
+ import {
+   fetchEvents,
+   fetchVenues,
+@@ -43,6 +32,18 @@ import {
+   type FavoriteItem,
+ } from "../../lib/store";
+ import { useAuth } from "../../lib/auth";
++import {
++  BottomNav,
++  EventCard,
++  Pill,
++  Search,
++  Section,
++  TopTabs,
++  formatWhen,
++  getVenueName,
++  parseISO,
++  refStyles,
++} from "../ui/reference";
+ 
+ type TimeChip = "tonight" | "tomorrow" | "weekend" | "week" | "all";
+ 
+@@ -57,90 +58,51 @@ function addDays(d: Date, n: number) {
+   x.setDate(x.getDate() + n);
+   return x;
+ }
+-function parseISO(iso: string) {
+-  const t = Date.parse(iso);
+-  return Number.isFinite(t) ? new Date(t) : null;
+-}
+ function nextSaturday(from: Date) {
+   const d = new Date(from);
+-  const day = d.getDay(); // 0 Sun ... 6 Sat
+-  const diff = (6 - day + 7) % 7; // days until Sat
++  const day = d.getDay();
++  const diff = (6 - day + 7) % 7;
+   return startOfDay(addDays(d, diff));
+ }
+ function nextSunday(from: Date) {
+   const d = new Date(from);
+   const day = d.getDay();
+-  const diff = (0 - day + 7) % 7; // days until Sun
++  const diff = (0 - day + 7) % 7;
+   return startOfDay(addDays(d, diff));
+ }
+ function uniq<T>(arr: T[]) {
+   return Array.from(new Set(arr));
+ }
+ 
+-function formatWhen(startISO: string) {
+-  const d = parseISO(startISO);
+-  if (!d) return "Time TBD";
+-  const now = new Date();
+-  const today = startOfDay(now).getTime();
+-  const that = startOfDay(d).getTime();
+-  const diffDays = Math.round((that - today) / (1000 * 60 * 60 * 24));
+-  const hh = d.getHours();
+-  const mm = d.getMinutes();
+-  const ampm = hh >= 12 ? "PM" : "AM";
+-  const hr = hh % 12 || 12;
+-  const min = mm.toString().padStart(2, "0");
+-  const time = `${hr}:${min} ${ampm}`;
+-
+-  if (diffDays === 0) return `Tonight • ${time}`;
+-  if (diffDays === 1) return `Tomorrow • ${time}`;
+-  const m = d.toLocaleString(undefined, { month: "short" });
+-  const day = d.getDate();
+-  return `${m} ${day} • ${time}`;
+-}
+-
+ function inTimeWindow(e: EventItem, mode: TimeChip) {
+   if (mode === "all") return true;
+   const now = new Date();
+   const dt = parseISO(e.startISO);
+   if (!dt) return false;
+-
+   const t = dt.getTime();
+   const n = now.getTime();
+-
+   if (t < n - 1000 * 60 * 60) {
+     // drop events that started more than 1h ago
+     return false;
+   }
+-
+   if (mode === "tonight") {
+-    const end = endOfDay(now).getTime();
+-    return t <= end;
++    return t <= endOfDay(now).getTime();
+   }
+-
+   if (mode === "tomorrow") {
+     const tomorrow = addDays(now, 1);
+-    const s = startOfDay(tomorrow).getTime();
+-    const eod = endOfDay(tomorrow).getTime();
+-    return t >= s && t <= eod;
++    return t >= startOfDay(tomorrow).getTime() && t <= endOfDay(tomorrow).getTime();
+   }
+-
+   if (mode === "weekend") {
+     const sat = nextSaturday(now);
+     const sun = nextSunday(now);
+-    const s = sat.getTime();
+-    const eodSun = endOfDay(sun).getTime();
+-    // If it's already weekend, include from now through Sunday end
+     const isWeekendNow = [0, 6].includes(now.getDay());
+     if (isWeekendNow) {
+-      const end = endOfDay(nextSunday(now)).getTime();
+-      return t >= n && t <= end;
++      return t >= n && t <= endOfDay(nextSunday(now)).getTime();
+     }
+-    return t >= s && t <= eodSun;
++    return t >= sat.getTime() && t <= endOfDay(sun).getTime();
+   }
+-
+   // week
+-  const end7 = addDays(now, 7).getTime();
+-  return t >= n && t <= end7;
++  return t >= n && t <= addDays(now, 7).getTime();
+ }
+ 
+ function matchesSearch(e: EventItem, venueName: string, q: string) {
+@@ -155,156 +117,34 @@ function matchesSearch(e: EventItem, venueName: string, q: string) {
+ }
+ 
+ function matchesPersona(e: EventItem, persona: PersonaProfile) {
+-  // Keep it forgiving: match the stored audience + vibe against the event's tags.
+-  // (If persona has none, allow all.)
+-  // NOTE: personaStore persists singular `audience`/`vibe` — not tag arrays.
+   const pAudience = persona?.audience ? [persona.audience.toLowerCase()] : [];
+   const pVibes = persona?.vibe ? [persona.vibe.toLowerCase()] : [];
+-
+   const eAudience = (e.audienceTags || []).map((s) => s.toLowerCase());
+   const eVibes = (e.vibeTags || []).map((s) => s.toLowerCase());
+-
+   const audienceOK = pAudience.length === 0 ? true : pAudience.some((a) => eAudience.includes(a));
+   const vibeOK = pVibes.length === 0 ? true : pVibes.some((v) => eVibes.includes(v));
+-
+-  if (pAudience.length > 0 && pVibes.length > 0) return audienceOK && vibeOK;
+   return audienceOK && vibeOK;
+ }
+ 
+-function TopNavButton({
+-  label,
+-  active,
+-  onPress,
+-}: {
+-  label: string;
+-  active?: boolean;
+-  onPress: () => void;
+-}) {
+-  return (
+-    <Pressable onPress={onPress} style={[styles.navBtn, active && styles.navBtnActive]}>
+-      <Text style={[styles.navBtnText, active && styles.navBtnTextActive]}>{label}</Text>
+-    </Pressable>
+-  );
+-}
+-
+-function Chip({
+-  label,
+-  active,
+-  onPress,
+-  mode = "primary",
+-}: {
+-  label: string;
+-  active?: boolean;
+-  onPress: () => void;
+-  mode?: "primary" | "secondary";
+-}) {
+-  return (
+-    <Pressable
+-      onPress={onPress}
+-      style={[
+-        styles.chip,
+-        mode === "secondary" && styles.chipSecondary,
+-        active && styles.chipActive,
+-      ]}
+-    >
+-      <Text
+-        style={[
+-          styles.chipText,
+-          mode === "secondary" && styles.chipTextSecondary,
+-          active && styles.chipTextActive,
+-        ]}
+-      >
+-        {label}
+-      </Text>
+-    </Pressable>
+-  );
+-}
+-
+ // Favorite heart. Rendered as a SIBLING of the card Pressable (not
+ // nested inside it) so tapping the heart never also opens the detail.
+ function FavButton({ isFav, onToggle }: { isFav: boolean; onToggle: () => void }) {
+   return (
+-    <Pressable onPress={onToggle} hitSlop={8} style={styles.favBtn}>
+-      <Text style={styles.favBtnText}>{isFav ? "♥" : "♡"}</Text>
+-    </Pressable>
+-  );
+-}
+-
+-function MiniEventCard({
+-  item,
+-  venueName,
+-  isFav,
+-  onToggleFav,
+-  onOpen,
+-}: {
+-  item: EventItem;
+-  venueName: string;
+-  isFav: boolean;
+-  onToggleFav: () => void;
+-  onOpen: () => void;
+-}) {
+-  return (
+-    <View style={styles.miniCard}>
+-      <Pressable onPress={onOpen} style={StyleSheet.absoluteFill} />
+-      <LinearGradient
+-        colors={["rgba(255,255,255,0.16)", "rgba(255,255,255,0.08)"]}
+-        start={{ x: 0, y: 0 }}
+-        end={{ x: 1, y: 1 }}
+-        style={StyleSheet.absoluteFill}
+-      />
+-      <Text style={styles.miniWhen}>{formatWhen(item.startISO)}</Text>
+-      <Text style={styles.miniTitle} numberOfLines={2}>
+-        {item.title}
+-      </Text>
+-      <Text style={styles.miniVenue} numberOfLines={1}>
+-        {venueName}
+-      </Text>
+-      <View style={styles.tagRow}>
+-        {uniq([...(item.vibeTags || []), ...(item.audienceTags || [])])
+-          .slice(0, 3)
+-          .map((t) => (
+-            <View key={`${item.id}_${t}`} style={styles.tagPill}>
+-              <Text style={styles.tagText}>{t}</Text>
+-            </View>
+-          ))}
+-      </View>
+-      <FavButton isFav={isFav} onToggle={onToggleFav} />
+-    </View>
+-  );
+-}
+-
+-function VenueCard({ name, onOpen }: { name: string; onOpen: () => void }) {
+-  return (
+-    <Pressable style={styles.venueCard} onPress={onOpen}>
+-      <LinearGradient
+-        colors={["rgba(255,255,255,0.14)", "rgba(255,255,255,0.06)"]}
+-        start={{ x: 0, y: 0 }}
+-        end={{ x: 1, y: 1 }}
+-        style={StyleSheet.absoluteFill}
+-      />
+-      <Text style={styles.venueName} numberOfLines={2}>
+-        {name}
+-      </Text>
+-      <Text style={styles.venueMeta}>Top venue • Tap to view</Text>
+-    </Pressable>
++    <TouchableOpacity onPress={onToggle} hitSlop={8} style={styles.favBtn}>
++      <Ionicons name={isFav ? "heart" : "heart-outline"} size={20} color="#fff" />
++    </TouchableOpacity>
+   );
+ }
+ 
+ export default function EventsScreen() {
+   const router = useRouter();
++  const insets = useSafeAreaInsets();
+   const params = useLocalSearchParams<{ q?: string; venue?: string }>();
+   const { user } = useAuth();
+ 
+-  // Explore
+   const [query, setQuery] = useState("");
+-
+-  // Venue filter (from Home orbs / Personal favorite venues)
+   const [venueFilter, setVenueFilter] = useState<string | null>(null);
+-
+-  // Persona
+   const [persona, setPersona] = useState<PersonaProfile>(DEFAULT_PERSONA);
+-
+-  // Chips behavior
+   const [timeChip, setTimeChip] = useState<TimeChip>("tonight");
+   const [personalizedOn, setPersonalizedOn] = useState<boolean>(false);
+ 
+@@ -313,11 +153,9 @@ export default function EventsScreen() {
+   const [spotlightOpen, setSpotlightOpen] = useState(true);
+   const [venuesOpen, setVenuesOpen] = useState(true);
+ 
+-  // Favorites (Set of `event:<id>`)
++  // Favorites (Set of `kind:id`)
+   const [favKeys, setFavKeys] = useState<Set<string>>(new Set());
+ 
+-  const drift = useRef(new Animated.Value(0)).current;
+-
+   // Persona + favorites refresh whenever the screen gains focus
+   // (persona may have changed on the picker; favorites may have
+   // changed on Detail / Personal).
+@@ -364,32 +202,8 @@ export default function EventsScreen() {
+     if (typeof params.venue === "string" && params.venue.trim()) setVenueFilter(params.venue);
+   }, [params.q, params.venue]);
+ 
+-  useEffect(() => {
+-    const anim = Animated.loop(
+-      Animated.sequence([
+-        Animated.timing(drift, { toValue: 1, duration: 4200, useNativeDriver: true }),
+-        Animated.timing(drift, { toValue: 0, duration: 4200, useNativeDriver: true }),
+-      ])
+-    );
+-    anim.start();
+-    return () => anim.stop();
+-  }, [drift]);
+-
+-  const driftX = drift.interpolate({ inputRange: [0, 1], outputRange: [-18, 18] });
+-  const driftY = drift.interpolate({ inputRange: [0, 1], outputRange: [8, -8] });
+-  const glowOpacity = drift.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0.18] });
+-
+-  const venueNameById = useMemo(() => {
+-    const map = new Map<string, string>();
+-    for (const v of venues) {
+-      map.set(v.id, v.name);
+-      map.set(v.name, v.name);
+-    }
+-    return map;
+-  }, [venues]);
+-
+-  function venueNameFor(e: EventItem): string {
+-    return venueNameById.get(e.venueId) ?? (e.venueId || "Venue");
++  function go(route: string) {
++    router.replace(route);
+   }
+ 
+   function openEvent(id: string) {
+@@ -405,7 +219,7 @@ export default function EventsScreen() {
+       id: item.id,
+       kind: "event",
+       title: item.title,
+-      subtitle: venueNameFor(item),
++      subtitle: getVenueName(item.venueId, venues),
+       when: formatWhen(item.startISO),
+     };
+     try {
+@@ -422,13 +236,15 @@ export default function EventsScreen() {
+   }
+ 
+   const spotlight = useMemo(() => {
+-    return events.filter((e) => e.category === "spotlight")
++    return events
++      .filter((e) => e.category === "spotlight")
+       .filter((e) => inTimeWindow(e, "week"))
+       .slice(0, 10);
+   }, [events]);
+ 
+   const tailored = useMemo(() => {
+-    return events.filter((e) => inTimeWindow(e, "week"))
++    return events
++      .filter((e) => inTimeWindow(e, "week"))
+       .filter((e) => matchesPersona(e, persona))
+       .slice(0, 10);
+   }, [persona, events]);
+@@ -440,22 +256,19 @@ export default function EventsScreen() {
+   const allEvents = useMemo(() => {
+     const base = events
+       .filter((e) => inTimeWindow(e, timeChip))
+-      .filter((e) => matchesSearch(e, venueNameFor(e), query))
++      .filter((e) => matchesSearch(e, getVenueName(e.venueId, venues), query))
+       .filter((e) =>
+         venueFilter
+-          ? venueNameFor(e).toLowerCase() === venueFilter.toLowerCase() ||
++          ? getVenueName(e.venueId, venues).toLowerCase() === venueFilter.toLowerCase() ||
+             e.venueId.toLowerCase() === venueFilter.toLowerCase()
+           : true
+       );
+-
+     const personaFiltered = personalizedOn ? base.filter((e) => matchesPersona(e, persona)) : base;
+-
+     return [...personaFiltered].sort((a, b) => {
+       const da = parseISO(a.startISO)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+       const db = parseISO(b.startISO)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+       return da - db;
+     });
+-    // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, [persona, personalizedOn, query, timeChip, events, venueFilter, venues]);
+ 
+   const headerSubtitle = useMemo(() => {
+@@ -464,358 +277,194 @@ export default function EventsScreen() {
+       timeChip === "all"
+         ? "All"
+         : timeChip === "week"
+-        ? "This Week"
+-        : timeChip === "weekend"
+-        ? "Weekend"
+-        : timeChip === "tomorrow"
+-        ? "Tomorrow"
+-        : "Tonight";
++          ? "This Week"
++          : timeChip === "weekend"
++            ? "Weekend"
++            : timeChip === "tomorrow"
++              ? "Tomorrow"
++              : "Tonight";
+     const mode = personalizedOn ? "Personalized" : "All events";
+     return `${timeLabel} · ${city} · ${mode}`;
+   }, [personalizedOn, timeChip]);
+ 
+-  const Header = (
+-    <View style={{ paddingHorizontal: 16, paddingTop: 10 }}>
+-      {/* ✅ SEARCH BAR NOW ABOVE the Home/Events/Personal tabs */}
+-      <View style={styles.exploreWrap}>
+-        <TextInput
+-          value={query}
+-          onChangeText={setQuery}
+-          placeholder="Explore events, venues, vibes..."
+-          placeholderTextColor="rgba(255,255,255,0.55)"
+-          style={styles.exploreInput}
+-          returnKeyType="search"
+-        />
+-      </View>
+-
+-      {/* Top nav row (Home / Events / Personal) — canonical (tabs) routes */}
+-      <View style={styles.topNavRow}>
+-        <TopNavButton label="Home" onPress={() => router.replace("/(tabs)")} />
+-        <TopNavButton label="Events" active onPress={() => router.replace("/(tabs)/events")} />
+-        <TopNavButton label="Personal" onPress={() => router.replace("/(tabs)/personal")} />
+-      </View>
+-
+-      {/* Venue filter chip (from Home orbs / Personal favorites) */}
+-      {!!venueFilter && (
+-        <View style={styles.venueFilterRow}>
+-          <Text style={styles.venueFilterText} numberOfLines={1}>
+-            Venue: {venueFilter}
+-          </Text>
+-          <Pressable onPress={() => setVenueFilter(null)} hitSlop={8}>
+-            <Text style={styles.venueFilterClear}>✕ Clear</Text>
+-          </Pressable>
++  return (
++    <View style={refStyles.root}>
++      <ScrollView
++        showsVerticalScrollIndicator={false}
++        keyboardShouldPersistTaps="handled"
++        contentContainerStyle={[
++          refStyles.scroll,
++          { paddingTop: 16 + insets.top, paddingBottom: 70 + insets.bottom + 16 },
++        ]}
++      >
++        <StatusBar barStyle="light-content" backgroundColor="#0e0b19" />
++        <Search value={query} onChange={setQuery} placeholder="Explore events, venues, vibes..." />
++        <TopTabs active="Events" onNavigate={go} />
++
++        <Text style={refStyles.pageTitle}>Events</Text>
++        <Text style={refStyles.subtitle}>{headerSubtitle}</Text>
++
++        {/* ONE filter row: time chips + All */}
++        <View style={refStyles.filterWrap}>
++          <Pill label="Tonight" active={timeChip === "tonight"} onPress={() => setTimeChip("tonight")} />
++          <Pill label="Tomorrow" active={timeChip === "tomorrow"} onPress={() => setTimeChip("tomorrow")} />
++          <Pill label="Weekend" active={timeChip === "weekend"} onPress={() => setTimeChip("weekend")} />
++          <Pill label="This Week" active={timeChip === "week"} onPress={() => setTimeChip("week")} />
++          <Pill label="All" active={timeChip === "all"} onPress={() => setTimeChip("all")} />
+         </View>
+-      )}
+-
+-      {/* Living header (ambient motion + glass + context + chips) */}
+-      <View style={styles.livingHeaderWrap}>
+-        <Animated.View
+-          pointerEvents="none"
+-          style={[
+-            styles.glowBlob,
+-            {
+-              opacity: glowOpacity,
+-              transform: [{ translateX: driftX }, { translateY: driftY }],
+-            },
+-          ]}
+-        >
+-          <LinearGradient
+-            colors={[
+-              "rgba(255, 90, 190, 0.55)",
+-              "rgba(120, 90, 255, 0.35)",
+-              "rgba(60, 200, 255, 0.25)",
+-              "rgba(0,0,0,0)",
+-            ]}
+-            start={{ x: 0.1, y: 0.2 }}
+-            end={{ x: 0.9, y: 0.9 }}
+-            style={StyleSheet.absoluteFill}
+-          />
+-        </Animated.View>
+-
+-        <View style={styles.glassCard}>
+-          <Text style={styles.hTitle}>Events</Text>
+-          <Text style={styles.hSub}>{headerSubtitle}</Text>
+-
+-          <View style={styles.chipsRow}>
+-            <Chip label="Tonight" active={timeChip === "tonight"} onPress={() => setTimeChip("tonight")} />
+-            <Chip label="Tomorrow" active={timeChip === "tomorrow"} onPress={() => setTimeChip("tomorrow")} />
+-            <Chip label="Weekend" active={timeChip === "weekend"} onPress={() => setTimeChip("weekend")} />
+-            <Chip label="This Week" active={timeChip === "week"} onPress={() => setTimeChip("week")} />
+-          </View>
+ 
+-          <View style={styles.chipsRow2}>
+-            <Chip
+-              label="Personalized"
+-              mode="secondary"
+-              active={personalizedOn}
+-              onPress={() => setPersonalizedOn((v) => !v)}
+-            />
+-            <Chip
+-              label="All"
+-              mode="secondary"
+-              active={timeChip === "all" && !personalizedOn}
+-              onPress={() => {
+-                setTimeChip("all");
+-                setPersonalizedOn(false);
+-              }}
+-            />
+-            <Pressable onPress={() => router.push("/(tabs)/persona")} style={styles.changePersonaBtn}>
+-              <Text style={styles.changePersonaText}>Change persona</Text>
+-            </Pressable>
++        {/* Personalized | All + Change persona (right-aligned) */}
++        <View style={[refStyles.filterWrap, { alignItems: "center" }]}>
++          <Pill label="Personalized" active={personalizedOn} onPress={() => setPersonalizedOn(true)} />
++          <Pill label="All" active={!personalizedOn} onPress={() => setPersonalizedOn(false)} />
++          <View style={{ marginLeft: "auto" }}>
++            <Pill label="Change persona" onPress={() => router.push("/(tabs)/persona")} />
+           </View>
+         </View>
+-      </View>
+ 
+-      {/* Sections */}
+-      <SectionTitle
+-        title="Tailored For You"
+-        subtitle="Based on your persona"
+-        open={tailoredOpen}
+-        onToggle={() => setTailoredOpen((v) => !v)}
+-      />
+-      {tailoredOpen && (
+-        <FlatList
+-          data={tailored}
+-          keyExtractor={(i) => i.id}
+-          horizontal
+-          showsHorizontalScrollIndicator={false}
+-          contentContainerStyle={{ paddingVertical: 10, paddingRight: 16 }}
+-          renderItem={({ item }) => (
+-            <MiniEventCard
+-              item={item}
+-              venueName={venueNameFor(item)}
+-              isFav={favKeys.has(`event:${item.id}`)}
+-              onToggleFav={() => onToggleFav(item)}
+-              onOpen={() => openEvent(item.id)}
+-            />
+-          )}
+-        />
+-      )}
++        {/* Venue filter chip */}
++        {!!venueFilter && (
++          <View style={styles.venueFilterRow}>
++            <Text style={styles.venueFilterText} numberOfLines={1}>
++              Venue: {venueFilter}
++            </Text>
++            <TouchableOpacity
++              onPress={() => setVenueFilter(null)}
++              hitSlop={8}
++              style={styles.venueFilterClear}
++            >
++              <Ionicons name="close" size={14} color="rgba(255,255,255,0.75)" />
++              <Text style={styles.venueFilterClearText}>Clear</Text>
++            </TouchableOpacity>
++          </View>
++        )}
+ 
+-      <SectionTitle
+-        title="Spotlight Events"
+-        subtitle="Hand-picked experiences"
+-        open={spotlightOpen}
+-        onToggle={() => setSpotlightOpen((v) => !v)}
+-      />
+-      {spotlightOpen && (
+-        <FlatList
+-          data={spotlight}
+-          keyExtractor={(i) => i.id}
+-          horizontal
+-          showsHorizontalScrollIndicator={false}
+-          contentContainerStyle={{ paddingVertical: 10, paddingRight: 16 }}
+-          renderItem={({ item }) => (
+-            <MiniEventCard
+-              item={item}
+-              venueName={venueNameFor(item)}
+-              isFav={favKeys.has(`event:${item.id}`)}
+-              onToggleFav={() => onToggleFav(item)}
+-              onOpen={() => openEvent(item.id)}
+-            />
+-          )}
++        {/* Tailored For You — horizontal rail (ignores search/timeChip) */}
++        <Section
++          title="Tailored For You"
++          subtitle="Based on your persona"
++          onPress={() => setTailoredOpen((v) => !v)}
+         />
+-      )}
+-
+-      <SectionTitle
+-        title="Top Venues"
+-        subtitle="Great places right now"
+-        open={venuesOpen}
+-        onToggle={() => setVenuesOpen((v) => !v)}
+-      />
+-      {venuesOpen && (
+-        <FlatList
+-          data={topVenues}
+-          keyExtractor={(x, idx) => `${x}_${idx}`}
+-          horizontal
+-          showsHorizontalScrollIndicator={false}
+-          contentContainerStyle={{ paddingVertical: 10, paddingRight: 16 }}
+-          renderItem={({ item }) => <VenueCard name={String(item)} onOpen={() => openVenue(String(item))} />}
++        {tailoredOpen && (
++          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
++            {tailored.map((item) => (
++              <TouchableOpacity
++                key={item.id}
++                onPress={() => openEvent(item.id)}
++                activeOpacity={0.86}
++                style={[refStyles.tailored, styles.tailoredCard]}
++              >
++                <Text style={refStyles.micro}>{formatWhen(item.startISO)}</Text>
++                <Text style={refStyles.tailoredTitle} numberOfLines={3}>
++                  {item.title}
++                </Text>
++                <Text style={refStyles.muted}>{getVenueName(item.venueId, venues)}</Text>
++                <View style={refStyles.tagRow}>
++                  {uniq([...(item.vibeTags || []), ...(item.audienceTags || [])])
++                    .slice(0, 3)
++                    .map((t) => (
++                      <View key={`${item.id}_${t}`} style={refStyles.tag}>
++                        <Text style={refStyles.tagText}>{t}</Text>
++                      </View>
++                    ))}
++                </View>
++              </TouchableOpacity>
++            ))}
++          </ScrollView>
++        )}
++
++        {/* Spotlight Events — vertical compact cards */}
++        <Section
++          title="Spotlight Events"
++          subtitle="Hand-picked experiences"
++          onPress={() => setSpotlightOpen((v) => !v)}
+         />
+-      )}
+-
+-      <SectionTitle title="All Events" subtitle="Full list" open alwaysOpen />
+-      <View style={{ height: 8 }} />
+-    </View>
+-  );
++        {spotlightOpen &&
++          spotlight.map((item) => (
++            <EventCard
++              key={item.id}
++              title={item.title}
++              venueName={getVenueName(item.venueId, venues)}
++              label={formatWhen(item.startISO)}
++              compact
++              onPress={() => openEvent(item.id)}
++            />
++          ))}
+ 
+-  return (
+-    <SafeAreaView style={styles.safe}>
+-      <StatusBar barStyle="light-content" />
+-      <View style={styles.bg}>
+-        <LinearGradient
+-          colors={["#070811", "#0b0b18", "#120a18", "#0a0c16"]}
+-          start={{ x: 0.15, y: 0.1 }}
+-          end={{ x: 0.85, y: 0.95 }}
+-          style={StyleSheet.absoluteFill}
+-        />
+-        <LinearGradient
+-          colors={["rgba(0,0,0,0.0)", "rgba(0,0,0,0.55)"]}
+-          start={{ x: 0.5, y: 0.2 }}
+-          end={{ x: 0.5, y: 1 }}
+-          style={StyleSheet.absoluteFill}
++        {/* Top Venues rail */}
++        <Section
++          title="Top Venues"
++          subtitle="Great places right now"
++          onPress={() => setVenuesOpen((v) => !v)}
+         />
+-
+-        <FlatList
+-          data={allEvents}
+-          keyExtractor={(i) => i.id}
+-          ListHeaderComponent={Header}
+-          ListEmptyComponent={
+-            <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
+-              <Text style={styles.emptyText}>
+-                {events.length === 0
+-                  ? "No events yet — check back soon."
+-                  : "No events match your filters."}
+-              </Text>
+-            </View>
+-          }
+-          contentContainerStyle={{ paddingBottom: 22 }}
+-          showsVerticalScrollIndicator={false}
+-          renderItem={({ item }) => (
+-            <View style={{ paddingHorizontal: 16, paddingBottom: 10 }}>
+-              <BigEventRow
+-                item={item}
+-                venueName={venueNameFor(item)}
++        {venuesOpen && (
++          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
++            {topVenues.map((name) => (
++              <TouchableOpacity
++                key={name}
++                onPress={() => openVenue(name)}
++                activeOpacity={0.86}
++                style={[refStyles.tailored, styles.venueRailCard]}
++              >
++                <Text style={styles.venueRailName} numberOfLines={2}>
++                  {name}
++                </Text>
++                <Text style={styles.venueRailMeta}>Tap to view</Text>
++              </TouchableOpacity>
++            ))}
++          </ScrollView>
++        )}
++
++        {/* All Events list */}
++        <Section title="All Events" subtitle="Full list" />
++        {allEvents.length === 0 ? (
++          <Text style={styles.emptyText}>
++            {events.length === 0
++              ? "No events yet — check back soon."
++              : "No events match your filters."}
++          </Text>
++        ) : (
++          allEvents.map((item) => (
++            <View key={item.id} style={styles.bigRow}>
++              <TouchableOpacity onPress={() => openEvent(item.id)} style={StyleSheet.absoluteFill} />
++              <View style={{ flex: 1 }}>
++                <Text style={styles.bigWhen}>{formatWhen(item.startISO)}</Text>
++                <Text style={styles.bigTitle} numberOfLines={2}>
++                  {item.title}
++                </Text>
++                <Text style={styles.bigVenue} numberOfLines={1}>
++                  {getVenueName(item.venueId, venues)}
++                </Text>
++                <View style={[refStyles.tagRow, { flexWrap: "wrap" }]}>
++                  {uniq([...(item.vibeTags || []), ...(item.audienceTags || [])])
++                    .slice(0, 4)
++                    .map((t) => (
++                      <View key={`${item.id}_big_${t}`} style={refStyles.tag}>
++                        <Text style={refStyles.tagText}>{t}</Text>
++                      </View>
++                    ))}
++                </View>
++              </View>
++              <View style={styles.bigRight}>
++                <Text style={styles.priceText}>{item.priceLabel || ""}</Text>
++                <Text style={styles.moreText}>View</Text>
++              </View>
++              <FavButton
+                 isFav={favKeys.has(`event:${item.id}`)}
+-                onToggleFav={() => onToggleFav(item)}
+-                onOpen={() => openEvent(item.id)}
++                onToggle={() => onToggleFav(item)}
+               />
+             </View>
+-          )}
+-        />
+-      </View>
+-    </SafeAreaView>
+-  );
+-}
+-
+-function SectionTitle({
+-  title,
+-  subtitle,
+-  open,
+-  onToggle,
+-  alwaysOpen,
+-}: {
+-  title: string;
+-  subtitle?: string;
+-  open?: boolean;
+-  onToggle?: () => void;
+-  alwaysOpen?: boolean;
+-}) {
+-  return (
+-    <View style={styles.sectionTitleRow}>
+-      <View style={{ flex: 1 }}>
+-        <Text style={styles.sectionTitle}>{title}</Text>
+-        {!!subtitle && <Text style={styles.sectionSub}>{subtitle}</Text>}
++          ))
++        )}
++      </ScrollView>
++      <View style={{ backgroundColor: "#161120", paddingBottom: insets.bottom }}>
++        <BottomNav active="Events" onNavigate={go} />
+       </View>
+-      {!alwaysOpen && (
+-        <Pressable onPress={onToggle} hitSlop={8} style={styles.sectionChevronBtn}>
+-          <Text style={styles.sectionChevron}>{open ? "˄" : "›"}</Text>
+-        </Pressable>
+-      )}
+-    </View>
+-  );
+-}
+-
+-function BigEventRow({
+-  item,
+-  venueName,
+-  isFav,
+-  onToggleFav,
+-  onOpen,
+-}: {
+-  item: EventItem;
+-  venueName: string;
+-  isFav: boolean;
+-  onToggleFav: () => void;
+-  onOpen: () => void;
+-}) {
+-  return (
+-    <View style={styles.bigRow}>
+-      <Pressable onPress={onOpen} style={StyleSheet.absoluteFill} />
+-      <LinearGradient
+-        colors={["rgba(255,255,255,0.14)", "rgba(255,255,255,0.06)"]}
+-        start={{ x: 0.1, y: 0.1 }}
+-        end={{ x: 0.95, y: 0.95 }}
+-        style={StyleSheet.absoluteFill}
+-      />
+-      <View style={{ flex: 1 }}>
+-        <Text style={styles.bigWhen}>{formatWhen(item.startISO)}</Text>
+-        <Text style={styles.bigTitle} numberOfLines={2}>
+-          {item.title}
+-        </Text>
+-        <Text style={styles.bigVenue} numberOfLines={1}>
+-          {venueName}
+-        </Text>
+-        <View style={styles.tagRow}>
+-          {uniq([...(item.vibeTags || []), ...(item.audienceTags || [])])
+-            .slice(0, 4)
+-            .map((t) => (
+-              <View key={`${item.id}_big_${t}`} style={styles.tagPill}>
+-                <Text style={styles.tagText}>{t}</Text>
+-              </View>
+-            ))}
+-        </View>
+-      </View>
+-
+-      <View style={styles.bigRight}>
+-        <Text style={styles.priceText}>{item.priceLabel || ""}</Text>
+-        <Text style={styles.moreText}>View</Text>
+-      </View>
+-      <FavButton isFav={isFav} onToggle={onToggleFav} />
+     </View>
+   );
+ }
+ 
+ const styles = StyleSheet.create({
+-  safe: { flex: 1, backgroundColor: "#05060A" },
+-  bg: { flex: 1 },
+-
+-  // Explore (now placed above top nav)
+-  exploreWrap: {
+-    borderRadius: 16,
+-    backgroundColor: "rgba(255,255,255,0.07)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.12)",
+-    paddingHorizontal: 14,
+-    paddingVertical: 10,
+-  },
+-  exploreInput: {
+-    color: "rgba(255,255,255,0.95)",
+-    fontSize: 15,
+-    fontWeight: "600",
+-  },
+-
+-  // Top nav
+-  topNavRow: {
+-    flexDirection: "row",
+-    gap: 10,
+-    paddingTop: 12, // ✅ slight spacing after search bar
+-    paddingBottom: 12,
+-  },
+-  navBtn: {
+-    flex: 1,
+-    height: 40,
+-    borderRadius: 14,
+-    alignItems: "center",
+-    justifyContent: "center",
+-    backgroundColor: "rgba(255,255,255,0.06)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.10)",
+-  },
+-  navBtnActive: {
+-    backgroundColor: "rgba(255,255,255,0.14)",
+-    borderColor: "rgba(255,255,255,0.18)",
+-  },
+-  navBtnText: {
+-    color: "rgba(255,255,255,0.78)",
+-    fontWeight: "700",
+-    letterSpacing: 0.2,
+-  },
+-  navBtnTextActive: {
+-    color: "rgba(255,255,255,0.95)",
+-  },
+-
+-  // Venue filter chip
+   venueFilterRow: {
+     flexDirection: "row",
+     alignItems: "center",
+@@ -836,229 +485,51 @@ const styles = StyleSheet.create({
+     fontSize: 13,
+   },
+   venueFilterClear: {
++    flexDirection: "row",
++    alignItems: "center",
++    gap: 4,
++  },
++  venueFilterClearText: {
+     color: "rgba(255,255,255,0.75)",
+     fontWeight: "900",
+     fontSize: 13,
+   },
+-
+   emptyText: {
+     color: "rgba(255,255,255,0.72)",
+     fontSize: 14,
+     fontWeight: "800",
++    paddingTop: 12,
+   },
+-
+-  // Living header
+-  livingHeaderWrap: {
+-    marginTop: 14,
+-    marginBottom: 10,
+-    borderRadius: 22,
+-    overflow: "hidden",
+-  },
+-  glowBlob: {
+-    position: "absolute",
+-    left: -40,
+-    top: -30,
+-    width: 420,
+-    height: 240,
+-    borderRadius: 999,
+-  },
+-  glassCard: {
+-    borderRadius: 22,
+-    padding: 16,
+-    backgroundColor: "rgba(255,255,255,0.08)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.14)",
+-  },
+-  hTitle: {
+-    color: "rgba(255,255,255,0.95)",
+-    fontSize: 24,
+-    fontWeight: "900",
+-    letterSpacing: 0.3,
+-  },
+-  hSub: {
+-    marginTop: 4,
+-    color: "rgba(255,255,255,0.72)",
+-    fontSize: 13,
+-    fontWeight: "700",
+-  },
+-
+-  // Chips
+-  chipsRow: {
+-    marginTop: 12,
+-    flexDirection: "row",
+-    flexWrap: "wrap",
+-    gap: 8,
+-  },
+-  chipsRow2: {
+-    marginTop: 10,
+-    flexDirection: "row",
+-    flexWrap: "wrap",
+-    gap: 8,
+-    alignItems: "center",
+-  },
+-  chip: {
+-    paddingHorizontal: 12,
+-    paddingVertical: 9,
+-    borderRadius: 999,
+-    backgroundColor: "rgba(255,255,255,0.08)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.12)",
+-  },
+-  chipSecondary: {
+-    backgroundColor: "rgba(255,255,255,0.06)",
+-  },
+-  chipActive: {
+-    backgroundColor: "rgba(255,255,255,0.18)",
+-    borderColor: "rgba(255,255,255,0.22)",
+-  },
+-  chipText: {
+-    color: "rgba(255,255,255,0.82)",
+-    fontWeight: "800",
+-    fontSize: 13,
+-  },
+-  chipTextSecondary: {
+-    fontWeight: "800",
+-  },
+-  chipTextActive: {
+-    color: "rgba(255,255,255,0.96)",
+-  },
+-  changePersonaBtn: {
+-    marginLeft: "auto",
+-    paddingHorizontal: 12,
+-    paddingVertical: 9,
+-    borderRadius: 999,
+-    backgroundColor: "rgba(0,0,0,0.20)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.12)",
+-  },
+-  changePersonaText: {
+-    color: "rgba(255,255,255,0.86)",
+-    fontWeight: "900",
+-    fontSize: 13,
+-  },
+-
+-  // Sections
+-  sectionTitleRow: {
+-    marginTop: 14,
+-    flexDirection: "row",
+-    alignItems: "center",
+-    gap: 10,
+-  },
+-  sectionTitle: {
+-    color: "rgba(255,255,255,0.92)",
+-    fontSize: 17,
+-    fontWeight: "900",
+-    letterSpacing: 0.2,
+-  },
+-  sectionSub: {
+-    marginTop: 2,
+-    color: "rgba(255,255,255,0.62)",
+-    fontSize: 12,
+-    fontWeight: "700",
+-  },
+-  sectionChevronBtn: {
+-    padding: 4,
+-    marginLeft: 4,
+-  },
+-  sectionChevron: {
+-    color: "rgba(255,255,255,0.55)",
+-    fontSize: 26,
+-    marginLeft: 4,
+-    transform: [{ translateY: -1 }],
+-  },
+-
+-  // Mini cards (horizontal rails)
+-  miniCard: {
+-    width: 220,
++  tailoredCard: {
++    width: 280,
+     marginRight: 12,
+-    borderRadius: 18,
+-    overflow: "hidden",
+-    padding: 14,
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.12)",
+-    backgroundColor: "rgba(0,0,0,0.20)",
+-  },
+-  miniWhen: {
+-    color: "rgba(255,255,255,0.70)",
+-    fontSize: 12,
+-    fontWeight: "900",
+-  },
+-  miniTitle: {
+-    marginTop: 6,
+-    color: "rgba(255,255,255,0.95)",
+-    fontSize: 16,
+-    fontWeight: "900",
+-    lineHeight: 20,
+-  },
+-  miniVenue: {
+-    marginTop: 6,
+-    color: "rgba(255,255,255,0.70)",
+-    fontSize: 12,
+-    fontWeight: "800",
+-  },
+-
+-  // Favorite heart (sibling of the card pressable, top-right)
+-  favBtn: {
+-    position: "absolute",
+-    top: 8,
+-    right: 10,
+-    padding: 4,
++    marginBottom: 0,
+   },
+-  favBtnText: {
+-    color: "rgba(255,255,255,0.95)",
+-    fontSize: 20,
+-    fontWeight: "900",
+-  },
+-
+-  // Venue cards
+-  venueCard: {
++  venueRailCard: {
+     width: 190,
+     marginRight: 12,
+-    borderRadius: 18,
+-    overflow: "hidden",
+-    padding: 14,
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.12)",
+-    backgroundColor: "rgba(0,0,0,0.18)",
++    marginBottom: 0,
+     justifyContent: "space-between",
++    minHeight: 110,
+   },
+-  venueName: {
++  venueRailName: {
+     color: "rgba(255,255,255,0.95)",
+     fontSize: 16,
+     fontWeight: "900",
+     lineHeight: 20,
+   },
+-  venueMeta: {
++  venueRailMeta: {
+     marginTop: 10,
+     color: "rgba(255,255,255,0.62)",
+     fontSize: 12,
+     fontWeight: "800",
+   },
+-
+-  // Tags
+-  tagRow: {
+-    marginTop: 10,
+-    flexDirection: "row",
+-    flexWrap: "wrap",
+-    gap: 6,
+-  },
+-  tagPill: {
+-    paddingHorizontal: 10,
+-    paddingVertical: 6,
+-    borderRadius: 999,
+-    backgroundColor: "rgba(255,255,255,0.10)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.12)",
+-  },
+-  tagText: {
+-    color: "rgba(255,255,255,0.80)",
+-    fontWeight: "900",
+-    fontSize: 11,
+-    letterSpacing: 0.2,
+-    textTransform: "capitalize",
++  favBtn: {
++    position: "absolute",
++    top: 8,
++    right: 10,
++    padding: 4,
+   },
+-
+-  // Big list rows (All Events)
+   bigRow: {
+     borderRadius: 18,
+     overflow: "hidden",
+@@ -1069,6 +540,7 @@ const styles = StyleSheet.create({
+     flexDirection: "row",
+     gap: 12,
+     alignItems: "center",
++    marginBottom: 10,
+   },
+   bigWhen: {
+     color: "rgba(255,255,255,0.70)",
+diff --git a/bownd/app/(tabs)/home.tsx b/bownd/app/(tabs)/home.tsx
+index 9865e88..ae69a86 100644
+--- a/bownd/app/(tabs)/home.tsx
++++ b/bownd/app/(tabs)/home.tsx
+@@ -1,59 +1,35 @@
+ // app/(tabs)/home.tsx
+-// Phase 6 fix notes (see FIX-PLAN.md):
+-// - Home search is WIRED: typing filters spotlight/featured events and
+-//   venues in place (title, venue, vibe/audience tags). A "See results in
+-//   Events" row navigates to /(tabs)/events with the query prefilled.
+-// - Spotlight / featured cards navigate to the real detail screen
+-//   (/detail?id=...&kind=event) instead of generically replacing to
+-//   /(tabs)/events and losing which event was tapped.
+-// - Venue orbs navigate to /(tabs)/events filtered to that venue.
+-// - Events + venues come from Firestore ONLY (lib/store.ts). No bundled
+-//   demo fallback: an empty catalog shows "No events yet", never demo
+-//   events presented as real.
+-// - Visual design is UNCHANGED: same layout, styles, and components.
++// Reference visuals (App.tsx) + real backend wiring (lib/store.ts).
++// - Events + venues come from Firestore ONLY. No bundled demo fallback:
++//   an empty catalog shows "No events yet", never demo events.
++// - Search filters the catalog in place (title, venue, vibe/audience
++//   tags). "See all results in Events" navigates with the query prefilled.
++// - Spotlight cards + Featured sections navigate to the real detail
++//   screen. Venue orbs / venue row navigate to Events filtered to a venue.
++// - Featured renders TWICE, exactly as the reference does: first instance
++//   followed by the horizontal venue row, second instance bare.
+ import React, { useEffect, useMemo, useState } from "react";
+-import {
+-  View,
+-  Text,
+-  StyleSheet,
+-  ImageBackground,
+-  SafeAreaView,
+-  TextInput,
+-  Pressable,
+-  FlatList,
+-  StatusBar,
+-  Platform,
+-  ScrollView,
+-} from "react-native";
+-import { Ionicons } from "@expo/vector-icons";
++import { View, Text, StyleSheet, ScrollView, StatusBar, TouchableOpacity } from "react-native";
+ import { LinearGradient } from "expo-linear-gradient";
++import { Ionicons } from "@expo/vector-icons";
+ import { useRouter } from "expo-router";
++import { useSafeAreaInsets } from "react-native-safe-area-context";
+ 
+ import { fetchEvents, fetchVenues, type EventItem, type Venue } from "../../lib/store";
+-
+-type TabKey = "home" | "events" | "personal";
++import {
++  BottomNav,
++  EventCard,
++  Search,
++  Section,
++  TopTabs,
++  formatWhen,
++  getVenueName,
++  refStyles,
++} from "../ui/reference";
+ 
+ function pickFeatured(events: EventItem[]) {
+   return events.find((e) => e.category === "featured") ?? events[1] ?? events[0];
+ }
+-function getVenueNameFromEvent(e: EventItem, venues: Venue[]) {
+-  const v = venues.find((x) => x.id === e.venueId || x.name === e.venueId);
+-  return v?.name ?? (e.venueId || "Venue");
+-}
+-
+-function titleToTwoLines(title: string) {
+-  // Helps mimic the mock’s bigger “headline” look without overflowing.
+-  const parts = title.split(":");
+-  if (parts.length >= 2) {
+-    const left = parts[0].trim() + ":";
+-    const right = parts.slice(1).join(":").trim();
+-    return { line1: left, line2: right };
+-  }
+-  const words = title.split(" ");
+-  if (words.length <= 3) return { line1: title, line2: "" };
+-  const mid = Math.ceil(words.length / 2);
+-  return { line1: words.slice(0, mid).join(" "), line2: words.slice(mid).join(" ") };
+-}
+ 
+ function matchesHomeSearch(e: EventItem, venueName: string, q: string) {
+   if (!q) return true;
+@@ -66,10 +42,12 @@ function matchesHomeSearch(e: EventItem, venueName: string, q: string) {
+   );
+ }
+ 
++const VENUE_ICONS = ["wine-outline", "business-outline", "storefront-outline"] as const;
++
+ export default function Home() {
+   const router = useRouter();
++  const insets = useSafeAreaInsets();
+   const [q, setQ] = useState("");
+-  const [activeTab, setActiveTab] = useState<TabKey>("home");
+ 
+   // Events + venues come from Firestore only (no bundled demo fallback).
+   const [events, setEvents] = useState<EventItem[]>([]);
+@@ -94,9 +72,8 @@ export default function Home() {
+ 
+   const qNorm = q.trim().toLowerCase();
+ 
+-  // Search filters the catalog in place (events + venues).
+   const visibleEvents = useMemo(
+-    () => events.filter((e) => matchesHomeSearch(e, getVenueNameFromEvent(e, venues), qNorm)),
++    () => events.filter((e) => matchesHomeSearch(e, getVenueName(e.venueId, venues), qNorm)),
+     [events, venues, qNorm]
+   );
+ 
+@@ -105,26 +82,17 @@ export default function Home() {
+     [venues, qNorm]
+   );
+ 
+-  // ✅ Spotlight events list for horizontal scroll
+   const spotlightEvents = useMemo(
+     () => visibleEvents.filter((e) => e.category === "spotlight"),
+     [visibleEvents]
+   );
+ 
+-  // keep your single "featured" for the header row text (unchanged UI)
+   const featured = useMemo(() => pickFeatured(visibleEvents), [visibleEvents]);
+ 
+   const topVenues = useMemo(() => visibleVenues.slice(0, 3), [visibleVenues]);
+ 
+-  // all featured events for the vertical menu
+-  const featuredEvents = useMemo(
+-    () => visibleEvents.filter((e) => e.category === "featured"),
+-    [visibleEvents]
+-  );
+-
+-  function go(tab: TabKey) {
+-    setActiveTab(tab);
+-    router.replace(`/(tabs)/${tab}`);
++  function go(route: string) {
++    router.replace(route);
+   }
+ 
+   function openEvent(id: string) {
+@@ -139,263 +107,152 @@ export default function Home() {
+     router.push({ pathname: "/(tabs)/events", params: { q: q.trim() } });
+   }
+ 
+-  const nothingFound = !loading && qNorm.length > 0 && visibleEvents.length === 0 && visibleVenues.length === 0;
++  const nothingFound =
++    !loading && qNorm.length > 0 && visibleEvents.length === 0 && visibleVenues.length === 0;
+ 
+   return (
+-    <ImageBackground
+-      source={require("../../assets/backgrounds/home-bg.jpg")}
+-      resizeMode="cover"
+-      style={styles.bg}
+-    >
+-      <StatusBar translucent backgroundColor="transparent" barStyle="light-content" />
+-
+-      {/* Dark vignette like the mock */}
++    <View style={refStyles.root}>
+       <LinearGradient
+-        colors={[
+-          "rgba(0,0,0,0.55)",
+-          "rgba(0,0,0,0.35)",
+-          "rgba(0,0,0,0.55)",
+-        ]}
+-        style={StyleSheet.absoluteFill}
++        colors={["#0e0b19", "#1b132f", "#0b0915"]}
++        style={StyleSheet.absoluteFillObject}
+       />
+-
+-      <SafeAreaView style={styles.safe}>
+-        <ScrollView
+-          showsVerticalScrollIndicator={false}
+-          contentContainerStyle={styles.content}
+-          keyboardShouldPersistTaps="handled"
+-        >
+-          {/* Search */}
+-          <View style={styles.searchWrap}>
+-            <Ionicons name="search" size={18} color="rgba(255,255,255,0.75)" />
+-            <TextInput
+-              value={q}
+-              onChangeText={setQ}
+-              placeholder="Explore"
+-              placeholderTextColor="rgba(255,255,255,0.55)"
+-              style={styles.searchInput}
+-              returnKeyType="search"
+-              onSubmitEditing={openSearchInEvents}
+-            />
+-          </View>
+-
+-          {/* See full search results in Events (only while searching) */}
+-          {!!qNorm && (
+-            <Pressable onPress={openSearchInEvents} style={styles.seeResultsRow}>
+-              <Text style={styles.seeResultsText}>See all results in Events</Text>
+-              <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.75)" />
+-            </Pressable>
+-          )}
+-
+-          {/* Top tabs pill group */}
+-          <View style={styles.tabsPill}>
+-            {(["home", "events", "personal"] as TabKey[]).map((t) => {
+-              const active = activeTab === t;
+-              return (
+-                <Pressable
+-                  key={t}
+-                  onPress={() => go(t)}
+-                  style={[styles.tabBtn, active && styles.tabBtnActive]}
++      <ScrollView
++        showsVerticalScrollIndicator={false}
++        keyboardShouldPersistTaps="handled"
++        contentContainerStyle={[
++          refStyles.scroll,
++          { paddingTop: 16 + insets.top, paddingBottom: 70 + insets.bottom + 16 },
++        ]}
++      >
++        <StatusBar barStyle="light-content" backgroundColor="#0e0b19" />
++        <Search value={q} onChange={setQ} placeholder="Explore" />
++        <TopTabs active="Home" onNavigate={go} />
++        <View style={{ height: 22 }} />
++
++        {!!qNorm && (
++          <TouchableOpacity onPress={openSearchInEvents} style={styles.seeResultsRow}>
++            <Text style={styles.seeResultsText}>See all results in Events</Text>
++            <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.75)" />
++          </TouchableOpacity>
++        )}
++
++        {loading ? (
++          <Text style={styles.emptyText}>Loading…</Text>
++        ) : events.length === 0 ? (
++          <Text style={styles.emptyText}>No events yet — check back soon.</Text>
++        ) : nothingFound ? (
++          <Text style={styles.emptyText}>No matches for “{q.trim()}”.</Text>
++        ) : (
++          <>
++            {/* Spotlight hero cards (vertical list) */}
++            {spotlightEvents.map((item) => (
++              <EventCard
++                key={item.id}
++                title={item.title}
++                venueName={getVenueName(item.venueId, venues)}
++                label={formatWhen(item.startISO)}
++                badge="Spotlight"
++                onPress={() => openEvent(item.id)}
++              />
++            ))}
++
++            {/* Top Venues orbs (first 3 venues, name only) */}
++            {topVenues.length > 0 && (
++              <View>
++                <Text style={styles.orbsLabel}>Top Venues</Text>
++                <ScrollView
++                  horizontal
++                  showsHorizontalScrollIndicator={false}
++                  contentContainerStyle={{ gap: 12, paddingBottom: 10 }}
+                 >
+-                  <Text style={[styles.tabText, active && styles.tabTextActive]}>
+-                    {t.charAt(0).toUpperCase() + t.slice(1)}
+-                  </Text>
+-                </Pressable>
+-              );
+-            })}
+-          </View>
+-
+-          {loading ? (
+-            <Text style={styles.emptyText}>Loading…</Text>
+-          ) : events.length === 0 ? (
+-            <Text style={styles.emptyText}>No events yet — check back soon.</Text>
+-          ) : nothingFound ? (
+-            <Text style={styles.emptyText}>No matches for “{q.trim()}”.</Text>
+-          ) : (
+-            <>
+-              {/* Spotlight list (vertical stack, like the mock) */}
+-              <View style={styles.spotlightListWrap}>
+-                {spotlightEvents.map((item) => {
+-                  const venue = getVenueNameFromEvent(item, venues);
+-                  const t = titleToTwoLines(item.title);
+-
+-                  return (
+-                    <Pressable
+-                      key={item.id}
+-                      onPress={() => openEvent(item.id)}
+-                      style={[styles.cardOuter, styles.spotlightCardOuter]}
++                  {topVenues.map((v, i) => (
++                    <TouchableOpacity
++                      key={v.id}
++                      onPress={() => openVenue(v.name)}
++                      style={refStyles.venueItem}
+                     >
+-                        <ImageBackground
+-                          source={require("../../assets/backgrounds/home-bg.jpg")}
+-                          resizeMode="cover"
+-                          style={styles.heroCard}
+-                          imageStyle={styles.heroImageStyle}
+-                        >
+-                          <LinearGradient
+-                            colors={["rgba(0,0,0,0.10)", "rgba(0,0,0,0.65)"]}
+-                            style={StyleSheet.absoluteFill}
+-                          />
+-
+-                          <View style={styles.heroTextWrap}>
+-                            <Text style={styles.heroTitle}>
+-                              {t.line1}
+-                              {!!t.line2 ? "\n" : ""}
+-                              {!!t.line2 ? t.line2 : ""}
+-                            </Text>
+-
+-                            <Text numberOfLines={1} style={styles.heroSub}>
+-                              {venue} - Spotlight
+-                            </Text>
+-
+-                            <View style={styles.heroMetaRow}>
+-                              <Text style={styles.heroStar}>★</Text>
+-                              <Text style={styles.heroMeta}>Tonight</Text>
+-                            </View>
+-                          </View>
+-                        </ImageBackground>
+-                      </Pressable>
+-                    );
+-                })}
++                      <LinearGradient
++                        colors={
++                          i === 1 ? ["#5a47a4", "#151026"] : ["#24364b", "#100d22"]
++                        }
++                        style={refStyles.venueIcon}
++                      >
++                        <Ionicons
++                          name={
++                            i === 0
++                              ? "wine-outline"
++                              : i === 1
++                                ? "business-outline"
++                                : "storefront-outline"
++                          }
++                          size={31}
++                          color="#eee8ff"
++                        />
++                      </LinearGradient>
++                      <Text style={refStyles.venueName} numberOfLines={2}>
++                        {v.name}
++                      </Text>
++                    </TouchableOpacity>
++                  ))}
++                </ScrollView>
+               </View>
+-
+-              {/* Top Venues (only when venues exist) */}
+-              {topVenues.length > 0 && (
+-                <>
+-                  <Text style={styles.sectionLabel}>Top Venues:</Text>
+-
+-                  <FlatList
+-                    horizontal
+-                    showsHorizontalScrollIndicator={false}
+-                    data={topVenues}
+-                    keyExtractor={(v, i) => String((v as any)?.id ?? (v as any)?.name ?? i)}
+-                    contentContainerStyle={styles.venuesRow}
+-                    renderItem={({ item, index }) => {
+-                      const name = (item as any)?.name ?? "Venue";
+-                      const icon =
+-                        index === 0 ? "wine-outline" : index === 1 ? "triangle-outline" : "business-outline";
+-
+-                      return (
+-                        <Pressable onPress={() => openVenue(name)} style={styles.venueItem}>
+-                          <LinearGradient
+-                            colors={
+-                              index === 0
+-                                ? ["rgba(60,120,255,0.50)", "rgba(40,60,130,0.45)"]
+-                                : index === 1
+-                                ? ["rgba(80,220,210,0.40)", "rgba(50,120,140,0.40)"]
+-                                : ["rgba(170,120,255,0.45)", "rgba(90,60,170,0.40)"]
+-                            }
+-                            style={styles.venueOrb}
+-                          >
+-                            <Ionicons name={icon as any} size={22} color="rgba(255,255,255,0.90)" />
+-                          </LinearGradient>
+-
+-                          <Text numberOfLines={1} style={styles.venueName}>
+-                            {name}
+-                          </Text>
+-                        </Pressable>
+-                      );
+-                    }}
+-                  />
+-                </>
+-              )}
+-
+-              {/* Featured header row (UNCHANGED UI) */}
+-              {featured && (
+-                <Pressable onPress={() => router.replace("/(tabs)/events")} style={styles.featureHeader}>
+-                  <Text style={styles.featureHeaderLeft}>Featured:</Text>
+-                  <Text numberOfLines={1} style={styles.featureHeaderRight}>
+-                    {featured.title}
+-                  </Text>
+-                  <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.65)" />
+-                </Pressable>
+-              )}
+-
+-              {/* Featured vertical menu (UNCHANGED) */}
+-              <View style={styles.featureMenuWrap}>
+-                <FlatList
+-                  data={featuredEvents}
+-                  keyExtractor={(item) => item.id}
+-                  showsVerticalScrollIndicator={false}
+-                  scrollEnabled={true}
+-                  nestedScrollEnabled={true}
+-                  contentContainerStyle={styles.featureMenuContent}
+-                  renderItem={({ item }) => {
+-                    const venue = getVenueNameFromEvent(item, venues);
+-
+-                    return (
+-                      <Pressable onPress={() => openEvent(item.id)} style={styles.cardOuter}>
+-                        <ImageBackground
+-                          source={require("../../assets/backgrounds/home-bg.jpg")}
+-                          resizeMode="cover"
+-                          style={styles.featureCard}
+-                          imageStyle={styles.featureImageStyle}
+-                        >
+-                          <LinearGradient
+-                            colors={["rgba(0,0,0,0.15)", "rgba(0,0,0,0.70)"]}
+-                            style={StyleSheet.absoluteFill}
+-                          />
+-
+-                          <View style={styles.featureBottomRow}>
+-                            <View style={{ flex: 1, paddingRight: 10 }}>
+-                              <Text numberOfLines={1} style={styles.featureTitle}>
+-                                {item.title}
+-                              </Text>
+-                              <Text numberOfLines={1} style={styles.featureSub}>
+-                                {venue}
+-                              </Text>
+-                            </View>
+-
+-                            <View style={styles.badge}>
+-                              <Text style={styles.badgeText}>FEATURED</Text>
+-                            </View>
+-                          </View>
+-                        </ImageBackground>
+-                      </Pressable>
+-                    );
+-                  }}
++            )}
++
++            {/* Featured — rendered TWICE, exactly as the reference does. */}
++            {featured && (
++              <>
++                <Section
++                  title="Featured:"
++                  subtitle={featured.title}
++                  onPress={() => router.replace("/(tabs)/events")}
+                 />
+-              </View>
+-            </>
+-          )}
+-
+-          {/* bottom breathing room so it “moves” like the mock */}
+-          <View style={{ height: 26 }} />
+-        </ScrollView>
+-      </SafeAreaView>
+-    </ImageBackground>
++                <ScrollView
++                  horizontal
++                  showsHorizontalScrollIndicator={false}
++                  contentContainerStyle={{ gap: 12, paddingBottom: 10 }}
++                >
++                  {visibleVenues.slice(0, 3).map((v, i) => (
++                    <TouchableOpacity
++                      key={v.id}
++                      onPress={() => openVenue(v.name)}
++                      style={refStyles.venueItem}
++                    >
++                      <LinearGradient
++                        colors={
++                          i === 1 ? ["#5a47a4", "#151026"] : ["#24364b", "#100d22"]
++                        }
++                        style={refStyles.venueIcon}
++                      >
++                        <Ionicons
++                          name={VENUE_ICONS[i % VENUE_ICONS.length]}
++                          size={31}
++                          color="#eee8ff"
++                        />
++                      </LinearGradient>
++                      <Text style={refStyles.venueName} numberOfLines={2}>
++                        {v.name}
++                      </Text>
++                    </TouchableOpacity>
++                  ))}
++                </ScrollView>
++                <Section
++                  title="Featured:"
++                  subtitle={featured.title}
++                  onPress={() => router.replace("/(tabs)/events")}
++                />
++              </>
++            )}
++          </>
++        )}
++      </ScrollView>
++      <View style={{ backgroundColor: "#161120", paddingBottom: insets.bottom }}>
++        <BottomNav active="Home" onNavigate={go} />
++      </View>
++    </View>
+   );
+ }
+ 
+ const styles = StyleSheet.create({
+-  bg: { flex: 1 },
+-  safe: { flex: 1 },
+-
+-  content: {
+-    paddingTop: Platform.select({ ios: 6, android: 12 }),
+-    paddingHorizontal: 18,
+-    paddingBottom: 28,
+-  },
+-
+-  // Search (dark glass)
+-  searchWrap: {
+-    height: 52,
+-    borderRadius: 22,
+-    paddingHorizontal: 16,
+-    flexDirection: "row",
+-    alignItems: "center",
+-    gap: 10,
+-    backgroundColor: "rgba(255,255,255,0.10)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.10)",
+-    marginBottom: 12,
+-  },
+-  searchInput: {
+-    flex: 1,
+-    fontSize: 16,
+-    color: "rgba(255,255,255,0.92)",
+-  },
+-
+-  // "See all results in Events" row (only while searching)
+   seeResultsRow: {
+     flexDirection: "row",
+     alignItems: "center",
+@@ -408,7 +265,6 @@ const styles = StyleSheet.create({
+     fontWeight: "800",
+     fontSize: 14,
+   },
+-
+   emptyText: {
+     marginTop: 24,
+     color: "rgba(255,255,255,0.75)",
+@@ -416,196 +272,11 @@ const styles = StyleSheet.create({
+     fontWeight: "700",
+     textAlign: "center",
+   },
+-
+-  // Tabs group (single pill container like the mock)
+-  tabsPill: {
+-    height: 44,
+-    borderRadius: 22,
+-    backgroundColor: "rgba(255,255,255,0.10)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.10)",
+-    flexDirection: "row",
+-    padding: 4,
+-    marginBottom: 16,
+-  },
+-  tabBtn: {
+-    flex: 1,
+-    borderRadius: 18,
+-    alignItems: "center",
+-    justifyContent: "center",
+-  },
+-  tabBtnActive: {
+-    backgroundColor: "rgba(255,255,255,0.16)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.10)",
+-  },
+-  tabText: {
+-    color: "rgba(255,255,255,0.70)",
+-    fontWeight: "800",
+-    fontSize: 14,
+-  },
+-  tabTextActive: {
+-    color: "rgba(255,255,255,0.95)",
+-  },
+-
+-  // Cards
+-  cardOuter: {
+-    borderRadius: 22,
+-    overflow: "hidden",
+-    backgroundColor: "rgba(255,255,255,0.06)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.10)",
+-  },
+-
+-  // Spotlight vertical list (stacked full-width cards, like the mock)
+-  spotlightListWrap: {
+-    gap: 14,
+-  },
+-  spotlightCardOuter: {
+-    width: "100%",
+-  },
+-
+-  heroCard: {
+-    height: 190,
+-    borderRadius: 22,
+-    overflow: "hidden",
+-    justifyContent: "flex-end",
+-  },
+-  heroImageStyle: {
+-    borderRadius: 22,
+-  },
+-  heroTextWrap: {
+-    padding: 16,
+-  },
+-  heroTitle: {
+-    color: "rgba(255,255,255,0.95)",
+-    fontSize: 28,
+-    fontWeight: "900",
+-    lineHeight: 30,
+-  },
+-  heroSub: {
+-    marginTop: 8,
+-    color: "rgba(255,255,255,0.78)",
+-    fontSize: 14,
++  orbsLabel: {
++    color: "#fff",
++    fontSize: 21,
+     fontWeight: "700",
+-  },
+-  heroMetaRow: {
+-    marginTop: 10,
+-    flexDirection: "row",
+-    alignItems: "center",
+-    gap: 8,
+-  },
+-  heroStar: {
+-    color: "rgba(255,215,140,0.95)",
+-    fontSize: 16,
+-    marginTop: -1,
+-  },
+-  heroMeta: {
+-    color: "rgba(255,255,255,0.90)",
+-    fontWeight: "900",
+-    fontSize: 15,
+-  },
+-
+-  sectionLabel: {
+-    marginTop: 16,
++    marginTop: 12,
+     marginBottom: 10,
+-    color: "rgba(255,255,255,0.88)",
+-    fontSize: 18,
+-    fontWeight: "900",
+-  },
+-
+-  venuesRow: {
+-    paddingBottom: 12,
+-    gap: 18,
+-  },
+-  venueItem: {
+-    width: 110,
+-    alignItems: "center",
+-  },
+-  venueOrb: {
+-    width: 84,
+-    height: 58,
+-    borderRadius: 29,
+-    alignItems: "center",
+-    justifyContent: "center",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.14)",
+-  },
+-  venueName: {
+-    marginTop: 10,
+-    color: "rgba(255,255,255,0.75)",
+-    fontWeight: "800",
+-    fontSize: 13,
+-    textAlign: "center",
+-  },
+-
+-  featureHeader: {
+-    marginTop: 4,
+-    marginBottom: 12,
+-    flexDirection: "row",
+-    alignItems: "center",
+-    gap: 10,
+-    paddingVertical: 10,
+-    borderTopWidth: 1,
+-    borderTopColor: "rgba(255,255,255,0.10)",
+-  },
+-  featureHeaderLeft: {
+-    color: "rgba(255,255,255,0.90)",
+-    fontWeight: "900",
+-    fontSize: 18,
+-  },
+-  featureHeaderRight: {
+-    flex: 1,
+-    color: "rgba(255,255,255,0.70)",
+-    fontWeight: "800",
+-    fontSize: 16,
+-  },
+-
+-  // Vertical menu container
+-  featureMenuWrap: {
+-    height: 340,
+-  },
+-  featureMenuContent: {
+-    gap: 12,
+-    paddingBottom: 6,
+-  },
+-
+-  featureCard: {
+-    height: 155,
+-    borderRadius: 22,
+-    overflow: "hidden",
+-    justifyContent: "flex-end",
+-  },
+-  featureImageStyle: {
+-    borderRadius: 22,
+-  },
+-  featureBottomRow: {
+-    padding: 14,
+-    flexDirection: "row",
+-    alignItems: "center",
+-  },
+-  featureTitle: {
+-    color: "rgba(255,255,255,0.92)",
+-    fontWeight: "900",
+-    fontSize: 20,
+-  },
+-  featureSub: {
+-    marginTop: 4,
+-    color: "rgba(255,255,255,0.72)",
+-    fontWeight: "700",
+-    fontSize: 13,
+-  },
+-
+-  badge: {
+-    backgroundColor: "rgba(255,255,255,0.88)",
+-    paddingHorizontal: 12,
+-    paddingVertical: 7,
+-    borderRadius: 14,
+-  },
+-  badgeText: {
+-    color: "rgba(0,0,0,0.85)",
+-    fontWeight: "900",
+-    fontSize: 12,
+-    letterSpacing: 0.4,
+   },
+ });
+diff --git a/bownd/app/(tabs)/personal.tsx b/bownd/app/(tabs)/personal.tsx
+index b02182b..48c76b6 100644
+--- a/bownd/app/(tabs)/personal.tsx
++++ b/bownd/app/(tabs)/personal.tsx
+@@ -1,36 +1,33 @@
+ // app/(tabs)/personal.tsx
+-// Phase 6 fix notes (see FIX-PLAN.md):
+-// - REMOVED demoAdventures: guests no longer see 3 fake adventures
+-//   ("Jazz + Dessert Hop", "Downtown Lights", "Family Fun Run") presented
+-//   as "Recent Adventures". Guests see a sign-in prompt; signed-in users
+-//   see real redemption history (or an honest empty state).
+-// - Favorite venue tiles navigate to /(tabs)/events filtered to that
+-//   venue. Favorite event tiles navigate to /detail. Previously both
+-//   had onPress={() => {}} (dead).
+-// - Adventure rows are redemption-history records, not navigable
+-//   content: they are now plain rows (no onPress, no chevron) instead
+-//   of dead pressables with a misleading chevron.
+-// - Change Persona points at the canonical /(tabs)/persona route
+-//   (the root /persona duplicate is deleted in Phase 6).
+-// - Rewards "Redeem" button relabeled "Show QR": it scrolls to the QR
+-//   section; it never redeemed anything, and the old label implied it
+-//   did. Visual design is otherwise UNCHANGED.
+-import React, { useCallback, useMemo, useRef, useState } from "react";
++// Reference visuals (App.tsx) + real backend wiring (lib/store.ts).
++// - NO search input, NO top segmented tabs, NO TopTabs: the reference
++//   Personal screen is "Personal" title + gear, hero, then the light panel.
++// - Hero: App.tsx elements ONLY + a small Sign in / Sign out button
++//   under next-tier. Tier lives in the Rewards card, gear covers persona.
++// - Points are REAL (profile?.points ?? 0). QR tokens come from
++//   generateQrToken() (server-verified) — never client-generated.
++// - Adventures are REAL redemption history for signed-in users; guests
++//   see a sign-in prompt, never demo adventures.
++// - Unconfigured-backend messaging is PRESERVED exactly as the base
++//   screen surfaced it: generateQrToken() throws a "Backend is not
++//   configured..." error surfaced via the catch Alert, and redeemCode()
++//   returns BACKEND_UNCONFIGURED mapped to "Backend is not configured
++//   yet." No Firebase values appear anywhere in this file.
++import React, { useCallback, useMemo, useState } from "react";
+ import {
+   View,
+   Text,
+   StyleSheet,
+-  SafeAreaView,
+-  Pressable,
+   ScrollView,
+-  FlatList,
+-  Dimensions,
++  StatusBar,
++  TouchableOpacity,
+   TextInput,
+   Alert,
+ } from "react-native";
+ import { LinearGradient } from "expo-linear-gradient";
+ import { Ionicons } from "@expo/vector-icons";
+ import { useRouter, useFocusEffect } from "expo-router";
++import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+ import QRCode from "react-native-qrcode-svg";
+ 
+ import { useAuth } from "../../lib/auth";
+@@ -44,47 +41,29 @@ import {
+   type FavoriteItem,
+   type RedemptionHistoryItem,
+ } from "../../lib/store";
++import { BottomNav, refStyles } from "../ui/reference";
+ 
+-const { width: SCREEN_W } = Dimensions.get("window");
+-
+-type FavoriteVenue = { id: string; name: string; neighborhood?: string; badge?: string };
+-type FavoriteEvent = { id: string; title: string; venue: string; when: string; badge?: string };
+-type Adventure = { id: string; title: string; subtitle: string; dateLabel: string };
++type PanelTab = "All" | "QR" | "Rewards" | "Venue";
+ 
+ export default function PersonalScreen() {
+   const router = useRouter();
+-  const scrollRef = useRef<ScrollView>(null);
++  const insets = useSafeAreaInsets();
+   const { user, profile, signOut, refreshProfile } = useAuth();
+ 
+-  // ✅ Top search + pills
+-  const [searchText, setSearchText] = useState("");
+-  // NOTE:
+-  // - "events" pill now routes to Events page
+-  // - "favs" pill does what the old "events" pill did (opens Favorite Events section)
+-  const [activePill, setActivePill] = useState<"all" | "home" | "qr" | "rewards" | "venues" | "favs" | "adventures">(
+-    "all"
+-  );
+-
+-  // collapsible sections
+-  const [rewardsOpen, setRewardsOpen] = useState(true);
+-  const [venuesOpen, setVenuesOpen] = useState(true);
+-  const [eventsOpen, setEventsOpen] = useState(true);
+-  const [adventuresOpen, setAdventuresOpen] = useState(true);
+-  const [qrOpen, setQrOpen] = useState(true);
++  const [panel, setPanel] = useState<PanelTab>("All");
+ 
+   // Rewards — real points from the signed-in profile (0 for guests).
+   const points = profile?.points ?? 0;
+-  const nextTierAt = TIER_VIP_AT;
+-  const progress = Math.min(1, points / nextTierAt);
++  const progress = Math.min(1, points / TIER_VIP_AT);
+   const tier = tierFor(points);
+ 
+-  // QR — verifiable Firestore token (generated on demand).
++  // QR — verifiable token (generated on demand).
+   const [generatedCode, setGeneratedCode] = useState<string>("");
+   const [qrValue, setQrValue] = useState<string>("");
+   const [qrBusy, setQrBusy] = useState(false);
+   const [redeemInput, setRedeemInput] = useState<string>("");
+ 
+-  // Favorites + redemption history (Firestore when signed in, local otherwise).
++  // Favorites + redemption history (real backend when signed in).
+   const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
+   const [history, setHistory] = useState<RedemptionHistoryItem[]>([]);
+ 
+@@ -107,36 +86,19 @@ export default function PersonalScreen() {
+     }, [loadBackend])
+   );
+ 
+-  const favoriteVenues: FavoriteVenue[] = useMemo(
+-    () =>
+-      favorites
+-        .filter((f) => f.kind === "venue")
+-        .map((f) => ({
+-          id: f.id,
+-          name: f.title,
+-          neighborhood: f.subtitle,
+-          badge: f.badge,
+-        })),
++  const favoriteVenues = useMemo(
++    () => favorites.filter((f) => f.kind === "venue"),
+     [favorites]
+   );
+ 
+-  const favoriteEvents: FavoriteEvent[] = useMemo(
+-    () =>
+-      favorites
+-        .filter((f) => f.kind === "event")
+-        .map((f) => ({
+-          id: f.id,
+-          title: f.title,
+-          venue: f.subtitle,
+-          when: f.when ?? "",
+-          badge: f.badge,
+-        })),
++  const favoriteEvents = useMemo(
++    () => favorites.filter((f) => f.kind === "event"),
+     [favorites]
+   );
+ 
+   // Adventures = REAL redemption history for signed-in users.
+   // Guests see no adventures (never fake demo adventures).
+-  const recentAdventures: Adventure[] = useMemo(
++  const recentAdventures = useMemo(
+     () =>
+       user
+         ? history.map((h) => ({
+@@ -149,33 +111,6 @@ export default function PersonalScreen() {
+     [user, history]
+   );
+ 
+-  // ✅ Search filtering (no UI changes, only filters data)
+-  const q = searchText.trim().toLowerCase();
+-
+-  const filteredVenues = useMemo(() => {
+-    if (!q) return favoriteVenues;
+-    return favoriteVenues.filter((v) => {
+-      const s = `${v.name} ${v.neighborhood ?? ""} ${v.badge ?? ""}`.toLowerCase();
+-      return s.includes(q);
+-    });
+-  }, [favoriteVenues, q]);
+-
+-  const filteredEvents = useMemo(() => {
+-    if (!q) return favoriteEvents;
+-    return favoriteEvents.filter((e) => {
+-      const s = `${e.title} ${e.venue} ${e.when} ${e.badge ?? ""}`.toLowerCase();
+-      return s.includes(q);
+-    });
+-  }, [favoriteEvents, q]);
+-
+-  const filteredAdventures = useMemo(() => {
+-    if (!q) return recentAdventures;
+-    return recentAdventures.filter((a) => {
+-      const s = `${a.title} ${a.subtitle} ${a.dateLabel}`.toLowerCase();
+-      return s.includes(q);
+-    });
+-  }, [recentAdventures, q]);
+-
+   async function onGenerateQr() {
+     if (!user) {
+       Alert.alert("Sign in required", "Sign in to generate a verifiable QR token.", [
+@@ -191,6 +126,8 @@ export default function PersonalScreen() {
+       setGeneratedCode(token);
+       setQrValue(value);
+     } catch (e: any) {
++      // Preserved: when the backend is unconfigured, generateQrToken()
++      // throws its "Backend is not configured..." message, surfaced here.
+       Alert.alert("Could not generate code", e?.message ?? "Try again.");
+     } finally {
+       setQrBusy(false);
+@@ -232,632 +169,345 @@ export default function PersonalScreen() {
+     router.push("/scan");
+   }
+ 
+-  // ✅ Pills behavior
+-  function applyPill(next: typeof activePill) {
+-    // Home pill routes home (personal page only logic)
+-    if (next === "home") {
+-      router.replace("/(tabs)");
+-      return;
+-    }
+-
+-    // Events pill routes to Events page
+-    if (next === "events" as any) {
+-      // (kept for safety if someone passes "events" manually)
+-      router.replace("/(tabs)/events");
+-      return;
+-    }
+-
+-    setActivePill(next);
+-
+-    if (next === "all") {
+-      setQrOpen(true);
+-      setRewardsOpen(true);
+-      setVenuesOpen(true);
+-      setEventsOpen(true);
+-      setAdventuresOpen(true);
+-    } else {
+-      setQrOpen(next === "qr");
+-      setRewardsOpen(next === "rewards");
+-      setVenuesOpen(next === "venues");
+-      setEventsOpen(next === "favs"); // ✅ "Favs" controls Favorite Events section
+-      setAdventuresOpen(next === "adventures");
+-    }
+-
+-    requestAnimationFrame(() => {
+-      scrollRef.current?.scrollTo({ y: 0, animated: true });
+-    });
++  function go(route: string) {
++    router.replace(route);
+   }
+ 
+-  // ✅ route handler for Events pill (keeps pill row clean)
+-  function goToEvents() {
+-    router.replace("/(tabs)/events");
+-  }
++  const showQr = panel === "All" || panel === "QR";
++  const showRewards = panel === "All" || panel === "Rewards";
++  const showVenue = panel === "All" || panel === "Venue";
+ 
+   return (
+-    <View style={styles.root}>
+-      {/* Hero */}
+-      <LinearGradient
+-        colors={["#6A35FF", "#B46CFF", "#FFD57A"]}
+-        start={{ x: 0.1, y: 0.0 }}
+-        end={{ x: 0.9, y: 1.0 }}
+-        style={styles.hero}
+-      >
+-        <SafeAreaView style={styles.safe}>
+-          <View style={styles.headerRow}>
+-            <View>
+-              <Text style={styles.heroTitle}>Personal</Text>
+-              <Text style={styles.heroSubtitle}>Rewards • Favorites • Adventures</Text>
++    <View style={refStyles.root}>
++      <SafeAreaView style={{ flex: 1 }} edges={["top"]}>
++        <ScrollView
++          showsVerticalScrollIndicator={false}
++          keyboardShouldPersistTaps="handled"
++          contentContainerStyle={{ paddingBottom: 70 + insets.bottom + 16 }}
++        >
++          <StatusBar barStyle="light-content" backgroundColor="#1d1642" />
++          {/* Hero — App.tsx elements + sign in/out under next-tier */}
++          <LinearGradient
++            colors={["#1d1642", "#6a45b8", "#cc8d9f", "#18112c"]}
++            locations={[0, 0.32, 0.72, 1]}
++            style={refStyles.personalHero}
++          >
++            <View style={refStyles.personalHead}>
++              <Text style={refStyles.personalTitle}>Personal</Text>
++              <TouchableOpacity onPress={() => router.push("/(tabs)/persona")} hitSlop={8}>
++                <Ionicons name="settings-outline" color="white" size={22} />
++              </TouchableOpacity>
+             </View>
+-
+-            <Pressable style={styles.changePersonaBtn} onPress={() => router.push("/(tabs)/persona")}>
+-              <Ionicons name="sparkles-outline" size={16} color="#fff" />
+-              <Text style={styles.changePersonaText}>Change Persona</Text>
+-            </Pressable>
+-          </View>
+-
+-          <View style={styles.illustrationWrap}>
+-            <View style={styles.orb} />
+-            <View style={styles.avatarRing}>
+-              <View style={styles.avatarInner}>
+-                <Ionicons name="person" size={42} color="#FFFFFF" />
++            <Text style={refStyles.personalSub}>Rewards · Favorites · Adventures</Text>
++            <View style={refStyles.avatarRing}>
++              <View style={refStyles.avatar}>
++                <Ionicons name="person" size={68} color="#eeeaf3" />
+               </View>
+             </View>
+-
+-            <Text style={styles.heroBigStat}>{points} pts</Text>
+-            <Text style={styles.heroSmallStat}>Next tier at {nextTierAt}</Text>
++            <Text style={refStyles.points}>{points} pts</Text>
++            <Text style={refStyles.nextTier}>Next tier at {TIER_VIP_AT}</Text>
+             {user ? (
+-              <Pressable onPress={() => signOut()} style={{ marginTop: 8, padding: 6 }}>
+-                <Text style={{ color: "rgba(255,255,255,0.9)", fontWeight: "800", fontSize: 12 }}>
+-                  Sign out
+-                </Text>
+-              </Pressable>
++              <TouchableOpacity onPress={() => signOut()} style={styles.authBtn}>
++                <Text style={styles.authBtnText}>Sign out</Text>
++              </TouchableOpacity>
+             ) : (
+-              <Pressable onPress={() => router.push("/(auth)/login")} style={{ marginTop: 8, padding: 6 }}>
+-                <Text style={{ color: "rgba(255,255,255,0.9)", fontWeight: "800", fontSize: 12 }}>
+-                  Sign in to save rewards →
+-                </Text>
+-              </Pressable>
++              <TouchableOpacity onPress={() => router.push("/(auth)/login")} style={styles.authBtn}>
++                <Text style={styles.authBtnText}>Sign in</Text>
++              </TouchableOpacity>
+             )}
+-          </View>
+-        </SafeAreaView>
+-      </LinearGradient>
+-
+-      {/* White sheet */}
+-      <View style={styles.sheet}>
+-        <ScrollView ref={scrollRef} contentContainerStyle={styles.sheetContent} showsVerticalScrollIndicator={false}>
+-          {/* ✅ Top Search Bar + Pills */}
+-          <View style={styles.topToolsWrap}>
+-            <View style={styles.searchWrap}>
+-              <Ionicons name="search-outline" size={18} color="#6F6F6F" />
+-              <TextInput
+-                value={searchText}
+-                onChangeText={setSearchText}
+-                placeholder="Search rewards, venues, events..."
+-                placeholderTextColor="#9A9A9A"
+-                style={styles.searchInput}
+-                returnKeyType="search"
+-                clearButtonMode="while-editing"
+-              />
+-              {!!searchText && (
+-                <Pressable onPress={() => setSearchText("")} hitSlop={10} style={styles.clearBtn}>
+-                  <Ionicons name="close-circle" size={18} color="#9A9A9A" />
+-                </Pressable>
+-              )}
+-            </View>
+-
+-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillsRow}>
+-              <Pill label="Home" active={activePill === "home"} onPress={() => applyPill("home")} />
+-
+-{/* 👇 swapped */}
+-<Pill label="Events" active={false} onPress={goToEvents} />
+-<Pill label="All" active={activePill === "all"} onPress={() => applyPill("all")} />
+-
+-<Pill label="QR" active={activePill === "qr"} onPress={() => applyPill("qr")} />
+-<Pill label="Rewards" active={activePill === "rewards"} onPress={() => applyPill("rewards")} />
+-<Pill label="Venues" active={activePill === "venues"} onPress={() => applyPill("venues")} />
+-<Pill label="Favs" active={activePill === "favs"} onPress={() => applyPill("favs")} />
+-<Pill label="Adventures" active={activePill === "adventures"} onPress={() => applyPill("adventures")} />
+-
+-            </ScrollView>
+-          </View>
+-
+-          {/* QR */}
+-          <SectionHeader title="QR Codes" open={qrOpen} onPress={() => setQrOpen((s) => !s)} />
+-          {qrOpen && (
+-            <View style={styles.qrCard}>
+-              <Text style={styles.qrHint}>Generate a code to show a venue, or redeem a code from a venue.</Text>
+-
+-              {/* Generator */}
+-              <View style={styles.qrBlock}>
+-                <View style={styles.qrTopRow}>
+-                  <Text style={styles.qrBlockTitle}>Your QR Token</Text>
+-                  <Pressable style={styles.smallBtn} onPress={onGenerateQr}>
+-                    <Ionicons name="refresh-outline" size={16} color="#fff" />
+-                    <Text style={styles.smallBtnText}>New</Text>
+-                  </Pressable>
+-                </View>
+-
+-                <View style={styles.qrToken}>
+-                  <Text style={styles.qrTokenText} numberOfLines={1}>
+-                    {generatedCode || "—"}
++          </LinearGradient>
++
++          {/* Light panel */}
++          <View style={refStyles.lightPanel}>
++            <View style={refStyles.panelTabs}>
++              {(["All", "QR", "Rewards", "Venue"] as PanelTab[]).map((p) => (
++                <TouchableOpacity
++                  key={p}
++                  onPress={() => setPanel(p)}
++                  style={[refStyles.panelTab, panel === p && refStyles.panelTabSelected]}
++                >
++                  <Text style={[refStyles.panelTabText, panel === p && { color: "white" }]}>
++                    {p}
+                   </Text>
+-                </View>
+-
+-                <View style={styles.qrFake}>
+-                  {qrValue ? (
+-                    <View style={styles.qrBox}>
+-                      <QRCode value={qrValue} size={160} />
+-                    </View>
+-                  ) : (
+-                    <>
+-                      <Ionicons name="qr-code-outline" size={80} color="rgba(0,0,0,0.55)" />
+-                      <Text style={styles.qrFakeText}>
+-                        {user ? "Tap New to generate your code" : "Sign in to generate a code"}
+-                      </Text>
+-                    </>
+-                  )}
+-                </View>
+-              </View>
+-
+-              {/* Redeemer */}
+-              <View style={styles.qrBlock}>
+-                <Text style={styles.qrBlockTitle}>Redeem a Code</Text>
+-                <View style={styles.redeemRow}>
+-                  <TextInput
+-                    value={redeemInput}
+-                    onChangeText={setRedeemInput}
+-                    placeholder="Paste or type code"
+-                    placeholderTextColor="#9A9A9A"
+-                    style={styles.redeemInput}
+-                    autoCapitalize="characters"
+-                  />
+-                  <Pressable style={styles.redeemBtn} onPress={onRedeem}>
+-                    <Text style={styles.redeemBtnText}>Redeem</Text>
+-                  </Pressable>
+-                </View>
+-
+-                <Pressable style={styles.scanBtn} onPress={onOpenScanner}>
+-                  <Ionicons name="scan-outline" size={18} color="#fff" />
+-                  <Text style={styles.scanBtnText}>Open Camera Scanner</Text>
+-                </Pressable>
+-              </View>
+-            </View>
+-          )}
+-
+-          {/* Rewards */}
+-          <SectionHeader title="Rewards" open={rewardsOpen} onPress={() => setRewardsOpen((s) => !s)} />
+-          {rewardsOpen && (
+-            <View style={styles.rewardsCard}>
+-              <View style={styles.rewardsTopRow}>
+-                <View>
+-                  <Text style={styles.rewardsPoints}>{points} points</Text>
+-                  <Text style={styles.rewardsHint}>Earn points by redeeming offers + going on adventures.</Text>
+-                </View>
+-
+-                {/* Scrolls to the QR section. Label says what it does —
+-                    the old "Redeem" label implied it redeemed something. */}
+-                <Pressable style={styles.claimBtn} onPress={() => applyPill("qr")}>
+-                  <Text style={styles.claimBtnText}>Show QR</Text>
+-                </Pressable>
+-              </View>
+-
+-              <View style={styles.progressTrack}>
+-                <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+-              </View>
+-
+-              <View style={styles.rewardsMetaRow}>
+-                <Text style={styles.metaText}>Current: {tier}</Text>
+-                <Text style={styles.metaText}>Next: {tier === "VIP" ? "Max" : "VIP"}</Text>
+-              </View>
++                </TouchableOpacity>
++              ))}
+             </View>
+-          )}
+ 
+-          {/* Favorite Venues */}
+-          <SectionHeader title="Favorite Venues" open={venuesOpen} onPress={() => setVenuesOpen((s) => !s)} />
+-          {venuesOpen && (
+-            <FlatList
+-              data={filteredVenues}
+-              keyExtractor={(item) => item.id}
+-              horizontal
+-              showsHorizontalScrollIndicator={false}
+-              contentContainerStyle={styles.hListPad}
+-              renderItem={({ item }) => (
+-                <Pressable
+-                  style={styles.tile}
+-                  onPress={() => router.push({ pathname: "/(tabs)/events", params: { venue: item.name } })}
+-                >
+-                  <LinearGradient
+-                    colors={["#A56CFF", "#6A35FF", "#2D6BFF"]}
+-                    start={{ x: 0.0, y: 0.0 }}
+-                    end={{ x: 1.0, y: 1.0 }}
+-                    style={styles.tileBg}
+-                  >
+-                    <Text style={styles.tileBadge}>{item.badge ?? "Favorite"}</Text>
+-                    <Text style={styles.tileTitle} numberOfLines={2}>
+-                      {item.name}
+-                    </Text>
+-                    <Text style={styles.tileSub} numberOfLines={1}>
+-                      {item.neighborhood ?? "Kansas City"}
++            {/* QR section */}
++            {showQr && (
++              <>
++                <TouchableOpacity onPress={() => setPanel("QR")} style={refStyles.qrHeader}>
++                  <Text style={refStyles.darkHeading}>QR Codes</Text>
++                  <Ionicons name="chevron-forward" color="#615e69" size={22} />
++                </TouchableOpacity>
++                <View style={refStyles.tokenCard}>
++                  <View style={refStyles.tokenRow}>
++                    <Text style={refStyles.tokenTitle}>Your QR Token</Text>
++                    <TouchableOpacity onPress={onGenerateQr} style={refStyles.newButton}>
++                      <Ionicons name="refresh" color="white" size={18} />
++                      <Text style={{ color: "white", fontWeight: "700" }}>New</Text>
++                    </TouchableOpacity>
++                  </View>
++                  <View style={refStyles.tokenBox}>
++                    <Text numberOfLines={1} style={refStyles.tokenText}>
++                      {generatedCode || "—"}
+                     </Text>
+-                  </LinearGradient>
+-                </Pressable>
+-              )}
+-            />
+-          )}
++                  </View>
++                  <View style={refStyles.qrBox}>
++                    {qrValue ? (
++                      <QRCode value={qrValue} size={160} color="#393743" backgroundColor="#e9e6ef" />
++                    ) : (
++                      <>
++                        <Ionicons name="qr-code-outline" size={80} color="rgba(0,0,0,0.55)" />
++                        <Text style={styles.qrPlaceholderText}>
++                          {user ? "Tap New to generate your code" : "Sign in to generate a code"}
++                        </Text>
++                      </>
++                    )}
++                  </View>
++                  <Text style={refStyles.redeemHeading}>Redeem a Code</Text>
++                  <View style={refStyles.redeemRow}>
++                    <TextInput
++                      value={redeemInput}
++                      onChangeText={setRedeemInput}
++                      placeholder="Paste or type code"
++                      placeholderTextColor="#88848f"
++                      style={refStyles.redeemInput}
++                      autoCapitalize="characters"
++                    />
++                    <TouchableOpacity onPress={onRedeem} style={refStyles.redeemButton}>
++                      <Text style={{ color: "white", fontWeight: "700" }}>Redeem</Text>
++                    </TouchableOpacity>
++                  </View>
++                  <TouchableOpacity onPress={onOpenScanner} style={styles.scanBtn}>
++                    <Ionicons name="scan-outline" size={18} color="#fff" />
++                    <Text style={styles.scanBtnText}>Open Camera Scanner</Text>
++                  </TouchableOpacity>
++                </View>
++              </>
++            )}
+ 
+-          {/* Favorite Events */}
+-          <SectionHeader title="Favorite Events" open={eventsOpen} onPress={() => setEventsOpen((s) => !s)} />
+-          {eventsOpen && (
+-            <FlatList
+-              data={filteredEvents}
+-              keyExtractor={(item) => item.id}
+-              horizontal
+-              showsHorizontalScrollIndicator={false}
+-              contentContainerStyle={styles.hListPad}
+-              renderItem={({ item }) => (
+-                <Pressable
+-                  style={[styles.tile, { width: Math.min(240, SCREEN_W * 0.62) }]}
+-                  onPress={() => router.push({ pathname: "/detail", params: { id: item.id, kind: "event" } })}
+-                >
+-                  <LinearGradient
+-                    colors={["#FFD57A", "#B46CFF", "#6A35FF"]}
+-                    start={{ x: 0.0, y: 0.1 }}
+-                    end={{ x: 1.0, y: 1.0 }}
+-                    style={styles.tileBg}
+-                  >
+-                    <View style={styles.eventBadgeRow}>
+-                      <Text style={styles.tileBadge}>{item.badge ?? "Saved"}</Text>
++            {/* Rewards section */}
++            {showRewards && (
++              <>
++                <Text style={[refStyles.darkHeading, styles.sectionHeading]}>Rewards</Text>
++                <View style={refStyles.tokenCard}>
++                  <View style={styles.rewardsTopRow}>
++                    <View style={{ flex: 1 }}>
++                      <Text style={styles.rewardsPoints}>{points} points</Text>
++                      <Text style={styles.rewardsHint}>
++                        Earn points by redeeming offers + going on adventures.
++                      </Text>
+                     </View>
+-
+-                    <Text style={styles.tileTitle} numberOfLines={2}>
+-                      {item.title}
+-                    </Text>
+-
+-                    <Text style={styles.tileSub} numberOfLines={1}>
+-                      {item.venue}
+-                    </Text>
+-
+-                    <Text style={styles.eventWhen} numberOfLines={1}>
+-                      {item.when}
+-                    </Text>
+-                  </LinearGradient>
+-                </Pressable>
+-              )}
+-            />
+-          )}
+-
+-          {/* Recent Adventures — real redemption history only. */}
+-          <SectionHeader title="Recent Adventures" open={adventuresOpen} onPress={() => setAdventuresOpen((s) => !s)} />
+-          {adventuresOpen && (
+-            <View style={styles.listWrap}>
+-              {!user && (
+-                <Text style={{ fontSize: 13, color: "#6F6F6F", fontWeight: "800", padding: 4 }}>
+-                  Sign in to see your adventures.
+-                </Text>
+-              )}
+-              {user && filteredAdventures.length === 0 && (
+-                <Text style={{ fontSize: 13, color: "#6F6F6F", fontWeight: "800", padding: 4 }}>
+-                  No adventures yet — redeem an offer to start earning.
+-                </Text>
+-              )}
+-              {/* History records are display-only (not navigable content),
+-                  so rows are plain Views with no chevron — previously dead
+-                  pressables with a misleading chevron. */}
+-              {filteredAdventures.map((a) => (
+-                <View key={a.id} style={styles.rowCard}>
+-                  <View style={styles.rowLeft}>
+-                    <LinearGradient
+-                      colors={["#6A35FF", "#B46CFF", "#FFD57A"]}
+-                      start={{ x: 0, y: 0 }}
+-                      end={{ x: 1, y: 1 }}
+-                      style={styles.rowIcon}
+-                    >
+-                      <Ionicons name="sparkles" size={18} color="#FFFFFF" />
+-                    </LinearGradient>
++                    <TouchableOpacity onPress={() => setPanel("QR")} style={styles.showQrBtn}>
++                      <Text style={styles.showQrBtnText}>Show QR</Text>
++                    </TouchableOpacity>
+                   </View>
+-
+-                  <View style={styles.rowMid}>
+-                    <Text style={styles.rowTitle} numberOfLines={1}>
+-                      {a.title}
+-                    </Text>
+-                    <Text style={styles.rowSub} numberOfLines={1}>
+-                      {a.subtitle}
+-                    </Text>
+-                    <Text style={styles.rowMeta}>{a.dateLabel}</Text>
++                  <View style={styles.progressTrack}>
++                    <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
++                  </View>
++                  <View style={styles.rewardsMetaRow}>
++                    <Text style={styles.metaText}>Current: {tier}</Text>
++                    <Text style={styles.metaText}>Next: {tier === "VIP" ? "Max" : "VIP"}</Text>
+                   </View>
+                 </View>
+-              ))}
+-            </View>
+-          )}
++              </>
++            )}
++
++            {/* Venue section — favorite venues */}
++            {showVenue && (
++              <>
++                <Text style={[refStyles.darkHeading, styles.sectionHeading]}>Favorite Venues</Text>
++                {favoriteVenues.length === 0 ? (
++                  <Text style={refStyles.panelNote}>No favorite venues yet.</Text>
++                ) : (
++                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
++                    {favoriteVenues.map((item) => (
++                      <TouchableOpacity
++                        key={item.id}
++                        onPress={() =>
++                          router.push({ pathname: "/(tabs)/events", params: { venue: item.title } })
++                        }
++                        style={[styles.tile, { marginRight: 12 }]}
++                      >
++                        <Text style={styles.tileBadge}>{item.badge ?? "Favorite"}</Text>
++                        <Text style={styles.tileTitle} numberOfLines={2}>
++                          {item.title}
++                        </Text>
++                        <Text style={styles.tileSub} numberOfLines={1}>
++                          {item.subtitle || "Kansas City"}
++                        </Text>
++                      </TouchableOpacity>
++                    ))}
++                  </ScrollView>
++                )}
++              </>
++            )}
+ 
+-          <View style={{ height: 26 }} />
++            {/* All tab also shows: Favorite Events + Recent Adventures */}
++            {panel === "All" && (
++              <>
++                <Text style={[refStyles.darkHeading, styles.sectionHeading]}>Favorite Events</Text>
++                {favoriteEvents.length === 0 ? (
++                  <Text style={refStyles.panelNote}>No favorite events yet.</Text>
++                ) : (
++                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
++                    {favoriteEvents.map((item) => (
++                      <TouchableOpacity
++                        key={item.id}
++                        onPress={() =>
++                          router.push({ pathname: "/detail", params: { id: item.id, kind: "event" } })
++                        }
++                        style={[styles.tile, { marginRight: 12 }]}
++                      >
++                        <Text style={styles.tileBadge}>{item.badge ?? "Saved"}</Text>
++                        <Text style={styles.tileTitle} numberOfLines={2}>
++                          {item.title}
++                        </Text>
++                        <Text style={styles.tileSub} numberOfLines={1}>
++                          {item.subtitle}
++                        </Text>
++                        {!!item.when && (
++                          <Text style={styles.tileWhen} numberOfLines={1}>
++                            {item.when}
++                          </Text>
++                        )}
++                      </TouchableOpacity>
++                    ))}
++                  </ScrollView>
++                )}
++
++                <Text style={[refStyles.darkHeading, styles.sectionHeading]}>Recent Adventures</Text>
++                {!user && (
++                  <Text style={refStyles.panelNote}>Sign in to see your adventures.</Text>
++                )}
++                {user && recentAdventures.length === 0 && (
++                  <Text style={refStyles.panelNote}>
++                    No adventures yet — redeem an offer to start earning.
++                  </Text>
++                )}
++                {recentAdventures.map((a) => (
++                  <View key={a.id} style={styles.rowCard}>
++                    <View style={styles.rowIcon}>
++                      <Ionicons name="sparkles" size={18} color="#FFFFFF" />
++                    </View>
++                    <View style={{ flex: 1 }}>
++                      <Text style={styles.rowTitle} numberOfLines={1}>
++                        {a.title}
++                      </Text>
++                      <Text style={styles.rowSub} numberOfLines={1}>
++                        {a.subtitle}
++                      </Text>
++                      <Text style={styles.rowMeta}>{a.dateLabel}</Text>
++                    </View>
++                  </View>
++                ))}
++              </>
++            )}
++          </View>
+         </ScrollView>
++      </SafeAreaView>
++      <View style={{ backgroundColor: "#161120", paddingBottom: insets.bottom }}>
++        <BottomNav active="Personal" onNavigate={go} />
+       </View>
+     </View>
+   );
+ }
+ 
+-function SectionHeader({ title, open, onPress }: { title: string; open: boolean; onPress: () => void }) {
+-  return (
+-    <Pressable style={styles.sectionHeader} onPress={onPress}>
+-      <Text style={styles.sectionTitle}>{title}</Text>
+-      <Ionicons name={open ? "chevron-down" : "chevron-forward"} size={18} color="#9A9A9A" />
+-    </Pressable>
+-  );
+-}
+-
+-function Pill({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+-  return (
+-    <Pressable onPress={onPress} style={[styles.pill, active && styles.pillActive]}>
+-      <Text style={[styles.pillText, active && styles.pillTextActive]}>{label}</Text>
+-    </Pressable>
+-  );
+-}
+-
+ const styles = StyleSheet.create({
+-  root: { flex: 1, backgroundColor: "#0B0B12" },
+-
+-  hero: {
+-    height: 320,
+-    borderBottomLeftRadius: 28,
+-    borderBottomRightRadius: 28,
+-    overflow: "hidden",
+-  },
+-  safe: { flex: 1, paddingHorizontal: 18, paddingTop: 6 },
+-
+-  headerRow: {
+-    flexDirection: "row",
+-    alignItems: "flex-start",
+-    justifyContent: "space-between",
+-    paddingTop: 10,
+-    gap: 12,
+-  },
+-  heroTitle: { color: "#fff", fontSize: 30, fontWeight: "900" },
+-  heroSubtitle: { color: "rgba(255,255,255,0.88)", fontSize: 12, marginTop: 6, fontWeight: "700" },
+-
+-  changePersonaBtn: {
+-    flexDirection: "row",
+-    alignItems: "center",
+-    gap: 8,
+-    paddingHorizontal: 12,
+-    paddingVertical: 10,
+-    borderRadius: 14,
+-    backgroundColor: "rgba(255,255,255,0.18)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.22)",
+-    marginLeft: -39,
+-  },
+-  changePersonaText: { color: "#fff", fontWeight: "900", fontSize: 12 },
+-
+-  illustrationWrap: { flex: 1, alignItems: "center", justifyContent: "center", paddingBottom: 16 },
+-  orb: {
+-    position: "absolute",
+-    width: 240,
+-    height: 240,
+-    borderRadius: 120,
++  authBtn: {
++    marginTop: 10,
++    paddingVertical: 7,
++    paddingHorizontal: 16,
++    borderRadius: 12,
+     backgroundColor: "rgba(255,255,255,0.18)",
+-    transform: [{ translateY: 8 }],
+-  },
+-  avatarRing: {
+-    width: 98,
+-    height: 98,
+-    borderRadius: 49,
+-    backgroundColor: "rgba(255,255,255,0.25)",
+-    alignItems: "center",
+-    justifyContent: "center",
+-    marginBottom: 10,
+-  },
+-  avatarInner: {
+-    width: 82,
+-    height: 82,
+-    borderRadius: 41,
+-    backgroundColor: "rgba(30,30,45,0.35)",
+-    alignItems: "center",
+-    justifyContent: "center",
+     borderWidth: 1,
+     borderColor: "rgba(255,255,255,0.35)",
+   },
+-  heroBigStat: { color: "#fff", fontSize: 26, fontWeight: "900", marginTop: 4 },
+-  heroSmallStat: { color: "rgba(255,255,255,0.9)", fontSize: 12, marginTop: 4, fontWeight: "800" },
+-
+-  sheet: {
+-    flex: 1,
+-    marginTop: -34,
+-    backgroundColor: "#fff",
+-    borderTopLeftRadius: 26,
+-    borderTopRightRadius: 26,
+-    overflow: "hidden",
+-  },
+-  sheetContent: { paddingHorizontal: 18, paddingTop: 14 },
+-
+-  // top search + pills
+-  topToolsWrap: { gap: 10, marginBottom: 6 },
+-  searchWrap: {
+-    height: 46,
+-    borderRadius: 14,
+-    backgroundColor: "#F7F7FB",
+-    paddingHorizontal: 12,
+-    borderWidth: 1,
+-    borderColor: "rgba(0,0,0,0.06)",
+-    flexDirection: "row",
+-    alignItems: "center",
+-    gap: 10,
+-  },
+-  searchInput: { flex: 1, height: "100%", fontWeight: "800", color: "#1B1B1B" },
+-  clearBtn: { paddingLeft: 2 },
+-
+-  pillsRow: { paddingVertical: 2, gap: 10, paddingRight: 8 },
+-  pill: {
+-    height: 34,
+-    paddingHorizontal: 12,
+-    borderRadius: 999,
+-    backgroundColor: "#F7F7FB",
+-    borderWidth: 1,
+-    borderColor: "rgba(0,0,0,0.06)",
++  authBtnText: { color: "#fff", fontWeight: "700", fontSize: 13 },
++  qrPlaceholderText: { fontSize: 12, color: "#514a5a", fontWeight: "700", marginTop: 8 },
++  scanBtn: {
++    marginTop: 12,
++    height: 45,
++    borderRadius: 13,
++    backgroundColor: "#3654b5",
+     alignItems: "center",
+     justifyContent: "center",
++    flexDirection: "row",
++    gap: 8,
+   },
+-  pillActive: { backgroundColor: "#2D6BFF", borderColor: "rgba(45,107,255,0.25)" },
+-  pillText: { fontWeight: "900", fontSize: 12, color: "#1B1B1B" },
+-  pillTextActive: { color: "#fff" },
+-
+-  sectionHeader: {
+-    paddingVertical: 12,
++  scanBtnText: { color: "#fff", fontWeight: "700" },
++  sectionHeading: { paddingVertical: 14 },
++  rewardsTopRow: {
+     flexDirection: "row",
+-    alignItems: "center",
++    alignItems: "flex-start",
+     justifyContent: "space-between",
+-  },
+-  sectionTitle: { fontSize: 16, fontWeight: "900", color: "#1B1B1B" },
+-
+-  // QR
+-  qrCard: {
+-    backgroundColor: "#F7F7FB",
+-    borderRadius: 18,
+-    padding: 14,
+-    borderWidth: 1,
+-    borderColor: "rgba(0,0,0,0.06)",
+-    marginBottom: 8,
+     gap: 12,
+   },
+-  qrHint: { fontSize: 12, color: "#6F6F6F", fontWeight: "700", lineHeight: 16 },
+-  qrBlock: {
+-    backgroundColor: "#FFFFFF",
+-    borderRadius: 16,
+-    padding: 12,
+-    borderWidth: 1,
+-    borderColor: "rgba(0,0,0,0.06)",
+-  },
+-  qrTopRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+-  qrBlockTitle: { fontSize: 13, fontWeight: "900", color: "#1B1B1B" },
+-  smallBtn: {
+-    flexDirection: "row",
+-    alignItems: "center",
+-    gap: 6,
+-    backgroundColor: "#2D6BFF",
+-    paddingHorizontal: 10,
+-    paddingVertical: 8,
+-    borderRadius: 12,
+-  },
+-  smallBtnText: { color: "#fff", fontWeight: "900", fontSize: 12 },
+-
+-  qrToken: {
+-    marginTop: 10,
+-    borderRadius: 14,
+-    backgroundColor: "#F7F7FB",
+-    paddingVertical: 10,
+-    paddingHorizontal: 12,
+-  },
+-  qrTokenText: { fontWeight: "900", color: "#1B1B1B" },
+-
+-  qrFake: {
+-    marginTop: 12,
+-    height: 150,
+-    borderRadius: 16,
+-    backgroundColor: "#F7F7FB",
+-    alignItems: "center",
+-    justifyContent: "center",
+-    gap: 8,
+-  },
+-  qrFakeText: { fontSize: 11, color: "#9A9A9A", fontWeight: "800" },
+-
+-  qrBox: {
+-    padding: 10,
+-    borderRadius: 12,
+-    backgroundColor: "#FFFFFF",
+-  },
+-
+-  redeemRow: { flexDirection: "row", gap: 10, marginTop: 10 },
+-  redeemInput: {
+-    flex: 1,
+-    height: 46,
+-    borderRadius: 14,
+-    backgroundColor: "#F7F7FB",
+-    paddingHorizontal: 12,
+-    borderWidth: 1,
+-    borderColor: "rgba(0,0,0,0.06)",
+-    fontWeight: "800",
+-    color: "#1B1B1B",
+-  },
+-  redeemBtn: {
+-    height: 46,
++  rewardsPoints: { fontSize: 18, fontWeight: "900", color: "#221c2a" },
++  rewardsHint: { marginTop: 6, fontSize: 12, color: "#514a5a", lineHeight: 16 },
++  showQrBtn: {
+     paddingHorizontal: 14,
++    paddingVertical: 10,
+     borderRadius: 14,
+-    backgroundColor: "#6A35FF",
+-    alignItems: "center",
+-    justifyContent: "center",
++    backgroundColor: "#3654b5",
+   },
+-  redeemBtnText: { color: "#fff", fontWeight: "900", fontSize: 12 },
+-
+-  scanBtn: {
+-    marginTop: 10,
+-    height: 46,
+-    borderRadius: 14,
+-    backgroundColor: "#2D6BFF",
+-    alignItems: "center",
+-    justifyContent: "center",
+-    flexDirection: "row",
+-    gap: 8,
++  showQrBtnText: { color: "#fff", fontWeight: "900", fontSize: 12 },
++  progressTrack: {
++    marginTop: 12,
++    height: 10,
++    borderRadius: 10,
++    backgroundColor: "#e4e0ed",
++    overflow: "hidden",
+   },
+-  scanBtnText: { color: "#fff", fontWeight: "900", fontSize: 12 },
+-
+-  // Rewards
+-  rewardsCard: {
+-    backgroundColor: "#F7F7FB",
++  progressFill: { height: "100%", borderRadius: 10, backgroundColor: "#6242bb" },
++  rewardsMetaRow: { marginTop: 10, flexDirection: "row", justifyContent: "space-between" },
++  metaText: { fontSize: 12, color: "#514a5a", fontWeight: "800" },
++  tile: {
++    width: 200,
++    height: 150,
+     borderRadius: 18,
++    overflow: "hidden",
+     padding: 14,
++    justifyContent: "flex-end",
++    backgroundColor: "#ffffff",
+     borderWidth: 1,
+-    borderColor: "rgba(0,0,0,0.06)",
+-    marginBottom: 8,
++    borderColor: "#d5d0df",
+   },
+-  rewardsTopRow: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 12 },
+-  rewardsPoints: { fontSize: 18, fontWeight: "900", color: "#141414" },
+-  rewardsHint: { marginTop: 6, fontSize: 12, color: "#6F6F6F", maxWidth: 230, lineHeight: 16 },
+-  claimBtn: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 14, backgroundColor: "#2D6BFF" },
+-  claimBtnText: { color: "#fff", fontWeight: "900", fontSize: 12 },
+-
+-  progressTrack: { marginTop: 12, height: 10, borderRadius: 10, backgroundColor: "rgba(0,0,0,0.08)", overflow: "hidden" },
+-  progressFill: { height: "100%", borderRadius: 10, backgroundColor: "#6A35FF" },
+-  rewardsMetaRow: { marginTop: 10, flexDirection: "row", justifyContent: "space-between" },
+-  metaText: { fontSize: 12, color: "#6F6F6F", fontWeight: "800" },
+-
+-  // lists
+-  hListPad: { paddingBottom: 6, paddingTop: 2, paddingRight: 8, gap: 12 },
+-  tile: { width: Math.min(200, SCREEN_W * 0.55), height: 150, borderRadius: 18, overflow: "hidden" },
+-  tileBg: { flex: 1, padding: 14, justifyContent: "flex-end" },
+   tileBadge: {
+     alignSelf: "flex-start",
+-    backgroundColor: "rgba(255,255,255,0.22)",
+-    borderWidth: 1,
+-    borderColor: "rgba(255,255,255,0.35)",
++    backgroundColor: "#e4e0ed",
+     paddingHorizontal: 10,
+     paddingVertical: 6,
+     borderRadius: 999,
+-    color: "#fff",
++    color: "#221c2a",
+     fontWeight: "900",
+     fontSize: 11,
+     marginBottom: 10,
+   },
+-  tileTitle: { color: "#fff", fontSize: 16, fontWeight: "900", lineHeight: 20 },
+-  tileSub: { color: "rgba(255,255,255,0.9)", marginTop: 6, fontSize: 12, fontWeight: "800" },
+-
+-  eventBadgeRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+-  eventWhen: { marginTop: 8, color: "rgba(255,255,255,0.95)", fontSize: 12, fontWeight: "900" },
+-
+-  listWrap: { gap: 10, paddingBottom: 8 },
++  tileTitle: { color: "#221c2a", fontSize: 16, fontWeight: "900", lineHeight: 20 },
++  tileSub: { color: "#514a5a", marginTop: 6, fontSize: 12, fontWeight: "800" },
++  tileWhen: { marginTop: 8, color: "#221c2a", fontSize: 12, fontWeight: "900" },
+   rowCard: {
+     flexDirection: "row",
+     alignItems: "center",
+     gap: 12,
+-    backgroundColor: "#F7F7FB",
++    backgroundColor: "#ffffff",
+     borderRadius: 16,
+     padding: 12,
+     borderWidth: 1,
+-    borderColor: "rgba(0,0,0,0.06)",
++    borderColor: "#d5d0df",
++    marginBottom: 10,
++  },
++  rowIcon: {
++    width: 32,
++    height: 32,
++    borderRadius: 10,
++    alignItems: "center",
++    justifyContent: "center",
++    backgroundColor: "#6242bb",
+   },
+-  rowLeft: { width: 36, alignItems: "center", justifyContent: "center" },
+-  rowIcon: { width: 32, height: 32, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+-  rowMid: { flex: 1 },
+-  rowTitle: { fontSize: 14, fontWeight: "900", color: "#1B1B1B" },
+-  rowSub: { marginTop: 3, fontSize: 12, color: "#6F6F6F", fontWeight: "800" },
+-  rowMeta: { marginTop: 6, fontSize: 11, color: "#9A9A9A", fontWeight: "900" },
++  rowTitle: { fontSize: 14, fontWeight: "900", color: "#221c2a" },
++  rowSub: { marginTop: 3, fontSize: 12, color: "#514a5a", fontWeight: "800" },
++  rowMeta: { marginTop: 6, fontSize: 11, color: "#88848f", fontWeight: "900" },
+ });
+diff --git a/bownd/app/ui/reference.tsx b/bownd/app/ui/reference.tsx
+new file mode 100644
+index 0000000..e9e009e
+--- /dev/null
++++ b/bownd/app/ui/reference.tsx
+@@ -0,0 +1,432 @@
++// app/ui/reference.tsx
++// Shared UI extracted from the reference preview (App.tsx): design tokens,
++// Pill, Section, EventCard, Search, TopTabs, BottomNav, plus the shared
++// formatWhen / venue-name helpers. StyleSheet values are copied exactly
++// from App.tsx. EventCard renders a LinearGradient background (App.tsx's
++// overlay gradient colors) — never a remote image, never presented as a
++// photo. All data comes from the real backend via the screens.
++import React from "react";
++import {
++  View,
++  Text,
++  TextInput,
++  TouchableOpacity,
++  StyleSheet,
++  Dimensions,
++} from "react-native";
++import { LinearGradient } from "expo-linear-gradient";
++import { Ionicons } from "@expo/vector-icons";
++
++import type { Venue } from "../../lib/store";
++
++export type Tab = "Home" | "Events" | "Personal";
++export const PURPLE = "#7861d9";
++export const INK = "#0e0b19";
++export const WIDTH = Dimensions.get("window").width;
++
++export const TAB_ROUTES: Record<Tab, string> = {
++  Home: "/(tabs)",
++  Events: "/(tabs)/events",
++  Personal: "/(tabs)/personal",
++};
++
++// ---------------------------------------------------------------------------
++// Shared helpers (same logic as the existing screens)
++// ---------------------------------------------------------------------------
++
++export function parseISO(iso: string): Date | null {
++  const t = Date.parse(iso);
++  return Number.isFinite(t) ? new Date(t) : null;
++}
++
++export function formatWhen(startISO: string): string {
++  const d = parseISO(startISO);
++  if (!d) return "Time TBD";
++  const now = new Date();
++  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate(), 0, 0, 0, 0);
++  const today = startOfDay(now).getTime();
++  const that = startOfDay(d).getTime();
++  const diffDays = Math.round((that - today) / (1000 * 60 * 60 * 24));
++  const hh = d.getHours();
++  const mm = d.getMinutes();
++  const ampm = hh >= 12 ? "PM" : "AM";
++  const hr = hh % 12 || 12;
++  const min = mm.toString().padStart(2, "0");
++  const time = `${hr}:${min} ${ampm}`;
++  if (diffDays === 0) return `Tonight • ${time}`;
++  if (diffDays === 1) return `Tomorrow • ${time}`;
++  const m = d.toLocaleString(undefined, { month: "short" });
++  const day = d.getDate();
++  return `${m} ${day} • ${time}`;
++}
++
++export function getVenueName(venueId: string, venues: Venue[]): string {
++  const v = venues.find((x) => x.id === venueId || x.name === venueId);
++  return v?.name ?? (venueId || "Venue");
++}
++
++// ---------------------------------------------------------------------------
++// Components (App.tsx, adapted for Expo Router)
++// ---------------------------------------------------------------------------
++
++export function Pill({
++  label,
++  active,
++  onPress,
++}: {
++  label: string;
++  active?: boolean;
++  onPress: () => void;
++}) {
++  return (
++    <TouchableOpacity onPress={onPress} style={[refStyles.pill, active && refStyles.pillActive]}>
++      <Text style={refStyles.pillText}>{label}</Text>
++    </TouchableOpacity>
++  );
++}
++
++export function Section({
++  title,
++  subtitle,
++  onPress,
++}: {
++  title: string;
++  subtitle?: string;
++  onPress?: () => void;
++}) {
++  const inner = (
++    <>
++      <View>
++        <Text style={refStyles.sectionTitle}>{title}</Text>
++        {subtitle ? <Text style={refStyles.sectionSub}>{subtitle}</Text> : null}
++      </View>
++      <Ionicons name="chevron-forward" color="#b7aecb" size={17} />
++    </>
++  );
++  if (onPress) {
++    return (
++      <TouchableOpacity onPress={onPress} style={refStyles.section} activeOpacity={0.8}>
++        {inner}
++      </TouchableOpacity>
++    );
++  }
++  return <View style={refStyles.section}>{inner}</View>;
++}
++
++export function EventCard({
++  title,
++  venueName,
++  label,
++  badge,
++  compact = false,
++  onPress,
++}: {
++  title: string;
++  venueName: string;
++  label: string;
++  badge?: string;
++  compact?: boolean;
++  onPress: () => void;
++}) {
++  return (
++    <TouchableOpacity
++      onPress={onPress}
++      activeOpacity={0.86}
++      style={[refStyles.eventCard, { height: compact ? 156 : 177 }]}
++    >
++      <LinearGradient
++        colors={["rgba(10,7,23,.1)", "rgba(11,8,25,.55)", "rgba(9,6,21,.94)"]}
++        locations={[0, 0.44, 1]}
++        style={refStyles.cardOverlay}
++      >
++        <Text style={[refStyles.eventTitle, compact && { fontSize: 19 }]} numberOfLines={3}>
++          {title}
++        </Text>
++        <Text style={refStyles.eventVenue}>
++          {venueName}
++          {badge && !compact ? ` · ${badge}` : ""}
++        </Text>
++        <Text style={refStyles.eventLabel}>
++          <Text style={{ color: "#f5c36a" }}>★</Text> {label}
++        </Text>
++      </LinearGradient>
++    </TouchableOpacity>
++  );
++}
++
++export function Search({
++  value,
++  onChange,
++  placeholder,
++}: {
++  value: string;
++  onChange: (s: string) => void;
++  placeholder: string;
++}) {
++  return (
++    <View style={refStyles.search}>
++      <Ionicons name="search-outline" color="#ddd5e9" size={19} />
++      <TextInput
++        placeholder={placeholder}
++        placeholderTextColor="#ddd6e8"
++        value={value}
++        onChangeText={onChange}
++        style={refStyles.searchInput}
++      />
++    </View>
++  );
++}
++
++export function TopTabs({
++  active,
++  onNavigate,
++}: {
++  active: Tab;
++  onNavigate: (route: string) => void;
++}) {
++  return (
++    <View style={refStyles.topTabs}>
++      {(["Home", "Events", "Personal"] as Tab[]).map((t) => (
++        <TouchableOpacity
++          key={t}
++          onPress={() => onNavigate(TAB_ROUTES[t])}
++          style={[refStyles.topTab, active === t && refStyles.topTabActive]}
++        >
++          <Text style={refStyles.topTabText}>{t}</Text>
++        </TouchableOpacity>
++      ))}
++    </View>
++  );
++}
++
++export function BottomNav({
++  active,
++  onNavigate,
++}: {
++  active: Tab;
++  onNavigate: (route: string) => void;
++}) {
++  const icons: Record<Tab, keyof typeof Ionicons.glyphMap> = {
++    Home: "home-outline",
++    Events: "calendar-outline",
++    Personal: "person-outline",
++  };
++  return (
++    <View style={refStyles.bottom}>
++      {(["Home", "Events", "Personal"] as Tab[]).map((t) => (
++        <TouchableOpacity
++          key={t}
++          onPress={() => onNavigate(TAB_ROUTES[t])}
++          style={[refStyles.bottomItem, active === t && refStyles.bottomSelected]}
++        >
++          <Ionicons name={icons[t]} size={22} color={active === t ? "#fff" : "#aaa4b9"} />
++          <Text style={[refStyles.bottomText, active === t && { color: "#fff" }]}>{t}</Text>
++        </TouchableOpacity>
++      ))}
++    </View>
++  );
++}
++
++// ---------------------------------------------------------------------------
++// Styles — copied exactly from App.tsx
++// ---------------------------------------------------------------------------
++
++export const refStyles = StyleSheet.create({
++  root: { flex: 1, backgroundColor: INK },
++  scroll: { paddingHorizontal: 12, paddingTop: 16, paddingBottom: 26 },
++  search: {
++    height: 45,
++    backgroundColor: "#201b30",
++    borderRadius: 17,
++    borderWidth: 1,
++    borderColor: "#30283f",
++    flexDirection: "row",
++    alignItems: "center",
++    paddingHorizontal: 14,
++    marginBottom: 12,
++    gap: 9,
++  },
++  searchInput: { color: "white", fontSize: 15, flex: 1 },
++  topTabs: {
++    flexDirection: "row",
++    backgroundColor: "#221c33",
++    borderRadius: 15,
++    padding: 3,
++    marginBottom: 22,
++  },
++  topTab: {
++    flex: 1,
++    alignItems: "center",
++    justifyContent: "center",
++    paddingVertical: 7,
++    borderRadius: 12,
++  },
++  topTabActive: { backgroundColor: "#3b354d", borderWidth: 1, borderColor: "#62596d" },
++  topTabText: { color: "white", fontSize: 14 },
++  pageTitle: { color: "#fff", fontSize: 26, fontWeight: "700", marginBottom: 3 },
++  subtitle: { color: "#d4ccdf", fontSize: 14, marginBottom: 12 },
++  filterWrap: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginBottom: 10 },
++  pill: {
++    backgroundColor: "#30283e",
++    borderRadius: 22,
++    paddingVertical: 9,
++    paddingHorizontal: 14,
++    borderWidth: 1,
++    borderColor: "#41354e",
++  },
++  pillActive: { backgroundColor: "#463858", borderColor: "#69577a" },
++  pillText: { color: "white", fontSize: 13 },
++  personaRow: { alignItems: "flex-end", marginBottom: 15 },
++  section: {
++    flexDirection: "row",
++    alignItems: "center",
++    justifyContent: "space-between",
++    marginTop: 12,
++    marginBottom: 10,
++  },
++  sectionTitle: { color: "#fff", fontSize: 21, fontWeight: "700" },
++  sectionSub: { color: "#b9b0c7", fontSize: 13, marginTop: 3 },
++  tailored: {
++    backgroundColor: "#21192f",
++    borderWidth: 1,
++    borderColor: "#342841",
++    borderRadius: 17,
++    padding: 13,
++    marginBottom: 12,
++  },
++  micro: { color: "#c7bed3", fontSize: 12 },
++  tailoredTitle: { color: "white", fontSize: 19, fontWeight: "700", lineHeight: 23, marginTop: 7, marginBottom: 5 },
++  muted: { color: "#cfc5d8", fontSize: 14 },
++  tagRow: { flexDirection: "row", gap: 6, marginTop: 12 },
++  tag: { backgroundColor: "#332b43", borderRadius: 16, paddingHorizontal: 12, paddingVertical: 7 },
++  tagText: { color: "white", fontSize: 12 },
++  eventCard: {
++    borderRadius: 20,
++    overflow: "hidden",
++    marginBottom: 11,
++    borderWidth: 1,
++    borderColor: "#403448",
++    backgroundColor: "#231b33",
++  },
++  cardOverlay: {
++    flex: 1,
++    justifyContent: "flex-end",
++    paddingHorizontal: 20,
++    paddingBottom: 17,
++    paddingTop: 12,
++  },
++  eventTitle: { color: "white", fontSize: 23, fontWeight: "700", lineHeight: 27, maxWidth: "95%" },
++  eventVenue: { color: "#f0eaf4", fontSize: 14, marginTop: 5 },
++  eventLabel: { color: "#e7e0eb", fontSize: 14, marginTop: 8 },
++  venueItem: { width: 100, alignItems: "center" },
++  venueIcon: {
++    width: 96,
++    height: 70,
++    borderRadius: 18,
++    justifyContent: "center",
++    alignItems: "center",
++    borderWidth: 1,
++    borderColor: "#55466a",
++  },
++  venueName: { color: "white", fontSize: 12, textAlign: "center", marginTop: 7 },
++  bottom: {
++    height: 70,
++    flexDirection: "row",
++    backgroundColor: "#161120",
++    borderTopWidth: 1,
++    borderColor: "#40334f",
++    paddingBottom: 5,
++  },
++  bottomItem: { flex: 1, justifyContent: "center", alignItems: "center", gap: 4 },
++  bottomSelected: { backgroundColor: "#34284c", borderTopLeftRadius: 18, borderTopRightRadius: 18 },
++  bottomText: { color: "#aaa4b9", fontSize: 12 },
++  personalHero: { height: 365, paddingHorizontal: 20, paddingTop: 22, alignItems: "center" },
++  personalHead: { width: "100%", flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
++  personalTitle: { color: "white", fontSize: 31, fontWeight: "700" },
++  personalSub: { color: "#f1e8f5", fontSize: 14, alignSelf: "flex-start", marginTop: 11 },
++  avatarRing: {
++    width: 173,
++    height: 173,
++    borderRadius: 90,
++    borderWidth: 13,
++    borderColor: "rgba(210,173,242,.17)",
++    alignItems: "center",
++    justifyContent: "center",
++    marginTop: 16,
++  },
++  avatar: {
++    width: 138,
++    height: 138,
++    borderRadius: 75,
++    backgroundColor: "#393246",
++    alignItems: "center",
++    justifyContent: "center",
++    borderWidth: 2,
++    borderColor: "rgba(255,255,255,.35)",
++  },
++  points: { color: "white", fontSize: 34, fontWeight: "700", marginTop: 8 },
++  nextTier: { color: "#fff", fontSize: 15, marginTop: 3 },
++  lightPanel: {
++    marginHorizontal: 5,
++    marginTop: -8,
++    backgroundColor: "#f0edf4",
++    borderTopLeftRadius: 28,
++    borderTopRightRadius: 28,
++    borderBottomLeftRadius: 25,
++    borderBottomRightRadius: 25,
++    padding: 14,
++    minHeight: 390,
++  },
++  panelTabs: { flexDirection: "row", backgroundColor: "#e2dfeb", borderRadius: 22, padding: 3 },
++  panelTab: { flex: 1, paddingVertical: 9, alignItems: "center", borderRadius: 18 },
++  panelTabSelected: { backgroundColor: "#373151" },
++  panelTabText: { color: "#292334", fontSize: 13 },
++  qrHeader: {
++    flexDirection: "row",
++    justifyContent: "space-between",
++    alignItems: "center",
++    paddingVertical: 17,
++    paddingHorizontal: 4,
++  },
++  darkHeading: { color: "#19151f", fontSize: 20, fontWeight: "700" },
++  tokenCard: {
++    borderRadius: 19,
++    borderWidth: 1,
++    borderColor: "#d5d0df",
++    padding: 12,
++    backgroundColor: "#f1eef5",
++  },
++  tokenRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
++  tokenTitle: { color: "#221c2a", fontSize: 16, fontWeight: "700" },
++  newButton: {
++    backgroundColor: "#6242bb",
++    borderRadius: 12,
++    paddingHorizontal: 12,
++    paddingVertical: 9,
++    flexDirection: "row",
++    gap: 6,
++    alignItems: "center",
++  },
++  tokenBox: { backgroundColor: "#e4e0ed", borderRadius: 13, marginTop: 12, padding: 12 },
++  tokenText: { color: "#28222d", fontSize: 16, fontWeight: "700" },
++  qrBox: {
++    backgroundColor: "#e9e6ef",
++    borderRadius: 15,
++    alignItems: "center",
++    justifyContent: "center",
++    marginTop: 10,
++    padding: 12,
++  },
++  redeemHeading: { fontSize: 18, fontWeight: "700", color: "#231e29", marginTop: 15, marginBottom: 9 },
++  redeemRow: {
++    flexDirection: "row",
++    backgroundColor: "#e8e5ed",
++    borderRadius: 13,
++    overflow: "hidden",
++    borderWidth: 1,
++    borderColor: "#d2ccdc",
++  },
++  redeemInput: { flex: 1, paddingHorizontal: 10, fontSize: 14, color: "#211b2b" },
++  redeemButton: { backgroundColor: "#3654b5", paddingHorizontal: 15, justifyContent: "center", minHeight: 45 },
++  panelNote: { color: "#514a5a", marginTop: 15, textAlign: "center" },
++});
+-- 
+2.43.0
+
+
+From 9c52b86598de2773bcb629beb0bc12851d7ea3a0 Mon Sep 17 00:00:00 2001
+From: Muse <muse@meta.ai>
+Date: Fri, 16 Oct 2026 07:29:41 +0000
+Subject: [PATCH 2/2] Bownd: showcase demo data, featured playlists,
+ featured-placement field
+
+---
+ bownd/app/(tabs)/events.tsx |  68 +++++--
+ bownd/app/(tabs)/home.tsx   | 107 +++++++++-
+ bownd/app/detail.tsx        | 113 +++++++++--
+ bownd/data/showcase.ts      | 385 ++++++++++++++++++++++++++++++++++++
+ bownd/lib/store.ts          |   8 +
+ 5 files changed, 633 insertions(+), 48 deletions(-)
+ create mode 100644 bownd/data/showcase.ts
+
+diff --git a/bownd/app/(tabs)/events.tsx b/bownd/app/(tabs)/events.tsx
+index 18ff6e0..896874e 100644
+--- a/bownd/app/(tabs)/events.tsx
++++ b/bownd/app/(tabs)/events.tsx
+@@ -1,7 +1,10 @@
+ // app/(tabs)/events.tsx
+ // Reference visuals (App.tsx) + real backend wiring (lib/store.ts).
+-// - Events + venues come from Firestore ONLY. No bundled demo fallback:
+-//   an empty catalog shows "No events yet", never demo events.
++// - Events + venues come from Firestore. When the Firestore catalog is
++//   EMPTY (no events AND no venues), the authorized showcase fallback
++//   (data/showcase.ts) is used wholesale — never mixed with real data —
++//   with an honest "Showcase preview" chip. Demo listings are never
++//   presented as live inventory.
+ // - Favorite heart on every All Events row, wired to toggleFavorite().
+ //   The heart is a SIBLING of the card pressable so it never opens detail.
+ // - Accepts params { q, venue } (from Home search + venue orbs +
+@@ -32,6 +35,7 @@ import {
+   type FavoriteItem,
+ } from "../../lib/store";
+ import { useAuth } from "../../lib/auth";
++import { getShowcaseEvents, getShowcaseVenues } from "../../data/showcase";
+ import {
+   BottomNav,
+   EventCard,
+@@ -180,7 +184,8 @@ export default function EventsScreen() {
+     }, [user?.uid])
+   );
+ 
+-  // Events + venues come from Firestore only (no bundled demo fallback).
++  // Events + venues come from Firestore; when BOTH are empty, the
++  // authorized showcase fallback is used wholesale (never mixed).
+   const [events, setEvents] = useState<EventItem[]>([]);
+   const [venues, setVenues] = useState<Venue[]>([]);
+   useEffect(() => {
+@@ -196,6 +201,12 @@ export default function EventsScreen() {
+     };
+   }, []);
+ 
++  // Wholesale showcase fallback: demo only when the real catalog is
++  // completely empty. Never mixed with real data.
++  const usingDemo = events.length === 0 && venues.length === 0;
++  const effEvents = usingDemo ? getShowcaseEvents() : events;
++  const effVenues = usingDemo ? getShowcaseVenues() : venues;
++
+   // Incoming params (Home search, venue orbs, Personal favorites).
+   useEffect(() => {
+     if (typeof params.q === "string" && params.q.trim()) setQuery(params.q);
+@@ -219,7 +230,7 @@ export default function EventsScreen() {
+       id: item.id,
+       kind: "event",
+       title: item.title,
+-      subtitle: getVenueName(item.venueId, venues),
++      subtitle: getVenueName(item.venueId, effVenues),
+       when: formatWhen(item.startISO),
+     };
+     try {
+@@ -236,30 +247,30 @@ export default function EventsScreen() {
+   }
+ 
+   const spotlight = useMemo(() => {
+-    return events
++    return effEvents
+       .filter((e) => e.category === "spotlight")
+       .filter((e) => inTimeWindow(e, "week"))
+       .slice(0, 10);
+-  }, [events]);
++  }, [effEvents]);
+ 
+   const tailored = useMemo(() => {
+-    return events
++    return effEvents
+       .filter((e) => inTimeWindow(e, "week"))
+       .filter((e) => matchesPersona(e, persona))
+       .slice(0, 10);
+-  }, [persona, events]);
++  }, [persona, effEvents]);
+ 
+   const topVenues = useMemo(() => {
+-    return venues.map((v) => v.name).slice(0, 10);
+-  }, [venues]);
++    return effVenues.map((v) => v.name).slice(0, 10);
++  }, [effVenues]);
+ 
+   const allEvents = useMemo(() => {
+-    const base = events
++    const base = effEvents
+       .filter((e) => inTimeWindow(e, timeChip))
+-      .filter((e) => matchesSearch(e, getVenueName(e.venueId, venues), query))
++      .filter((e) => matchesSearch(e, getVenueName(e.venueId, effVenues), query))
+       .filter((e) =>
+         venueFilter
+-          ? getVenueName(e.venueId, venues).toLowerCase() === venueFilter.toLowerCase() ||
++          ? getVenueName(e.venueId, effVenues).toLowerCase() === venueFilter.toLowerCase() ||
+             e.venueId.toLowerCase() === venueFilter.toLowerCase()
+           : true
+       );
+@@ -269,7 +280,7 @@ export default function EventsScreen() {
+       const db = parseISO(b.startISO)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+       return da - db;
+     });
+-  }, [persona, personalizedOn, query, timeChip, events, venueFilter, venues]);
++  }, [persona, personalizedOn, query, timeChip, effEvents, venueFilter, effVenues]);
+ 
+   const headerSubtitle = useMemo(() => {
+     const city = "Kansas City";
+@@ -304,6 +315,12 @@ export default function EventsScreen() {
+         <Text style={refStyles.pageTitle}>Events</Text>
+         <Text style={refStyles.subtitle}>{headerSubtitle}</Text>
+ 
++        {usingDemo && (
++          <View style={styles.showcaseChip}>
++            <Text style={styles.showcaseChipText}>Showcase preview · Sample listings</Text>
++          </View>
++        )}
++
+         {/* ONE filter row: time chips + All */}
+         <View style={refStyles.filterWrap}>
+           <Pill label="Tonight" active={timeChip === "tonight"} onPress={() => setTimeChip("tonight")} />
+@@ -358,7 +375,7 @@ export default function EventsScreen() {
+                 <Text style={refStyles.tailoredTitle} numberOfLines={3}>
+                   {item.title}
+                 </Text>
+-                <Text style={refStyles.muted}>{getVenueName(item.venueId, venues)}</Text>
++                <Text style={refStyles.muted}>{getVenueName(item.venueId, effVenues)}</Text>
+                 <View style={refStyles.tagRow}>
+                   {uniq([...(item.vibeTags || []), ...(item.audienceTags || [])])
+                     .slice(0, 3)
+@@ -384,7 +401,7 @@ export default function EventsScreen() {
+             <EventCard
+               key={item.id}
+               title={item.title}
+-              venueName={getVenueName(item.venueId, venues)}
++              venueName={getVenueName(item.venueId, effVenues)}
+               label={formatWhen(item.startISO)}
+               compact
+               onPress={() => openEvent(item.id)}
+@@ -419,7 +436,7 @@ export default function EventsScreen() {
+         <Section title="All Events" subtitle="Full list" />
+         {allEvents.length === 0 ? (
+           <Text style={styles.emptyText}>
+-            {events.length === 0
++            {effEvents.length === 0
+               ? "No events yet — check back soon."
+               : "No events match your filters."}
+           </Text>
+@@ -433,7 +450,7 @@ export default function EventsScreen() {
+                   {item.title}
+                 </Text>
+                 <Text style={styles.bigVenue} numberOfLines={1}>
+-                  {getVenueName(item.venueId, venues)}
++                  {getVenueName(item.venueId, effVenues)}
+                 </Text>
+                 <View style={[refStyles.tagRow, { flexWrap: "wrap" }]}>
+                   {uniq([...(item.vibeTags || []), ...(item.audienceTags || [])])
+@@ -494,6 +511,21 @@ const styles = StyleSheet.create({
+     fontWeight: "900",
+     fontSize: 13,
+   },
++  showcaseChip: {
++    alignSelf: "flex-start",
++    paddingHorizontal: 12,
++    paddingVertical: 6,
++    borderRadius: 999,
++    backgroundColor: "rgba(245,195,106,0.16)",
++    borderWidth: 1,
++    borderColor: "rgba(245,195,106,0.45)",
++    marginBottom: 10,
++  },
++  showcaseChipText: {
++    color: "#f5c36a",
++    fontSize: 12,
++    fontWeight: "900",
++  },
+   emptyText: {
+     color: "rgba(255,255,255,0.72)",
+     fontSize: 14,
+diff --git a/bownd/app/(tabs)/home.tsx b/bownd/app/(tabs)/home.tsx
+index ae69a86..9b6a300 100644
+--- a/bownd/app/(tabs)/home.tsx
++++ b/bownd/app/(tabs)/home.tsx
+@@ -1,7 +1,10 @@
+ // app/(tabs)/home.tsx
+ // Reference visuals (App.tsx) + real backend wiring (lib/store.ts).
+-// - Events + venues come from Firestore ONLY. No bundled demo fallback:
+-//   an empty catalog shows "No events yet", never demo events.
++// - Events + venues come from Firestore. When the Firestore catalog is
++//   EMPTY (no events AND no venues), the authorized showcase fallback
++//   (data/showcase.ts) is used wholesale — never mixed with real data —
++//   with an honest "Showcase preview" chip. Demo listings are never
++//   presented as live inventory.
+ // - Search filters the catalog in place (title, venue, vibe/audience
+ //   tags). "See all results in Events" navigates with the query prefilled.
+ // - Spotlight cards + Featured sections navigate to the real detail
+@@ -16,6 +19,7 @@ import { useRouter } from "expo-router";
+ import { useSafeAreaInsets } from "react-native-safe-area-context";
+ 
+ import { fetchEvents, fetchVenues, type EventItem, type Venue } from "../../lib/store";
++import { getShowcaseEvents, getShowcaseVenues, resolvePlaylists } from "../../data/showcase";
+ import {
+   BottomNav,
+   EventCard,
+@@ -28,7 +32,13 @@ import {
+ } from "../ui/reference";
+ 
+ function pickFeatured(events: EventItem[]) {
+-  return events.find((e) => e.category === "featured") ?? events[1] ?? events[0];
++  // Paid featured placement wins first; then the existing logic.
++  return (
++    events.find((e) => e.featured === true) ??
++    events.find((e) => e.category === "featured") ??
++    events[1] ??
++    events[0]
++  );
+ }
+ 
+ function matchesHomeSearch(e: EventItem, venueName: string, q: string) {
+@@ -49,7 +59,8 @@ export default function Home() {
+   const insets = useSafeAreaInsets();
+   const [q, setQ] = useState("");
+ 
+-  // Events + venues come from Firestore only (no bundled demo fallback).
++  // Events + venues come from Firestore; when BOTH are empty, the
++  // authorized showcase fallback is used wholesale (never mixed).
+   const [events, setEvents] = useState<EventItem[]>([]);
+   const [venues, setVenues] = useState<Venue[]>([]);
+   const [loading, setLoading] = useState(true);
+@@ -72,14 +83,20 @@ export default function Home() {
+ 
+   const qNorm = q.trim().toLowerCase();
+ 
++  // Wholesale showcase fallback: demo only when the real catalog is
++  // completely empty. Never mixed with real data.
++  const usingDemo = events.length === 0 && venues.length === 0;
++  const effEvents = usingDemo ? getShowcaseEvents() : events;
++  const effVenues = usingDemo ? getShowcaseVenues() : venues;
++
+   const visibleEvents = useMemo(
+-    () => events.filter((e) => matchesHomeSearch(e, getVenueName(e.venueId, venues), qNorm)),
+-    [events, venues, qNorm]
++    () => effEvents.filter((e) => matchesHomeSearch(e, getVenueName(e.venueId, effVenues), qNorm)),
++    [effEvents, effVenues, qNorm]
+   );
+ 
+   const visibleVenues = useMemo(
+-    () => (qNorm ? venues.filter((v) => v.name.toLowerCase().includes(qNorm)) : venues),
+-    [venues, qNorm]
++    () => (qNorm ? effVenues.filter((v) => v.name.toLowerCase().includes(qNorm)) : effVenues),
++    [effVenues, qNorm]
+   );
+ 
+   const spotlightEvents = useMemo(
+@@ -91,6 +108,11 @@ export default function Home() {
+ 
+   const topVenues = useMemo(() => visibleVenues.slice(0, 3), [visibleVenues]);
+ 
++  const playlists = useMemo(
++    () => resolvePlaylists(effEvents, effVenues),
++    [effEvents, effVenues]
++  );
++
+   function go(route: string) {
+     router.replace(route);
+   }
+@@ -129,6 +151,12 @@ export default function Home() {
+         <TopTabs active="Home" onNavigate={go} />
+         <View style={{ height: 22 }} />
+ 
++        {usingDemo && !loading && (
++          <View style={styles.showcaseChip}>
++            <Text style={styles.showcaseChipText}>Showcase preview · Sample listings</Text>
++          </View>
++        )}
++
+         {!!qNorm && (
+           <TouchableOpacity onPress={openSearchInEvents} style={styles.seeResultsRow}>
+             <Text style={styles.seeResultsText}>See all results in Events</Text>
+@@ -138,7 +166,7 @@ export default function Home() {
+ 
+         {loading ? (
+           <Text style={styles.emptyText}>Loading…</Text>
+-        ) : events.length === 0 ? (
++        ) : effEvents.length === 0 ? (
+           <Text style={styles.emptyText}>No events yet — check back soon.</Text>
+         ) : nothingFound ? (
+           <Text style={styles.emptyText}>No matches for “{q.trim()}”.</Text>
+@@ -149,13 +177,54 @@ export default function Home() {
+               <EventCard
+                 key={item.id}
+                 title={item.title}
+-                venueName={getVenueName(item.venueId, venues)}
++                venueName={getVenueName(item.venueId, effVenues)}
+                 label={formatWhen(item.startISO)}
+                 badge="Spotlight"
+                 onPress={() => openEvent(item.id)}
+               />
+             ))}
+ 
++            {/* Featured playlists — horizontal rails (below spotlight, above Top Venues) */}
++            {playlists.map((pl) => (
++              <View key={pl.id}>
++                <Section title={pl.title} subtitle={pl.subtitle} />
++                <ScrollView
++                  horizontal
++                  showsHorizontalScrollIndicator={false}
++                  contentContainerStyle={{ gap: 12, paddingBottom: 10 }}
++                >
++                  {pl.items.map((item) =>
++                    item.kind === "event" ? (
++                      <View key={`event:${item.event.id}`} style={styles.playlistCardWrap}>
++                        <EventCard
++                          title={item.event.title}
++                          venueName={getVenueName(item.event.venueId, effVenues)}
++                          label={formatWhen(item.event.startISO)}
++                          onPress={() => openEvent(item.event.id)}
++                        />
++                      </View>
++                    ) : (
++                      <TouchableOpacity
++                        key={`venue:${item.venue.id}`}
++                        onPress={() => openVenue(item.venue.name)}
++                        style={refStyles.venueItem}
++                      >
++                        <LinearGradient
++                          colors={["#24364b", "#100d22"]}
++                          style={refStyles.venueIcon}
++                        >
++                          <Ionicons name="storefront-outline" size={31} color="#eee8ff" />
++                        </LinearGradient>
++                        <Text style={refStyles.venueName} numberOfLines={2}>
++                          {item.venue.name}
++                        </Text>
++                      </TouchableOpacity>
++                    )
++                  )}
++                </ScrollView>
++              </View>
++            ))}
++
+             {/* Top Venues orbs (first 3 venues, name only) */}
+             {topVenues.length > 0 && (
+               <View>
+@@ -279,4 +348,22 @@ const styles = StyleSheet.create({
+     marginTop: 12,
+     marginBottom: 10,
+   },
++  showcaseChip: {
++    alignSelf: "flex-start",
++    paddingHorizontal: 12,
++    paddingVertical: 6,
++    borderRadius: 999,
++    backgroundColor: "rgba(245,195,106,0.16)",
++    borderWidth: 1,
++    borderColor: "rgba(245,195,106,0.45)",
++    marginBottom: 10,
++  },
++  showcaseChipText: {
++    color: "#f5c36a",
++    fontSize: 12,
++    fontWeight: "900",
++  },
++  playlistCardWrap: {
++    width: 280,
++  },
+ });
+diff --git a/bownd/app/detail.tsx b/bownd/app/detail.tsx
+index 05e18b3..6f63794 100644
+--- a/bownd/app/detail.tsx
++++ b/bownd/app/detail.tsx
+@@ -30,6 +30,11 @@ import {
+   type FavoriteItem,
+ } from "../lib/store";
+ import { useAuth } from "../lib/auth";
++import {
++  findShowcaseEvent,
++  findShowcaseVenue,
++  isShowcaseId,
++} from "../data/showcase";
+ 
+ function formatWhen(startISO: string) {
+   const d = new Date(startISO);
+@@ -67,28 +72,46 @@ export default function DetailScreen() {
+     };
+   }, []);
+ 
++  const demoEvent = useMemo(() => {
++    if (kind === "experience" || kind === "venue") return undefined;
++    if (!id || !isShowcaseId(id)) return undefined;
++    return findShowcaseEvent(id);
++  }, [id, kind]);
++
++  const demoVenue = useMemo(() => {
++    if (!id || !isShowcaseId(id)) return undefined;
++    if (kind === "venue" || id.startsWith("demo-venue-")) return findShowcaseVenue(id);
++    return undefined;
++  }, [id, kind]);
++
+   const event = useMemo(
+-    () => (kind === "experience" ? undefined : events.find((e) => e.id === id)),
+-    [events, id, kind]
++    () =>
++      kind === "experience"
++        ? undefined
++        : (events.find((e) => e.id === id) ?? demoEvent),
++    [events, id, kind, demoEvent]
+   );
+ 
++  const isDemo = !!demoEvent || !!demoVenue;
++
+   const experience = useMemo(() => {
+-    if (event) return undefined;
++    if (event || demoVenue) return undefined;
+     return EXPERIENCES.find((e) => e.id === id);
+-  }, [event, id]);
++  }, [event, demoVenue, id]);
+ 
+   const venueName = useMemo(() => {
++    if (demoVenue) return demoVenue.name;
+     if (!event) return "";
+     const v = venues.find((x) => x.id === event.venueId || x.name === event.venueId);
+-    return v?.name ?? (event.venueId || "Venue");
+-  }, [event, venues]);
++    return v?.name ?? findShowcaseVenue(event.venueId)?.name ?? (event.venueId || "Venue");
++  }, [demoVenue, event, venues]);
+ 
+   // Favorite state for whichever item is shown.
+   useEffect(() => {
+     let alive = true;
+-    const favId = event?.id ?? experience?.id;
++    const favId = event?.id ?? demoVenue?.id ?? experience?.id;
+     if (!favId) return;
+-    isFavorite(user?.uid ?? null, "event", favId)
++    isFavorite(user?.uid ?? null, demoVenue ? "venue" : "event", favId)
+       .then((v) => {
+         if (alive) setFav(v);
+       })
+@@ -96,25 +119,33 @@ export default function DetailScreen() {
+     return () => {
+       alive = false;
+     };
+-  }, [event?.id, experience?.id, user?.uid]);
++  }, [event?.id, demoVenue?.id, experience?.id, demoVenue, user?.uid]);
+ 
+   async function onToggleFav() {
+-    const item: FavoriteItem | null = event
++    // Demo items: bookmark-only Save. Never any purchase/redeem action.
++    const item: FavoriteItem | null = demoVenue
+       ? {
+-          id: event.id,
+-          kind: "event",
+-          title: event.title,
+-          subtitle: venueName,
+-          when: formatWhen(event.startISO),
++          id: demoVenue.id,
++          kind: "venue",
++          title: demoVenue.name,
++          subtitle: "Showcase preview",
+         }
+-      : experience
++      : event
+         ? {
+-            id: experience.id,
++            id: event.id,
+             kind: "event",
+-            title: experience.title,
+-            subtitle: experience.neighborhood,
++            title: event.title,
++            subtitle: venueName,
++            when: formatWhen(event.startISO),
+           }
+-        : null;
++        : experience
++          ? {
++              id: experience.id,
++              kind: "event",
++              title: experience.title,
++              subtitle: experience.neighborhood,
++            }
++          : null;
+     if (!item) return;
+     try {
+       const nowFav = await toggleFavorite(user?.uid ?? null, item);
+@@ -159,6 +190,13 @@ export default function DetailScreen() {
+             </BrandCard>
+           ) : event ? (
+             <BrandCard>
++              {isDemo && (
++                <View style={styles.demoBadge}>
++                  <Text style={styles.demoBadgeText}>
++                    Showcase preview — not a live listing
++                  </Text>
++                </View>
++              )}
+               <Text style={styles.h2}>{event.title}</Text>
+               <Text style={styles.meta}>
+                 {venueName} • {formatWhen(event.startISO)}
+@@ -173,6 +211,25 @@ export default function DetailScreen() {
+                 ))}
+               </View>
+ 
++              <View style={styles.actionsRow}>
++                <Pressable onPress={onToggleFav} style={styles.actionBtn}>
++                  <Text style={styles.actionBtnText}>{fav ? "♥ Saved" : "♡ Save"}</Text>
++                </Pressable>
++                <Pressable onPress={openVenueEvents} style={[styles.actionBtn, styles.actionBtnGhost]}>
++                  <Text style={[styles.actionBtnText, styles.actionBtnGhostText]}>See venue events</Text>
++                </Pressable>
++              </View>
++            </BrandCard>
++          ) : demoVenue ? (
++            <BrandCard>
++              <View style={styles.demoBadge}>
++                <Text style={styles.demoBadgeText}>
++                  Showcase preview — not a live listing
++                </Text>
++              </View>
++              <Text style={styles.h2}>{demoVenue.name}</Text>
++              <Text style={styles.meta}>Showcase preview venue</Text>
++
+               <View style={styles.actionsRow}>
+                 <Pressable onPress={onToggleFav} style={styles.actionBtn}>
+                   <Text style={styles.actionBtnText}>{fav ? "♥ Saved" : "♡ Save"}</Text>
+@@ -250,6 +307,22 @@ const styles = StyleSheet.create({
+     fontWeight: "900",
+   },
+ 
++  demoBadge: {
++    alignSelf: "flex-start",
++    paddingHorizontal: 12,
++    paddingVertical: 6,
++    borderRadius: 999,
++    backgroundColor: "rgba(245,195,106,0.16)",
++    borderWidth: 1,
++    borderColor: "rgba(245,195,106,0.45)",
++    marginBottom: 10,
++  },
++  demoBadgeText: {
++    color: "#f5c36a",
++    fontSize: 12,
++    fontWeight: "900",
++  },
++
+   meta: {
+     color: theme.subtext,
+     marginTop: 8,
+diff --git a/bownd/data/showcase.ts b/bownd/data/showcase.ts
+new file mode 100644
+index 0000000..a795373
+--- /dev/null
++++ b/bownd/data/showcase.ts
+@@ -0,0 +1,385 @@
++// bownd/data/showcase.ts
++// AUTHORIZED SHOWCASE FALLBACK — demo-only sample listings.
++//
++// - These listings are shown ONLY when Firestore returns an empty catalog
++//   (no real events AND no real venues). The fallback is wholesale: demo
++//   data is NEVER mixed with real data.
++// - Demo data is NEVER written to Firestore, NEVER purchasable, NEVER
++//   redeemable, and NEVER presented as live inventory. Screens render an
++//   honest "Showcase preview" chip/badge whenever demo data is shown.
++// - All start times are computed dynamically from `new Date()` so every
++//   demo event is in the future at module load. No calendar date is
++//   hardcoded here (a hardcoded date would go stale and the Events time
++//   filters would drop past events).
++// - Demo ids are prefixed `demo-` and can never collide with Firestore
++//   doc ids. `isShowcaseId()` is the single check for demo identity.
++// - Venue lat/lng are approximate downtown-KC coordinates, flagged demo,
++//   display-only. Nothing renders maps from them.
++
++import type { EventItem, Venue } from "../lib/store";
++
++// ---------------------------------------------------------------------------
++// Types
++// ---------------------------------------------------------------------------
++
++export type ShowcaseEvent = EventItem & { isDemo: true; featured?: boolean };
++export type ShowcaseVenue = Venue & { isDemo: true; featured?: boolean };
++
++// ---------------------------------------------------------------------------
++// Dynamic date helpers — every result is in the future at call time.
++// ---------------------------------------------------------------------------
++
++function atDay(base: Date, hour: number, minute: number): Date {
++  const d = new Date(base);
++  d.setHours(hour, minute, 0, 0);
++  return d;
++}
++
++/** Today at hour:minute, or tomorrow at that time if it already passed. */
++function tonightAt(hour: number, minute: number): Date {
++  const now = new Date();
++  const t = atDay(now, hour, minute);
++  if (t.getTime() <= now.getTime()) {
++    t.setDate(t.getDate() + 1);
++  }
++  return t;
++}
++
++/** Tomorrow at hour:minute (always in the future). */
++function tomorrowAt(hour: number, minute: number): Date {
++  const now = new Date();
++  const t = atDay(now, hour, minute);
++  t.setDate(t.getDate() + 1);
++  return t;
++}
++
++/**
++ * Next occurrence of the given weekday (0 = Sunday … 6 = Saturday) at
++ * hour:minute. If today is that weekday and the time is still ahead, it
++ * is today; otherwise it is the following week's occurrence.
++ */
++function nextWeekdayAt(weekday: number, hour: number, minute: number): Date {
++  const now = new Date();
++  const today = atDay(now, hour, minute);
++  let diff = (weekday - now.getDay() + 7) % 7;
++  if (diff === 0 && today.getTime() <= now.getTime()) diff = 7;
++  const t = atDay(now, hour, minute);
++  t.setDate(t.getDate() + diff);
++  return t;
++}
++
++// ---------------------------------------------------------------------------
++// Demo venues (6)
++// ---------------------------------------------------------------------------
++
++const SHOWCASE_VENUES: ShowcaseVenue[] = [
++  {
++    id: "demo-venue-chicken-n-pickle",
++    name: "Chicken N Pickle",
++    lat: 39.11,
++    lng: -94.58,
++    isDemo: true,
++  },
++  {
++    id: "demo-venue-green-lady",
++    name: "Green Lady Lounge",
++    lat: 39.099,
++    lng: -94.578,
++    isDemo: true,
++  },
++  {
++    id: "demo-venue-kc-winery",
++    name: "KC Winery",
++    lat: 39.1,
++    lng: -94.57,
++    isDemo: true,
++  },
++  {
++    id: "demo-venue-arvest",
++    name: "Arvest Bank Theatre",
++    lat: 39.099,
++    lng: -94.58,
++    isDemo: true,
++  },
++  {
++    id: "demo-venue-city-market",
++    name: "City Market",
++    lat: 39.11,
++    lng: -94.58,
++    isDemo: true,
++  },
++  {
++    id: "demo-venue-comedy-cabaret",
++    name: "KC Comedy Cabaret",
++    lat: 39.1,
++    lng: -94.58,
++    isDemo: true,
++  },
++];
++
++// ---------------------------------------------------------------------------
++// Demo events (10) — start times computed dynamically, always future.
++// ---------------------------------------------------------------------------
++
++const SHOWCASE_EVENTS: ShowcaseEvent[] = [
++  {
++    id: "demo-event-pickleball",
++    title: "Family Fun Pickleball Night",
++    venueId: "demo-venue-chicken-n-pickle",
++    startISO: tonightAt(19, 0).toISOString(),
++    category: "spotlight",
++    vibeTags: ["Sporty", "Fun"],
++    audienceTags: ["Parents", "Family"],
++    priceLabel: "$",
++    isDemo: true,
++    featured: true,
++  },
++  {
++    id: "demo-event-jazz",
++    title: "Jazz + Cocktails",
++    venueId: "demo-venue-green-lady",
++    startISO: tonightAt(21, 0).toISOString(),
++    category: "spotlight",
++    vibeTags: ["Relaxed", "Music"],
++    audienceTags: ["Couples"],
++    priceLabel: "$$",
++    isDemo: true,
++  },
++  {
++    id: "demo-event-yoga-wine",
++    title: "Yoga & Wine Night",
++    venueId: "demo-venue-kc-winery",
++    startISO: tomorrowAt(18, 30).toISOString(),
++    category: "standard",
++    vibeTags: ["Wellness", "Wine"],
++    audienceTags: ["Couples"],
++    priceLabel: "$$",
++    isDemo: true,
++  },
++  {
++    id: "demo-event-comedy",
++    title: "Stand-Up Showcase",
++    venueId: "demo-venue-comedy-cabaret",
++    startISO: tonightAt(20, 0).toISOString(),
++    category: "standard",
++    vibeTags: ["Fun", "Comedy"],
++    audienceTags: ["Singles", "Couples"],
++    priceLabel: "$$",
++    isDemo: true,
++  },
++  {
++    id: "demo-event-farmers-market",
++    title: "Saturday Farmers Market & Live Music",
++    venueId: "demo-venue-city-market",
++    startISO: nextWeekdayAt(6, 9, 0).toISOString(),
++    category: "standard",
++    vibeTags: ["Fun", "Music"],
++    audienceTags: ["Family", "Parents"],
++    priceLabel: "Free",
++    isDemo: true,
++  },
++  {
++    id: "demo-event-indie",
++    title: "Live Indie Night",
++    venueId: "demo-venue-arvest",
++    startISO: nextWeekdayAt(5, 20, 0).toISOString(),
++    category: "standard",
++    vibeTags: ["Music"],
++    audienceTags: ["Couples", "Singles"],
++    priceLabel: "$$",
++    isDemo: true,
++  },
++  {
++    id: "demo-event-date-duel",
++    title: "Date Night Duel",
++    venueId: "demo-venue-chicken-n-pickle",
++    startISO: tomorrowAt(19, 0).toISOString(),
++    category: "standard",
++    vibeTags: ["Sporty", "Fun"],
++    audienceTags: ["Couples"],
++    priceLabel: "$",
++    isDemo: true,
++  },
++  {
++    id: "demo-event-sunset-sips",
++    title: "Sunset Sips",
++    venueId: "demo-venue-kc-winery",
++    startISO: nextWeekdayAt(6, 18, 0).toISOString(),
++    category: "standard",
++    vibeTags: ["Wine", "Relaxed"],
++    audienceTags: ["Couples"],
++    priceLabel: "$$",
++    isDemo: true,
++  },
++  {
++    id: "demo-event-jazz-brunch",
++    title: "Sunday Jazz Brunch",
++    venueId: "demo-venue-green-lady",
++    startISO: nextWeekdayAt(0, 11, 0).toISOString(),
++    category: "standard",
++    vibeTags: ["Relaxed", "Music"],
++    audienceTags: ["Couples", "Family"],
++    priceLabel: "$$",
++    isDemo: true,
++  },
++  {
++    id: "demo-event-improv",
++    title: "Family Improv Matinee",
++    venueId: "demo-venue-comedy-cabaret",
++    startISO: nextWeekdayAt(6, 14, 0).toISOString(),
++    category: "standard",
++    vibeTags: ["Fun", "Comedy"],
++    audienceTags: ["Family", "Parents", "Kids"],
++    priceLabel: "$",
++    isDemo: true,
++  },
++];
++
++export function getShowcaseEvents(): ShowcaseEvent[] {
++  return [...SHOWCASE_EVENTS];
++}
++
++export function getShowcaseVenues(): ShowcaseVenue[] {
++  return [...SHOWCASE_VENUES];
++}
++
++// ---------------------------------------------------------------------------
++// Demo identity + lookup
++// ---------------------------------------------------------------------------
++
++export function isShowcaseId(id: string): boolean {
++  return id.startsWith("demo-");
++}
++
++export function findShowcaseEvent(id: string): ShowcaseEvent | undefined {
++  return SHOWCASE_EVENTS.find((e) => e.id === id);
++}
++
++export function findShowcaseVenue(id: string): ShowcaseVenue | undefined {
++  return SHOWCASE_VENUES.find((v) => v.id === id || v.name === id);
++}
++
++// ---------------------------------------------------------------------------
++// Featured playlists
++// ---------------------------------------------------------------------------
++
++export type Playlist = {
++  id: string;
++  title: string;
++  subtitle: string;
++  itemIds: string[];
++  match: (e: EventItem, venueName: string) => boolean;
++};
++
++export type ResolvedPlaylistItem =
++  | { kind: "event"; event: EventItem }
++  | { kind: "venue"; venue: Venue };
++
++export type ResolvedPlaylist = {
++  id: string;
++  title: string;
++  subtitle: string;
++  items: ResolvedPlaylistItem[];
++};
++
++function sameCalendarDay(a: Date, b: Date): boolean {
++  return (
++    a.getFullYear() === b.getFullYear() &&
++    a.getMonth() === b.getMonth() &&
++    a.getDate() === b.getDate()
++  );
++}
++
++function startsToday(e: EventItem): boolean {
++  const d = new Date(e.startISO);
++  if (Number.isNaN(d.getTime())) return false;
++  return sameCalendarDay(d, new Date());
++}
++
++function hasTag(tags: string[] | undefined, ...wanted: string[]): boolean {
++  const lower = (tags || []).map((t) => t.toLowerCase());
++  return wanted.some((w) => lower.includes(w.toLowerCase()));
++}
++
++export const PLAYLISTS: Playlist[] = [
++  {
++    id: "tonight-in-kc",
++    title: "Tonight in KC",
++    subtitle: "Happening tonight",
++    itemIds: ["demo-event-pickleball", "demo-event-jazz", "demo-event-comedy"],
++    match: (e) => startsToday(e),
++  },
++  {
++    id: "date-night",
++    title: "Date Night",
++    subtitle: "Couples picks",
++    itemIds: [
++      "demo-event-jazz",
++      "demo-event-yoga-wine",
++      "demo-event-sunset-sips",
++      "demo-event-date-duel",
++    ],
++    match: (e) =>
++      hasTag(e.audienceTags, "Couples") || hasTag(e.vibeTags, "Wine"),
++  },
++  {
++    id: "family-fun",
++    title: "Family Fun",
++    subtitle: "Bring the whole crew",
++    itemIds: [
++      "demo-event-pickleball",
++      "demo-event-farmers-market",
++      "demo-event-improv",
++    ],
++    match: (e) => hasTag(e.audienceTags, "Family", "Parents", "Kids"),
++  },
++];
++
++function venueNameFor(venueId: string, venues: Venue[]): string {
++  const v = venues.find((x) => x.id === venueId || x.name === venueId);
++  return v?.name ?? (venueId || "Venue");
++}
++
++/**
++ * Resolve playlists against a catalog (events AND venues).
++ * - itemIds resolve first (events, then venues).
++ * - Then catalog events matching the playlist predicate are added.
++ * - Deduped by kind+id. Only playlists with >= 1 item are returned.
++ * - Venue entries resolve from itemIds ONLY (demo-mode only: no
++ *   predicate ever adds a venue — predicates match events).
++ */
++export function resolvePlaylists(
++  events: EventItem[],
++  venues: Venue[]
++): ResolvedPlaylist[] {
++  const out: ResolvedPlaylist[] = [];
++  for (const p of PLAYLISTS) {
++    const items: ResolvedPlaylistItem[] = [];
++    const seen = new Set<string>();
++    for (const id of p.itemIds) {
++      const ev = events.find((e) => e.id === id);
++      if (ev) {
++        items.push({ kind: "event", event: ev });
++        seen.add(`event:${ev.id}`);
++        continue;
++      }
++      const venue = venues.find((v) => v.id === id || v.name === id);
++      if (venue) {
++        items.push({ kind: "venue", venue });
++        seen.add(`venue:${venue.id}`);
++      }
++    }
++    for (const e of events) {
++      const key = `event:${e.id}`;
++      if (seen.has(key)) continue;
++      if (p.match(e, venueNameFor(e.venueId, venues))) {
++        items.push({ kind: "event", event: e });
++        seen.add(key);
++      }
++    }
++    if (items.length >= 1) {
++      out.push({ id: p.id, title: p.title, subtitle: p.subtitle, items });
++    }
++  }
++  return out;
++}
+diff --git a/bownd/lib/store.ts b/bownd/lib/store.ts
+index 41b894f..a41c2be 100644
+--- a/bownd/lib/store.ts
++++ b/bownd/lib/store.ts
+@@ -59,6 +59,9 @@ export type EventItem = {
+   vibeTags: string[];
+   audienceTags: string[];
+   priceLabel: string;
++  // Featured placement flag for paid featured placement (monetization
++  // structure, no billing). Optional: absent/false means not featured.
++  featured?: boolean;
+ };
+ 
+ export type Venue = {
+@@ -66,6 +69,9 @@ export type Venue = {
+   name: string;
+   lat: number;
+   lng: number;
++  // Featured placement flag for paid featured placement (monetization
++  // structure, no billing). Optional: absent/false means not featured.
++  featured?: boolean;
+ };
+ 
+ export type UserProfile = {
+@@ -137,6 +143,7 @@ function toEventItem(id: string, data: any): EventItem {
+     vibeTags: Array.isArray(data.vibeTags) ? data.vibeTags : [],
+     audienceTags: Array.isArray(data.audienceTags) ? data.audienceTags : [],
+     priceLabel: typeof data.priceLabel === "string" ? data.priceLabel : "",
++    featured: data.featured === true,
+   };
+ }
+ 
+@@ -146,6 +153,7 @@ function toVenue(id: string, data: any): Venue {
+     name: typeof data.name === "string" ? data.name : id,
+     lat: typeof data.lat === "number" ? data.lat : 0,
+     lng: typeof data.lng === "number" ? data.lng : 0,
++    featured: data.featured === true,
+   };
+ }
+ 
+-- 
+2.43.0
+

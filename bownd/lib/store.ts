@@ -20,6 +20,8 @@ import {
   doc,
   getDoc,
   getDocs,
+  query,
+  where,
   setDoc,
   deleteDoc,
   serverTimestamp,
@@ -47,6 +49,28 @@ export function tierFor(points: number): Tier {
 }
 
 // ---------------------------------------------------------------------------
+// Operator-only test data
+// ---------------------------------------------------------------------------
+
+/**
+ * The operator's Bownd sign-in email. Test items (isTest) are visible
+ * ONLY to this account — everyone else never receives them from
+ * fetchEvents/fetchVenues. The Firestore rules now enforce the same
+ * boundary server-side (bownd/firestore.rules: public read requires a
+ * non-test doc, venues also `verified`; test docs are operator-only).
+ * Rules are not filters, though: a list query is allowed only when
+ * its where() constraints prove every returned doc passes, so the
+ * non-operator fetches below query with isTest == false (venues also
+ * verified == true) and this client-side filter remains as a second
+ * layer. The rules deploy and this query change must ship together.
+ */
+export const OPERATOR_EMAIL = "mr.marshall3@yahoo.com";
+
+export function isOperatorEmail(email: string | null | undefined): boolean {
+  return !!email && email.trim().toLowerCase() === OPERATOR_EMAIL;
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -62,6 +86,27 @@ export type EventItem = {
   // Featured placement flag for paid featured placement (monetization
   // structure, no billing). Optional: absent/false means not featured.
   featured?: boolean;
+  // Real venue-supplied photo URL. Optional: when absent, cards fall back
+  // to the TEMP abstract placeholder art (see lib/placeholders.ts) —
+  // never a hotlink, never presented as a real photo unless it is one.
+  photoUrl?: string;
+  // Operator-only test flag: true means this item is test data, visible
+  // only to the operator and labeled "Test" in the UI. Never counted
+  // in revenue/analytics (Bownd has none) and never shown to others.
+  isTest?: boolean;
+  // Discovered (external, web-sourced) event — LINK-OUT ONLY. True means
+  // this listing came from an outside source, is NOT Bownd inventory,
+  // and must never be sold, ticketed, redeemed, featured, or playlisted
+  // in the app. It renders ONLY in the Events tab's All Events list,
+  // labeled "From the web · <sourceName>", and tapping it opens
+  // sourceUrl externally instead of the in-app detail/purchase flow.
+  discovered?: boolean;
+  // Human-readable source name for a discovered event (e.g. the site or
+  // organizer page it was found on). Shown in the "From the web" label.
+  sourceName?: string;
+  // Canonical URL of the event at its source. Discovered events link
+  // OUT to this URL; Bownd never hosts their ticketing.
+  sourceUrl?: string;
 };
 
 export type Venue = {
@@ -72,6 +117,15 @@ export type Venue = {
   // Featured placement flag for paid featured placement (monetization
   // structure, no billing). Optional: absent/false means not featured.
   featured?: boolean;
+  // Real venue-supplied photo URL. Optional: when absent, cards fall back
+  // to the TEMP abstract placeholder art (see lib/placeholders.ts).
+  photoUrl?: string;
+  // Operator-only test flag — see EventItem.isTest.
+  isTest?: boolean;
+  // Verification gate: true when the venue passed operator verification
+  // (bownd-sync writes this from venues.verification_status). Verified
+  // venues show a "✓ Verified" badge in the UI.
+  verified?: boolean;
 };
 
 export type UserProfile = {
@@ -144,6 +198,11 @@ function toEventItem(id: string, data: any): EventItem {
     audienceTags: Array.isArray(data.audienceTags) ? data.audienceTags : [],
     priceLabel: typeof data.priceLabel === "string" ? data.priceLabel : "",
     featured: data.featured === true,
+    photoUrl: typeof data.photoUrl === "string" ? data.photoUrl : undefined,
+    isTest: data.isTest === true,
+    discovered: data.discovered === true,
+    sourceName: typeof data.sourceName === "string" ? data.sourceName : undefined,
+    sourceUrl: typeof data.sourceUrl === "string" ? data.sourceUrl : undefined,
   };
 }
 
@@ -154,6 +213,9 @@ function toVenue(id: string, data: any): Venue {
     lat: typeof data.lat === "number" ? data.lat : 0,
     lng: typeof data.lng === "number" ? data.lng : 0,
     featured: data.featured === true,
+    photoUrl: typeof data.photoUrl === "string" ? data.photoUrl : undefined,
+    isTest: data.isTest === true,
+    verified: data.verified === true,
   };
 }
 
@@ -161,23 +223,44 @@ function toVenue(id: string, data: any): Venue {
 // Events & venues — Firestore only. Empty/unconfigured/error => [].
 // ---------------------------------------------------------------------------
 
-export async function fetchEvents(): Promise<EventItem[]> {
+export async function fetchEvents(viewerEmail?: string | null): Promise<EventItem[]> {
   if (!db) return [];
   try {
-    const snap = await getDocs(collection(db, "events"));
+    // Non-operator queries must carry the isTest == false constraint
+    // so the Firestore rules can prove the list is public-only (rules
+    // are not filters — an unfiltered non-operator list is denied).
+    const snap = await getDocs(
+      isOperatorEmail(viewerEmail)
+        ? collection(db, "events")
+        : query(collection(db, "events"), where("isTest", "==", false)),
+    );
     if (snap.empty) return [];
-    return snap.docs.map((d) => toEventItem(d.id, d.data()));
+    const rows = snap.docs.map((d) => toEventItem(d.id, d.data()));
+    // Operator-only test data: non-operators never receive test items.
+    return isOperatorEmail(viewerEmail) ? rows : rows.filter((r) => !r.isTest);
   } catch {
     return [];
   }
 }
 
-export async function fetchVenues(): Promise<Venue[]> {
+export async function fetchVenues(viewerEmail?: string | null): Promise<Venue[]> {
   if (!db) return [];
   try {
-    const snap = await getDocs(collection(db, "venues"));
+    // Same rules-proof constraint as fetchEvents, plus verified ==
+    // true: a public venue is a non-test, verified doc (see
+    // bownd/firestore.rules isPublicVenue).
+    const snap = await getDocs(
+      isOperatorEmail(viewerEmail)
+        ? collection(db, "venues")
+        : query(
+            collection(db, "venues"),
+            where("isTest", "==", false),
+            where("verified", "==", true),
+          ),
+    );
     if (snap.empty) return [];
-    return snap.docs.map((d) => toVenue(d.id, d.data()));
+    const rows = snap.docs.map((d) => toVenue(d.id, d.data()));
+    return isOperatorEmail(viewerEmail) ? rows : rows.filter((r) => !r.isTest);
   } catch {
     return [];
   }

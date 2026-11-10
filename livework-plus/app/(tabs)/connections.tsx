@@ -26,6 +26,7 @@ import {
 import { THEME } from "../../lib/theme";
 import { supabase } from "../../lib/supabase";
 import ForgeGate from "../../components/ForgeGate";
+import TopTabs from "../../components/TopTabs";
 import {
   POLL_INTERVAL_MS,
   addDaysISO,
@@ -289,6 +290,7 @@ function ConnectionContent() {
       <Text style={styles.sub}>
         Weekly check-ins, gift ideas, and little things she says. Private — operator only.
       </Text>
+      <TopTabs />
 
       {!!formError && (
         <View style={[styles.card, styles.errorCard]}>

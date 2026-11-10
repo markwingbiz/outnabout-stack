@@ -12,7 +12,7 @@
 //   curated entry has one. No buttons are decorative: every pressable
 //   does something real.
 import React, { useEffect, useMemo, useState } from "react";
-import { SafeAreaView, View, Text, StyleSheet, ScrollView, Pressable, Alert } from "react-native";
+import { SafeAreaView, View, Text, StyleSheet, ScrollView, Pressable, Alert, ImageBackground } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Linking from "expo-linking";
 import { BrandBackground } from "./ui/BrandBackground";
@@ -30,11 +30,18 @@ import {
   type FavoriteItem,
 } from "../lib/store";
 import { useAuth } from "../lib/auth";
+import { maybeAskForPushPermission } from "../lib/push";
 import {
   findShowcaseEvent,
   findShowcaseVenue,
   isShowcaseId,
 } from "../data/showcase";
+import {
+  resolveCardImage,
+  categoryForVenueName,
+  categoryForText,
+  resolveEventCardImage,
+} from "../lib/placeholders";
 
 function formatWhen(startISO: string) {
   const d = new Date(startISO);
@@ -60,7 +67,9 @@ export default function DetailScreen() {
 
   useEffect(() => {
     let alive = true;
-    Promise.all([fetchEvents(), fetchVenues()]).then(([rows, venueRows]) => {
+    // Pass the viewer's email so operator-only test items are visible
+    // only to the operator (store.ts filters for everyone else).
+    Promise.all([fetchEvents(user?.email ?? null), fetchVenues(user?.email ?? null)]).then(([rows, venueRows]) => {
       if (alive) {
         setEvents(rows);
         setVenues(venueRows);
@@ -70,7 +79,7 @@ export default function DetailScreen() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [user?.email]);
 
   const demoEvent = useMemo(() => {
     if (kind === "experience" || kind === "venue") return undefined;
@@ -150,13 +159,31 @@ export default function DetailScreen() {
     try {
       const nowFav = await toggleFavorite(user?.uid ?? null, item);
       setFav(nowFav);
+      // Plan §1.2 fallback moment: favoriting an event is the in-context
+      // permission ask (fires at most once; never after a refusal).
+      if (nowFav && item.kind === "event") {
+        void maybeAskForPushPermission(user?.uid ?? null);
+      }
     } catch {
       Alert.alert("Could not save favorite", "Try again.");
     }
   }
 
   function openVenueEvents() {
-    router.push({ pathname: "/(tabs)/events", params: { venue: venueName } });
+    // Pass the venue's Firestore doc id (exact match) AND its display
+    // name (chip label + legacy name matching). The Events tab matches
+    // by id first, so this always lands on the correct venue even when
+    // the event's venueId is a legacy name.
+    const venue = demoVenue
+      ? undefined
+      : venues.find((x) => x.id === event?.venueId || x.name === event?.venueId);
+    router.push({
+      pathname: "/(tabs)/events",
+      params: {
+        venueId: demoVenue ? demoVenue.id : (venue?.id ?? event?.venueId ?? ""),
+        venue: venueName,
+      },
+    });
   }
 
   async function openWebsite(url: string) {
@@ -197,6 +224,25 @@ export default function DetailScreen() {
                   </Text>
                 </View>
               )}
+              {event.isTest && (
+                <View style={styles.demoBadge}>
+                  <Text style={styles.demoBadgeText}>Test — operator only, not a live listing</Text>
+                </View>
+              )}
+              {event.discovered && (
+                <View style={styles.demoBadge}>
+                  <Text style={styles.demoBadgeText}>
+                    From the web{event.sourceName ? ` · ${event.sourceName}` : ""} — not sold on Bownd
+                  </Text>
+                </View>
+              )}
+              <ImageBackground
+                source={resolveEventCardImage(event.photoUrl)}
+                style={styles.detailBanner}
+                resizeMode="cover"
+              >
+                <View style={styles.detailBannerScrim} />
+              </ImageBackground>
               <Text style={styles.h2}>{event.title}</Text>
               <Text style={styles.meta}>
                 {venueName} • {formatWhen(event.startISO)}
@@ -211,14 +257,40 @@ export default function DetailScreen() {
                 ))}
               </View>
 
-              <View style={styles.actionsRow}>
-                <Pressable onPress={onToggleFav} style={styles.actionBtn}>
-                  <Text style={styles.actionBtnText}>{fav ? "♥ Saved" : "♡ Save"}</Text>
-                </Pressable>
-                <Pressable onPress={openVenueEvents} style={[styles.actionBtn, styles.actionBtnGhost]}>
-                  <Text style={[styles.actionBtnText, styles.actionBtnGhostText]}>See venue events</Text>
-                </Pressable>
-              </View>
+              {event.discovered ? (
+                // Link-out ONLY: the primary action opens the event at
+                // its source. No "See venue events" (a discovered listing
+                // has no Bownd venue) and never any purchase/redeem UI.
+                <View style={styles.actionsRow}>
+                  {!!event.sourceUrl && (
+                    <Pressable
+                      onPress={() => openWebsite(event.sourceUrl as string)}
+                      style={styles.actionBtn}
+                    >
+                      <Text style={styles.actionBtnText}>
+                        View at {event.sourceName ?? "source"}
+                      </Text>
+                    </Pressable>
+                  )}
+                  <Pressable
+                    onPress={onToggleFav}
+                    style={[styles.actionBtn, styles.actionBtnGhost]}
+                  >
+                    <Text style={[styles.actionBtnText, styles.actionBtnGhostText]}>
+                      {fav ? "♥ Saved" : "♡ Save"}
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <View style={styles.actionsRow}>
+                  <Pressable onPress={onToggleFav} style={styles.actionBtn}>
+                    <Text style={styles.actionBtnText}>{fav ? "♥ Saved" : "♡ Save"}</Text>
+                  </Pressable>
+                  <Pressable onPress={openVenueEvents} style={[styles.actionBtn, styles.actionBtnGhost]}>
+                    <Text style={[styles.actionBtnText, styles.actionBtnGhostText]}>See venue events</Text>
+                  </Pressable>
+                </View>
+              )}
             </BrandCard>
           ) : demoVenue ? (
             <BrandCard>
@@ -227,6 +299,13 @@ export default function DetailScreen() {
                   Showcase preview — not a live listing
                 </Text>
               </View>
+              <ImageBackground
+                source={resolveCardImage(demoVenue.photoUrl, categoryForVenueName(demoVenue.name))}
+                style={styles.detailBanner}
+                resizeMode="cover"
+              >
+                <View style={styles.detailBannerScrim} />
+              </ImageBackground>
               <Text style={styles.h2}>{demoVenue.name}</Text>
               <Text style={styles.meta}>Showcase preview venue</Text>
 
@@ -241,6 +320,16 @@ export default function DetailScreen() {
             </BrandCard>
           ) : experience ? (
             <BrandCard>
+              <ImageBackground
+                source={resolveCardImage(
+                  undefined,
+                  categoryForText(experience.title, ...experience.vibes, ...experience.personas)
+                )}
+                style={styles.detailBanner}
+                resizeMode="cover"
+              >
+                <View style={styles.detailBannerScrim} />
+              </ImageBackground>
               <Text style={styles.h2}>{experience.title}</Text>
               <Text style={styles.meta}>
                 {experience.neighborhood} • {experience.price} • {experience.duration}
@@ -305,6 +394,20 @@ const styles = StyleSheet.create({
     color: theme.text,
     fontSize: 22,
     fontWeight: "900",
+  },
+
+  // Detail header image: TEMP placeholder art (or the listing's real photo
+  // when one exists) above the title. No text sits on the image, so the
+  // scrim is only a light darkening for a finished look.
+  detailBanner: {
+    height: 180,
+    borderRadius: 14,
+    overflow: "hidden",
+    marginBottom: 14,
+  },
+  detailBannerScrim: {
+    flex: 1,
+    backgroundColor: "rgba(8,5,18,0.18)",
   },
 
   demoBadge: {

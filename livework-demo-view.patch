@@ -1,0 +1,470 @@
+diff --git a/livework/app/index.tsx b/livework/app/index.tsx
+index a9ed625..3c5d034 100644
+--- a/livework/app/index.tsx
++++ b/livework/app/index.tsx
+@@ -4,15 +4,20 @@
+ // mobile navigation kept).
+ //
+ // Every section shows live Supabase data or an explicit empty state.
+-// No demo data, no fake numbers. The reference's figures (28 events,
+-// 1,243 tickets, $23,892 revenue, $34.50 avg ticket, 89% attendance,
+-// Brickhouse / Brooklyn / Alex Thompson, Indie Fridays $4,560, …)
+-// are MOCKUP and are never shown. Ticket/revenue/attendance metrics
+-// have no backing (Livework has no ticketing) — those cards are
+-// omitted with an honest note, never invented numbers and never 0
+-// presented as sales. Projections / Audience / Smart Suggestions
+-// have no backing data — honest empty states, never invented
+-// forecasts, demographics, or suggestions.
++// No demo data, no fake numbers — EXCEPT the operator-only demo mode
++// (lib/demo.ts): when the operator toggles "Preview demo", the whole
++// dashboard swaps to a bundled, clearly-labeled sample dataset so
++// Livework looks full when shown to someone. Demo mode never mixes
++// with real data, never counts toward real metrics, shows $0 revenue,
++// and demo rows have no Edit/Delete/publish/export. The reference's
++// figures (28 events, 1,243 tickets, $23,892 revenue, $34.50 avg
++// ticket, 89% attendance, Brickhouse / Brooklyn / Alex Thompson,
++// Indie Fridays $4,560, …) are MOCKUP and are never shown.
++// Ticket/revenue/attendance metrics have no backing (Livework has no
++// ticketing) — those cards are omitted with an honest note, never
++// invented numbers and never 0 presented as sales. Projections /
++// Audience / Smart Suggestions have no backing data — honest empty
++// states, never invented forecasts, demographics, or suggestions.
+ //
+ // Requires phase-a-ui Auth (<AuthProvider> in app/_layout.tsx).
+ import React, { useCallback, useEffect, useState } from "react";
+@@ -40,6 +45,12 @@ import {
+   type DashboardEvent,
+   type RangeKey,
+ } from "../lib/data";
++import {
++  buildDemoDashboard,
++  DEMO_REDEMPTION_COUNT,
++  DEMO_VENUE_COUNT,
++  isOperatorEmail,
++} from "../lib/demo";
+ import { useAuth } from "../lib/auth";
+ import { supabase } from "../lib/supabase";
+ import { getUserTenantIds, getUserVenues } from "../lib/tenant";
+@@ -90,9 +101,24 @@ export default function DashboardScreen() {
+   const [expandedId, setExpandedId] = useState<string | null>(null);
+   const [venueCount, setVenueCount] = useState<number | null>(null);
+   const [redemptionCount, setRedemptionCount] = useState<number | null>(null);
++  // Demo mode: operator-only showcase view (lib/demo.ts). Session-only
++  // state — every fresh open starts on REAL data. While demo is on, no
++  // Supabase queries run and nothing on screen is real data.
++  const [demoOn, setDemoOn] = useState(false);
++  const isOperator = isOperatorEmail(session?.user?.email ?? null);
+ 
+   const refresh = useCallback(async () => {
+     setLoading(true);
++    if (demoOn) {
++      // Demo: bundled sample dataset only — no Supabase reads, no real
++      // rows. Counts are the demo constants, never real metrics.
++      const userName = session?.user?.email?.split("@")[0] ?? "there";
++      setData(buildDemoDashboard(range, userName));
++      setVenueCount(DEMO_VENUE_COUNT);
++      setRedemptionCount(DEMO_REDEMPTION_COUNT);
++      setLoading(false);
++      return;
++    }
+     const d = await fetchDashboard(range);
+     setData(d);
+     // Venue + redemption counts: real rows only, same queries the
+@@ -121,7 +147,7 @@ export default function DashboardScreen() {
+       setRedemptionCount(null);
+     }
+     setLoading(false);
+-  }, [range]);
++  }, [range, demoOn, session?.user?.email]);
+ 
+   useEffect(() => {
+     if (session) void refresh();
+@@ -130,16 +156,25 @@ export default function DashboardScreen() {
+ 
+   // Per-section fetches: each section reuses fetchDashboard with its OWN
+   // range and renders only its own fields, so the sections are truly
+-  // independent of each other and of the global range.
++  // independent of each other and of the global range. In demo mode the
++  // sections use the same bundled sample dataset.
+   const refreshActivity = useCallback(async () => {
++    if (demoOn) {
++      setActivityData(buildDemoDashboard(activityRange, session?.user?.email?.split("@")[0] ?? "there"));
++      return;
++    }
+     const d = await fetchDashboard(activityRange);
+     setActivityData(d);
+-  }, [activityRange]);
++  }, [activityRange, demoOn, session?.user?.email]);
+ 
+   const refreshTop = useCallback(async () => {
++    if (demoOn) {
++      setTopData(buildDemoDashboard(topRange, session?.user?.email?.split("@")[0] ?? "there"));
++      return;
++    }
+     const d = await fetchDashboard(topRange);
+     setTopData(d);
+-  }, [topRange]);
++  }, [topRange, demoOn, session?.user?.email]);
+ 
+   useEffect(() => {
+     if (session) void refreshActivity();
+@@ -151,6 +186,12 @@ export default function DashboardScreen() {
+ 
+   async function onExport() {
+     if (!data) return;
++    // Demo data must never leave the app as if it were real: exporting
++    // sample rows could be mistaken for a real export.
++    if (demoOn) {
++      Alert.alert("Demo data can't be exported", "Switch back to your real data to export.");
++      return;
++    }
+     if (data.events.length === 0 && data.verifiedRevenue === 0) {
+       Alert.alert("Nothing to export yet", "No events or verified revenue in this range.");
+       return;
+@@ -179,6 +220,12 @@ export default function DashboardScreen() {
+   // RLS restricts deletes to the vendor's tenants; the list only shows
+   // the vendor's own events, so this can only delete their own rows.
+   async function onDeleteEvent(e: Pick<DashboardEvent, "id" | "title">) {
++    // Defense in depth: demo rows have no Delete button, but a delete
++    // call for a demo id must never reach Supabase.
++    if (demoOn || e.id.startsWith("demo-")) {
++      Alert.alert("Sample event", "Demo data can't be deleted.");
++      return;
++    }
+     Alert.alert("Delete event?", `Delete "${e.title}"? This cannot be undone.`, [
+       { text: "Cancel", style: "cancel" },
+       {
+@@ -255,6 +302,32 @@ export default function DashboardScreen() {
+           </Pressable>
+         </View>
+ 
++        {/* Operator-only demo toggle. While demo is on, the whole
++            dashboard shows the bundled sample dataset (lib/demo.ts)
++            — no real queries run and nothing on screen is real. */}
++        {isOperator && (
++          <Pressable
++            style={[styles.demoToggleBtn, demoOn && styles.demoToggleBtnActive]}
++            onPress={() => setDemoOn((v) => !v)}
++          >
++            <Text style={styles.demoToggleText}>
++              {demoOn ? "Exit demo — back to real data" : "Preview demo"}
++            </Text>
++          </Pressable>
++        )}
++
++        {/* DEMO banner — always visible while demo is on so sample data
++            can never be mistaken for real data. */}
++        {demoOn && (
++          <View style={styles.demoBanner}>
++            <Text style={styles.demoBannerTitle}>DEMO — sample data, not real</Text>
++            <Text style={styles.demoBannerText}>
++              Nothing here is your real venue data. Demo events can&apos;t be edited,
++              deleted, published, or exported, and demo revenue is never earnings.
++            </Text>
++          </View>
++        )}
++
+         <View style={styles.headerRow}>
+           <Pressable style={styles.rangeBtn} onPress={() => setRangePickerOpen((v) => !v)}>
+             <Text style={styles.rangeText}>{data?.rangeLabel ?? "Next 7 days"}</Text>
+@@ -508,21 +581,29 @@ export default function DashboardScreen() {
+                           not hidden behind the expand. The expand only
+                           reveals the detail fields. Previously the actions
+                           showed only after tapping a row (chevron hint
+-                          only), so events looked uneditable. */}
+-                      <View style={styles.eventActions}>
+-                        <Pressable
+-                          style={styles.actionBtn}
+-                          onPress={() => router.push(`/edit-event?id=${e.id}`)}
+-                        >
+-                          <Text style={styles.actionText}>Edit</Text>
+-                        </Pressable>
+-                        <Pressable
+-                          style={[styles.actionBtn, styles.deleteBtn]}
+-                          onPress={() => void onDeleteEvent(e)}
+-                        >
+-                          <Text style={[styles.actionText, styles.deleteText]}>Delete</Text>
+-                        </Pressable>
+-                      </View>
++                          only), so events looked uneditable. In demo mode
++                          there are no Edit / Delete buttons: demo rows
++                          are sample data and can never be changed. */}
++                      {demoOn ? (
++                        <View style={styles.eventActions}>
++                          <Text style={styles.sampleBadge}>Sample</Text>
++                        </View>
++                      ) : (
++                        <View style={styles.eventActions}>
++                          <Pressable
++                            style={styles.actionBtn}
++                            onPress={() => router.push(`/edit-event?id=${e.id}`)}
++                          >
++                            <Text style={styles.actionText}>Edit</Text>
++                          </Pressable>
++                          <Pressable
++                            style={[styles.actionBtn, styles.deleteBtn]}
++                            onPress={() => void onDeleteEvent(e)}
++                          >
++                            <Text style={[styles.actionText, styles.deleteText]}>Delete</Text>
++                          </Pressable>
++                        </View>
++                      )}
+                     </View>
+                   );
+                 })
+@@ -552,15 +633,22 @@ export default function DashboardScreen() {
+                             </View>
+                             {/* Calendar rows get the same Edit / Delete as
+                                 the event list — previously the calendar
+-                                showed events with no way to act on them. */}
+-                            <View style={styles.calActions}>
+-                              <Pressable onPress={() => router.push(`/edit-event?id=${e.id}`)}>
+-                                <Text style={styles.calActionText}>Edit</Text>
+-                              </Pressable>
+-                              <Pressable onPress={() => void onDeleteEvent(e)}>
+-                                <Text style={[styles.calActionText, styles.calDeleteText]}>Delete</Text>
+-                              </Pressable>
+-                            </View>
++                                showed events with no way to act on them.
++                                In demo mode: a Sample badge instead. */}
++                            {demoOn ? (
++                              <View style={styles.calActions}>
++                                <Text style={styles.sampleBadge}>Sample</Text>
++                              </View>
++                            ) : (
++                              <View style={styles.calActions}>
++                                <Pressable onPress={() => router.push(`/edit-event?id=${e.id}`)}>
++                                  <Text style={styles.calActionText}>Edit</Text>
++                                </Pressable>
++                                <Pressable onPress={() => void onDeleteEvent(e)}>
++                                  <Text style={[styles.calActionText, styles.calDeleteText]}>Delete</Text>
++                                </Pressable>
++                              </View>
++                            )}
+                           </View>
+                         ))}
+                       </View>
+@@ -887,4 +975,24 @@ const styles = StyleSheet.create({
+     marginTop: 5,
+   },
+   activityText: { color: THEME.textMuted, fontSize: 13, flex: 1, lineHeight: 18 },
++  // Demo mode (operator-only showcase): toggle + banner + Sample badge.
++  demoToggleBtn: {
++    borderWidth: 1,
++    borderColor: "rgba(245,195,106,0.5)",
++    borderRadius: 10,
++    paddingVertical: 10,
++    alignItems: "center",
++  },
++  demoToggleBtnActive: { backgroundColor: "rgba(245,195,106,0.16)" },
++  demoToggleText: { color: "#f5c36a", fontWeight: "900", fontSize: 13 },
++  demoBanner: {
++    backgroundColor: "rgba(245,195,106,0.14)",
++    borderRadius: 12,
++    borderWidth: 1,
++    borderColor: "rgba(245,195,106,0.55)",
++    padding: 14,
++  },
++  demoBannerTitle: { color: "#f5c36a", fontSize: 15, fontWeight: "900" },
++  demoBannerText: { color: "rgba(255,255,255,0.85)", fontSize: 12, lineHeight: 17, marginTop: 6 },
++  sampleBadge: { color: "#f5c36a", fontSize: 12, fontWeight: "900" },
+ });
+diff --git a/livework/lib/demo.ts b/livework/lib/demo.ts
+new file mode 100644
+index 0000000..4a50b72
+--- /dev/null
++++ b/livework/lib/demo.ts
+@@ -0,0 +1,193 @@
++// Livework demo mode — operator-only showcase data for showing Livework
++// to someone. This is the ONLY place demo/sample data lives in
++// Livework. Rules (standing):
++// - Operator-only: the toggle renders only when the signed-in email is
++//   the operator email (see isOperatorEmail in lib/data.ts).
++// - Never mixed: demo mode REPLACES the whole dashboard view with this
++//   bundled dataset. Real queries never run while demo is on, and demo
++//   rows never enter real counts.
++// - Never counted: demo revenue is $0 with an honest note. Projections,
++//   Audience Insights, and Smart Suggestions keep their honest empty
++//   states even in demo (no invented forecasts/demographics/tips).
++// - Never actionable: demo rows have no Edit/Delete, can't be
++//   published, and can't be exported. Demo event ids use the `demo-`
++//   prefix so no demo id can ever collide with a real row id.
++// - Session-only: the toggle is in-memory state on the dashboard
++//   screen. Every fresh open starts on REAL data.
++import type { CalendarDay, DashboardData, DashboardEvent, RangeKey } from "./data";
++
++/** Operator email — the ONLY account that ever sees the demo toggle. */
++export const OPERATOR_EMAIL = "mr.marshall3@yahoo.com";
++
++export function isOperatorEmail(email: string | null | undefined): boolean {
++  return !!email && email.trim().toLowerCase() === OPERATOR_EMAIL;
++}
++
++export const DEMO_VENUE_COUNT = 3;
++export const DEMO_REDEMPTION_COUNT = 14;
++
++type SampleEvent = {
++  id: string;
++  title: string;
++  /** Days from today. */
++  dayOffset: number;
++  hour: number;
++  minute: number;
++  eventType: string;
++  priceLabel: string;
++  status: string;
++  description: string;
++};
++
++// Sample events spread across the next 30 days so every range chip
++// (Next 7 days / Next 30 days / This month / All upcoming) shows a
++// populated dashboard. Dates are computed from today at build time so
++// the demo never goes stale.
++const SAMPLE_EVENTS: SampleEvent[] = [
++  { id: "demo-1", title: "Jazz + Cocktails", dayOffset: 0, hour: 20, minute: 0, eventType: "Live music", priceLabel: "$15", status: "published", description: "Sample event — demo data, not a real listing." },
++  { id: "demo-2", title: "Indie Fridays", dayOffset: 1, hour: 19, minute: 30, eventType: "Live music", priceLabel: "$12", status: "published", description: "Sample event — demo data, not a real listing." },
++  { id: "demo-3", title: "Rooftop Sunset Social", dayOffset: 2, hour: 18, minute: 0, eventType: "Social", priceLabel: "Free", status: "published", description: "Sample event — demo data, not a real listing." },
++  { id: "demo-4", title: "KC Comedy Cabaret", dayOffset: 3, hour: 20, minute: 0, eventType: "Comedy", priceLabel: "$20", status: "published", description: "Sample event — demo data, not a real listing." },
++  { id: "demo-5", title: "Vinyl Night", dayOffset: 4, hour: 21, minute: 0, eventType: "DJ", priceLabel: "$10", status: "draft", description: "Sample event — demo data, not a real listing." },
++  { id: "demo-6", title: "Family Fun Saturday", dayOffset: 5, hour: 11, minute: 0, eventType: "Family", priceLabel: "Free", status: "published", description: "Sample event — demo data, not a real listing." },
++  { id: "demo-7", title: "Songwriter Circle", dayOffset: 6, hour: 19, minute: 0, eventType: "Live music", priceLabel: "$8", status: "published", description: "Sample event — demo data, not a real listing." },
++  { id: "demo-8", title: "Trivia Night", dayOffset: 8, hour: 19, minute: 30, eventType: "Games", priceLabel: "$5", status: "published", description: "Sample event — demo data, not a real listing." },
++  { id: "demo-9", title: "First Friday Art Walk", dayOffset: 10, hour: 18, minute: 0, eventType: "Arts", priceLabel: "Free", status: "published", description: "Sample event — demo data, not a real listing." },
++  { id: "demo-10", title: "Blues & BBQ", dayOffset: 13, hour: 17, minute: 0, eventType: "Food + Music", priceLabel: "$18", status: "draft", description: "Sample event — demo data, not a real listing." },
++  { id: "demo-11", title: "Open Mic Night", dayOffset: 17, hour: 20, minute: 0, eventType: "Open mic", priceLabel: "Free", status: "published", description: "Sample event — demo data, not a real listing." },
++  { id: "demo-12", title: "Fall Harvest Market", dayOffset: 24, hour: 10, minute: 0, eventType: "Market", priceLabel: "Free", status: "published", description: "Sample event — demo data, not a real listing." },
++];
++
++const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
++
++function windows(range: RangeKey, now: Date): { eventStart: Date; eventEnd: Date } {
++  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
++  if (range === "7d") {
++    const end = new Date(startOfToday);
++    end.setDate(end.getDate() + 7);
++    return { eventStart: startOfToday, eventEnd: end };
++  }
++  if (range === "30d") {
++    const end = new Date(startOfToday);
++    end.setDate(end.getDate() + 30);
++    return { eventStart: startOfToday, eventEnd: end };
++  }
++  if (range === "month") {
++    return {
++      eventStart: new Date(now.getFullYear(), now.getMonth(), 1),
++      eventEnd: new Date(now.getFullYear(), now.getMonth() + 1, 1),
++    };
++  }
++  return { eventStart: startOfToday, eventEnd: new Date(now.getFullYear() + 5, 0, 1) };
++}
++
++function formatDateLabel(d: Date): string {
++  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
++}
++
++function formatTime(d: Date): string {
++  return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
++}
++
++const RANGE_LABELS: Record<RangeKey, string> = {
++  "7d": "Next 7 days",
++  "30d": "Next 30 days",
++  month: "This month",
++  all: "All upcoming",
++};
++
++/**
++ * Build a DashboardData from the bundled sample dataset for the given
++ * range. Mirrors fetchDashboard's windowing/bucketing/calendar math so
++ * the demo behaves like the real dashboard — but reads nothing from
++ * Supabase and never touches real rows.
++ */
++export function buildDemoDashboard(range: RangeKey, userName: string): DashboardData {
++  const now = new Date();
++  const w = windows(range, now);
++
++  const allEvents: DashboardEvent[] = SAMPLE_EVENTS.map((e) => {
++    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + e.dayOffset, e.hour, e.minute);
++    return {
++      id: e.id,
++      title: e.title,
++      dateLabel: formatDateLabel(d),
++      startTs: d.toISOString(),
++      eventType: e.eventType,
++      priceLabel: e.priceLabel,
++      status: e.status,
++      description: e.description,
++    };
++  }).sort((a, b) => (a.startTs ?? "").localeCompare(b.startTs ?? ""));
++
++  const inWindow = allEvents.filter((e) => {
++    if (!e.startTs) return range === "all";
++    const d = new Date(e.startTs);
++    if (Number.isNaN(d.getTime())) return range === "all";
++    return d >= w.eventStart && d < w.eventEnd;
++  });
++
++  const windowMs = w.eventEnd.getTime() - w.eventStart.getTime();
++  const windowDays = Math.max(1, Math.ceil(windowMs / 86400000));
++  const bucketDays = Math.max(1, Math.ceil(windowDays / 14));
++  const bucketRanges: { label: string; start: Date; end: Date }[] = [];
++  for (
++    let start = new Date(w.eventStart);
++    start < w.eventEnd;
++    start = new Date(start.getTime() + bucketDays * 86400000)
++  ) {
++    const end = new Date(start.getTime() + bucketDays * 86400000);
++    bucketRanges.push({
++      label: start.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
++      start,
++      end,
++    });
++  }
++  const activityPoints = bucketRanges.map(({ start, end }) =>
++    inWindow.filter((e) => {
++      if (!e.startTs) return false;
++      const d = new Date(e.startTs);
++      return !Number.isNaN(d.getTime()) && d >= start && d < end;
++    }).length,
++  );
++
++  const calMap = new Map<string, CalendarDay>();
++  for (const e of inWindow) {
++    if (!e.startTs) continue;
++    const d = new Date(e.startTs);
++    if (Number.isNaN(d.getTime())) continue;
++    const key = d.toDateString();
++    const existing =
++      calMap.get(key) ??
++      {
++        day: DAY_NAMES[d.getDay()],
++        date: d.getDate(),
++        sortKey: new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(),
++        events: [],
++      };
++    existing.events.push({ id: e.id, time: formatTime(d), title: e.title });
++    calMap.set(key, existing);
++  }
++  const calendar = [...calMap.values()].sort((a, b) => a.sortKey - b.sortKey);
++
++  const latestEvents = inWindow.slice(0, 5).map((e) => `${e.title} · ${e.dateLabel}${e.status ? ` · ${e.status}` : ""}`);
++
++  return {
++    venueName: "Demo Showcase",
++    userName,
++    rangeLabel: RANGE_LABELS[range],
++    eventCount: inWindow.length,
++    // Demo revenue is ALWAYS $0: demo data must never be presented as
++    // earnings, even in showcase mode.
++    verifiedRevenue: 0,
++    activityPoints,
++    activityDays: bucketRanges.map((b) => b.label),
++    events: inWindow,
++    calendar,
++    latestEvents,
++    needsSetup: false,
++    hasVenue: true,
++    revenueScopeNote: "Demo data — revenue always shows real verified revenue only.",
++    error: null,
++  };
++}

@@ -1,0 +1,235 @@
+diff --git a/bownd/app/(tabs)/events.tsx b/bownd/app/(tabs)/events.tsx
+index fd30c56..8d48271 100644
+--- a/bownd/app/(tabs)/events.tsx
++++ b/bownd/app/(tabs)/events.tsx
+@@ -19,6 +19,7 @@ import {
+   StatusBar,
+   TouchableOpacity,
+   Alert,
++  Linking,
+ } from "react-native";
+ import { Ionicons } from "@expo/vector-icons";
+ import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
+@@ -254,6 +255,21 @@ export default function EventsScreen() {
+     router.push({ pathname: "/detail", params: { id, kind: "event" } });
+   }
+ 
++  // Discovered (web-sourced) events are LINK-OUT ONLY: tapping the card
++  // opens the event at its source in the browser. Bownd never tickets,
++  // sells, or redeems them, so they never enter the in-app detail flow
++  // from the list. No sourceUrl = no dead button: fall back to detail,
++  // which renders the "From the web" label with no action affordance.
++  function openExternal(item: EventItem) {
++    if (!item.sourceUrl) {
++      openEvent(item.id);
++      return;
++    }
++    Linking.openURL(item.sourceUrl).catch(() => {
++      Alert.alert("Cannot open link", "Something went wrong opening that website.");
++    });
++  }
++
+   function openVenue(name: string) {
+     // Look up the id so matching is exact even if two venues share a
+     // name; viewing a venue resets the time chip to "all".
+@@ -284,8 +300,12 @@ export default function EventsScreen() {
+     }
+   }
+ 
++  // Spotlight + Tailored are curated placement rails: discovered
++  // (link-out-only) events are excluded from both. They appear ONLY in
++  // the All Events list below.
+   const spotlight = useMemo(() => {
+     return effEvents
++      .filter((e) => !e.discovered)
+       .filter((e) => e.category === "spotlight")
+       .filter((e) => inTimeWindow(e, "week"))
+       .slice(0, 10);
+@@ -293,6 +313,7 @@ export default function EventsScreen() {
+ 
+   const tailored = useMemo(() => {
+     return effEvents
++      .filter((e) => !e.discovered)
+       .filter((e) => inTimeWindow(e, "week"))
+       .filter((e) => matchesPersona(e, persona))
+       .slice(0, 10);
+@@ -503,13 +524,21 @@ export default function EventsScreen() {
+               style={styles.bigRow}
+               contentStyle={styles.bigRowContent}
+             >
+-              <TouchableOpacity onPress={() => openEvent(item.id)} style={StyleSheet.absoluteFill} />
++              <TouchableOpacity
++                onPress={() => (item.discovered ? openExternal(item) : openEvent(item.id))}
++                style={StyleSheet.absoluteFill}
++              />
+               <View style={{ flex: 1 }}>
+                 <Text style={styles.bigWhen}>{formatWhen(item.startISO)}</Text>
+                 <Text style={styles.bigTitle} numberOfLines={2}>
+                   {item.title}
+                 </Text>
+                 {item.isTest && <Text style={styles.testBadgeText}>Test</Text>}
++                {item.discovered && (
++                  <Text style={styles.webBadgeText}>
++                    From the web{item.sourceName ? ` · ${item.sourceName}` : ""}
++                  </Text>
++                )}
+                 <Text style={styles.bigVenue} numberOfLines={1}>
+                   {getVenueName(item.venueId, effVenues)}
+                 </Text>
+@@ -525,7 +554,9 @@ export default function EventsScreen() {
+               </View>
+               <View style={styles.bigRight}>
+                 <Text style={styles.priceText}>{item.priceLabel || ""}</Text>
+-                <Text style={styles.moreText}>View</Text>
++                <Text style={styles.moreText}>
++                  {item.discovered ? `View at ${item.sourceName ?? "source"} ↗` : "View"}
++                </Text>
+               </View>
+               <FavButton
+                 isFav={favKeys.has(`event:${item.id}`)}
+@@ -578,6 +609,12 @@ const styles = StyleSheet.create({
+     fontSize: 11,
+     marginTop: 4,
+   },
++  webBadgeText: {
++    color: "#8ec5ff",
++    fontWeight: "900",
++    fontSize: 11,
++    marginTop: 4,
++  },
+   showcaseChip: {
+     alignSelf: "flex-start",
+     paddingHorizontal: 12,
+diff --git a/bownd/app/(tabs)/home.tsx b/bownd/app/(tabs)/home.tsx
+index 2b394ad..c1c1648 100644
+--- a/bownd/app/(tabs)/home.tsx
++++ b/bownd/app/(tabs)/home.tsx
+@@ -95,8 +95,11 @@ export default function Home() {
+ 
+   // Wholesale showcase fallback: demo only when the real catalog is
+   // completely empty. Never mixed with real data.
++  // Discovered (web-sourced, link-out-only) events are excluded from
++  // EVERYTHING on Home — spotlight, playlists, featured, search: they
++  // live only in the Events tab's All Events list (see events.tsx).
+   const usingDemo = events.length === 0 && venues.length === 0;
+-  const effEvents = usingDemo ? getShowcaseEvents() : events;
++  const effEvents = usingDemo ? getShowcaseEvents() : events.filter((e) => !e.discovered);
+   const effVenues = usingDemo ? getShowcaseVenues() : venues;
+ 
+   const visibleEvents = useMemo(
+diff --git a/bownd/app/detail.tsx b/bownd/app/detail.tsx
+index 0f4eb40..6246beb 100644
+--- a/bownd/app/detail.tsx
++++ b/bownd/app/detail.tsx
+@@ -223,6 +223,13 @@ export default function DetailScreen() {
+                   <Text style={styles.demoBadgeText}>Test — operator only, not a live listing</Text>
+                 </View>
+               )}
++              {event.discovered && (
++                <View style={styles.demoBadge}>
++                  <Text style={styles.demoBadgeText}>
++                    From the web{event.sourceName ? ` · ${event.sourceName}` : ""} — not sold on Bownd
++                  </Text>
++                </View>
++              )}
+               <ImageBackground
+                 source={resolveEventCardImage(event.photoUrl)}
+                 style={styles.detailBanner}
+@@ -244,14 +251,40 @@ export default function DetailScreen() {
+                 ))}
+               </View>
+ 
+-              <View style={styles.actionsRow}>
+-                <Pressable onPress={onToggleFav} style={styles.actionBtn}>
+-                  <Text style={styles.actionBtnText}>{fav ? "♥ Saved" : "♡ Save"}</Text>
+-                </Pressable>
+-                <Pressable onPress={openVenueEvents} style={[styles.actionBtn, styles.actionBtnGhost]}>
+-                  <Text style={[styles.actionBtnText, styles.actionBtnGhostText]}>See venue events</Text>
+-                </Pressable>
+-              </View>
++              {event.discovered ? (
++                // Link-out ONLY: the primary action opens the event at
++                // its source. No "See venue events" (a discovered listing
++                // has no Bownd venue) and never any purchase/redeem UI.
++                <View style={styles.actionsRow}>
++                  {!!event.sourceUrl && (
++                    <Pressable
++                      onPress={() => openWebsite(event.sourceUrl as string)}
++                      style={styles.actionBtn}
++                    >
++                      <Text style={styles.actionBtnText}>
++                        View at {event.sourceName ?? "source"}
++                      </Text>
++                    </Pressable>
++                  )}
++                  <Pressable
++                    onPress={onToggleFav}
++                    style={[styles.actionBtn, styles.actionBtnGhost]}
++                  >
++                    <Text style={[styles.actionBtnText, styles.actionBtnGhostText]}>
++                      {fav ? "♥ Saved" : "♡ Save"}
++                    </Text>
++                  </Pressable>
++                </View>
++              ) : (
++                <View style={styles.actionsRow}>
++                  <Pressable onPress={onToggleFav} style={styles.actionBtn}>
++                    <Text style={styles.actionBtnText}>{fav ? "♥ Saved" : "♡ Save"}</Text>
++                  </Pressable>
++                  <Pressable onPress={openVenueEvents} style={[styles.actionBtn, styles.actionBtnGhost]}>
++                    <Text style={[styles.actionBtnText, styles.actionBtnGhostText]}>See venue events</Text>
++                  </Pressable>
++                </View>
++              )}
+             </BrandCard>
+           ) : demoVenue ? (
+             <BrandCard>
+diff --git a/bownd/app/whats-close.tsx b/bownd/app/whats-close.tsx
+index 54b4dea..aed9668 100644
+--- a/bownd/app/whats-close.tsx
++++ b/bownd/app/whats-close.tsx
+@@ -96,7 +96,9 @@ export default function WhatsCloseScreen() {
+   }, [user?.email]);
+ 
+   const usingDemo = events.length === 0 && venues.length === 0;
+-  const effEvents = usingDemo ? getShowcaseEvents() : events;
++  // Discovered (web-sourced, link-out-only) events never appear here —
++  // they live only in the Events tab's All Events list.
++  const effEvents = usingDemo ? getShowcaseEvents() : events.filter((e) => !e.discovered);
+   const effVenues = usingDemo ? getShowcaseVenues() : venues;
+ 
+   const center = userLoc ?? KC_FALLBACK;
+diff --git a/bownd/lib/store.ts b/bownd/lib/store.ts
+index 70db36a..21e0844 100644
+--- a/bownd/lib/store.ts
++++ b/bownd/lib/store.ts
+@@ -88,6 +88,19 @@ export type EventItem = {
+   // only to the operator and labeled "Test" in the UI. Never counted
+   // in revenue/analytics (Bownd has none) and never shown to others.
+   isTest?: boolean;
++  // Discovered (external, web-sourced) event — LINK-OUT ONLY. True means
++  // this listing came from an outside source, is NOT Bownd inventory,
++  // and must never be sold, ticketed, redeemed, featured, or playlisted
++  // in the app. It renders ONLY in the Events tab's All Events list,
++  // labeled "From the web · <sourceName>", and tapping it opens
++  // sourceUrl externally instead of the in-app detail/purchase flow.
++  discovered?: boolean;
++  // Human-readable source name for a discovered event (e.g. the site or
++  // organizer page it was found on). Shown in the "From the web" label.
++  sourceName?: string;
++  // Canonical URL of the event at its source. Discovered events link
++  // OUT to this URL; Bownd never hosts their ticketing.
++  sourceUrl?: string;
+ };
+ 
+ export type Venue = {
+@@ -181,6 +194,9 @@ function toEventItem(id: string, data: any): EventItem {
+     featured: data.featured === true,
+     photoUrl: typeof data.photoUrl === "string" ? data.photoUrl : undefined,
+     isTest: data.isTest === true,
++    discovered: data.discovered === true,
++    sourceName: typeof data.sourceName === "string" ? data.sourceName : undefined,
++    sourceUrl: typeof data.sourceUrl === "string" ? data.sourceUrl : undefined,
+   };
+ }
+ 

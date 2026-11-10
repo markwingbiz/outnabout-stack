@@ -20,9 +20,9 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   logo: {
-    height: 28,
-    width: 160,
-    opacity: 0.9,
+    height: 40,
+    width: 170,
+    opacity: 0.95,
   },
   tagline: {
     marginTop: 6,

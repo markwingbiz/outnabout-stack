@@ -1,6 +1,6 @@
 // bownd-sync — Bownd <-> Supabase bridge (Phase B).
 //
-// POST { direction: 'publish' | 'mirror', limit?, collections? }
+// POST { direction: 'publish' | 'mirror' | 'discovered', limit?, collections? }
 //
 // 'publish' (Supabase -> Firestore): processes pending rows in
 //   bownd_publish_requests. Validates the referenced Supabase venue/event,
@@ -10,6 +10,14 @@
 //   Firestore write is set-with-merge on the stored doc ref (re-publishing
 //   the same request produces the same doc, never a duplicate).
 //
+//   VERIFICATION GATE: a venue publishes only when
+//   venues.verification_status = 'verified' (v1 = manual operator review;
+//   verification_method records how). Event publishes are gated on their
+//   venue. is_test venues are exempt (operator test data, never public).
+//   Unverified => the request fails with 'venue_unverified'; it is
+//   retryable, so after an operator verifies the venue the vendor just
+//   retries. This gate is server-side — the apps cannot bypass it.
+//
 // 'mirror' (Firestore -> Supabase): lists Firestore events / venues /
 //   redemptions changed since the per-collection watermark in
 //   bownd_mirror_state, upserts them into Supabase, advances the watermark,
@@ -17,6 +25,23 @@
 //   dedupe on source_ref = 'bownd:<firestore-doc-id>'; redemptions dedupe
 //   on metadata.bownd_token = the Firestore doc id. Never deletes Supabase
 //   rows. Docs missing expected fields are skipped and recorded.
+//
+// 'discovered' (scanner staging -> Firestore): drains the
+//   discovered_events staging table (Scoutwave's link-out-only web finds;
+//   design: forge-design/scanner-pipeline-design.md, schema per the
+//   staging migration draft). Rows in 'approved'/'published' are upserted
+//   to Firestore events with deterministic doc id 'disc_<staging id>' and
+//   sourceRef 'supabase:<staging id>' — the prefix mirror already skips,
+//   so discovered docs never mirror back into Supabase. Rows in
+//   'expired'/'removed'/'superseded' that still carry a firestore_doc_id
+//   get that doc DELETED — the only delete in this function, hard-scoped
+//   to the disc_ namespace: a stored ref that is not exactly
+//   'disc_<row id>' is refused, never deleted. No tenant mapping and no
+//   venue verification gate apply — discovered events carry no tenant,
+//   belong to no venue, and make no venue claim. An approved/published
+//   row whose matched_event_id is set has lost to a venue-submitted twin
+//   and is retired as superseded instead of written (the fuzzy matching
+//   itself happens scanner-side; the drain honors a recorded match).
 //
 // TENANT RULE (hard): the function NEVER guesses a tenant mapping. Publish
 //   looks up the Supabase row's tenant_id in bownd_tenant_map; mirror looks
@@ -28,18 +53,33 @@
 //   mapping is established at Bownd launch, never inferred from the
 //   placeholder tenant rows.
 //
-// FIREBASE: uses the Firebase Admin SDK (npm:firebase-admin) with the
-//   service account from env FIREBASE_SERVICE_ACCOUNT_JSON (a JSON string).
-//   If the env var is missing or invalid, the function returns a 500 naming
-//   the missing secret and does nothing. The Admin SDK bypasses Firestore
-//   security rules (service identity) — this is why client writes to
-//   events/venues are denied in firestore.rules while this function can
+// FIREBASE: uses the Firestore REST API (plain fetch) with a service-account
+//   OAuth token minted via WebCrypto (RS256 JWT -> oauth2.googleapis.com/token),
+//   from env FIREBASE_SERVICE_ACCOUNT_JSON. The Firebase Admin SDK is NOT used:
+//   its Firestore client speaks gRPC, which does not run on the Deno-based
+//   Edge Functions runtime — the first Firestore call hung until the isolate
+//   was killed (~50s, no error, no response). Every REST call carries a 15s
+//   timeout, so a future hang becomes a fast, logged failure instead of a
+//   silent kill. Writes go through documents:commit (the REST
+//   patch/createDocument endpoints accept no fieldTransforms, so commit is
+//   the only REST vehicle for serverTimestamp transforms). Create uses a
+//   client-generated Firestore-style 20-char doc id with a
+//   currentDocument {exists:false} precondition — the create mechanism the
+//   client SDKs use. If the env var is missing or invalid, the function
+//   returns a 500 naming the missing secret and does nothing. The service
+//   identity bypasses Firestore security rules — this is why client writes
+//   to events/venues are denied in firestore.rules while this function can
 //   still write the catalog.
 //
 // DEVIATIONS FROM FORGE-DESIGN.md §7 (task spec wins):
-//   - Publish request terminal status is 'done' (task spec), not
-//     'published' (design doc). Failed requests are marked 'failed'
-//     immediately (task spec) — the design doc's retry-up-to-5 is NOT
+//   - Publish request terminal status in the DB is 'published' — the
+//     live CHECK constraint on bownd_publish_requests.status only allows
+//     ('pending','processing','published','failed','cancelled'), so the
+//     old task-spec value 'done' would fail the update and leave every
+//     request stuck 'pending' (re-processed forever, duplicating
+//     Firestore docs). The API response still reports status 'done'
+//     for a completed publish; only the DB write uses 'published'.
+//   - Failed requests are marked 'failed' immediately (task spec) — the design doc's retry-up-to-5 is NOT
 //     implemented; a failed publish needs a new request (or a manual
 //     status reset to 'pending' by an operator).
 //
@@ -70,8 +110,6 @@
 //
 // No LLM calls. No external sends. No fake data. No secrets in code.
 
-import admin from "npm:firebase-admin@12.7.0";
-
 import {
   HttpError,
   handleRequest,
@@ -91,11 +129,11 @@ const MAX_PUBLISH_LIMIT = 100;
 const MAX_COLUMN_RETRIES = 6;
 const MAX_PENDING_DOCS = 100;
 
-// ------------------------------------------------------- Firebase Admin ----
+// ------------------------------------------------------- Firestore REST ----
 
-// Minimal structural types for the Admin SDK surface we use. The `any`
-// casts live only at this Firebase boundary; everything above it is typed.
-type FirestoreDb = ReturnType<typeof admin.firestore>;
+// The Firestore client type. All Firestore I/O goes through this REST
+// client (below); nothing above it knows the transport.
+type FirestoreDb = FirestoreRest;
 
 interface FirestoreDoc {
   id: string;
@@ -136,9 +174,373 @@ function asStringArray(value: unknown): string[] {
 }
 
 /**
- * Firebase Admin SDK client. Throws HttpError(500) naming the missing
- * secret when FIREBASE_SERVICE_ACCOUNT_JSON is absent or invalid — the
- * function does nothing without it.
+ * Test-flag read: a Supabase row is a test row when its `is_test` column
+ * is true (if the column exists — see the optional migration) OR when
+ * `metadata.is_test` is true. The flag rides in `metadata` today, so no
+ * migration is required for the flag to flow. Mirrored rows carry the
+ * flag the same way.
+ */
+function rowIsTest(row: Record<string, unknown>): boolean {
+  if (row.is_test === true) return true;
+  return asRecord(row.metadata).is_test === true;
+}
+
+const FIRESTORE_REST_BASE = "https://firestore.googleapis.com/v1";
+const FIRESTORE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const FIRESTORE_SCOPE = "https://www.googleapis.com/auth/datastore";
+const FIRESTORE_TIMEOUT_MS = 15000;
+const FIRESTORE_TOKEN_SKEW_MS = 60_000;
+const FIRESTORE_ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+/** Sentinel for a Firestore server timestamp (REQUEST_TIME transform). */
+const SERVER_TIMESTAMP = Symbol("serverTimestamp");
+
+type FirestoreRestValue = Record<string, unknown>;
+
+/** Plain-JS value -> Firestore REST Value. Throws on unencodable values. */
+function encodeFirestoreValue(value: unknown, fieldPath: string): FirestoreRestValue {
+  if (value === null) return { nullValue: "NULL_VALUE" };
+  if (typeof value === "string") return { stringValue: value };
+  if (typeof value === "boolean") return { booleanValue: value };
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error(`Cannot encode non-finite number for field ${fieldPath}`);
+    }
+    return Number.isInteger(value) ? { integerValue: String(value) } : { doubleValue: value };
+  }
+  if (value instanceof Date) return { timestampValue: value.toISOString() };
+  if (Array.isArray(value)) {
+    return {
+      arrayValue: {
+        values: value.map((v, i) => encodeFirestoreValue(v, `${fieldPath}[${i}]`)),
+      },
+    };
+  }
+  if (typeof value === "object") {
+    return { mapValue: { fields: encodeFirestoreFields(asRecord(value), fieldPath) } };
+  }
+  throw new Error(`Cannot encode value for field ${fieldPath}: unsupported type ${typeof value}`);
+}
+
+function encodeFirestoreFields(
+  doc: Record<string, unknown>,
+  prefix = "",
+): Record<string, FirestoreRestValue> {
+  const out: Record<string, FirestoreRestValue> = {};
+  for (const [key, value] of Object.entries(doc)) {
+    if (value === undefined) {
+      throw new Error(`Cannot encode undefined for field ${prefix}${key}`);
+    }
+    if (value === SERVER_TIMESTAMP) continue; // handled as a transform, not a field
+    out[key] = encodeFirestoreValue(value, `${prefix}${key}`);
+  }
+  return out;
+}
+
+/** Firestore REST Value -> plain-JS value. Timestamp -> Date (see note). */
+function decodeFirestoreValue(value: FirestoreRestValue): unknown {
+  if ("stringValue" in value) return value.stringValue;
+  if ("integerValue" in value) return Number(value.integerValue);
+  if ("doubleValue" in value) return value.doubleValue;
+  if ("booleanValue" in value) return value.booleanValue;
+  if ("nullValue" in value) return null;
+  // NOTE: decoded as Date, not epoch millis. Mirror mappers treat timestamps
+  // the same way they treated Admin-SDK Timestamp objects (not numbers):
+  // e.g. redeemedAt stays null unless Bownd stored a plain number, and
+  // toMillis() converts Dates. Behavior identical to the old transport.
+  if ("timestampValue" in value) return new Date(String(value.timestampValue));
+  if ("arrayValue" in value) {
+    const arr = asRecord(value.arrayValue);
+    const values = Array.isArray(arr.values) ? arr.values : [];
+    return values.map((v) => decodeFirestoreValue(asRecord(v)));
+  }
+  if ("mapValue" in value) return decodeFirestoreFields(asRecord(asRecord(value.mapValue).fields));
+  if ("geoPointValue" in value) {
+    const gp = asRecord(value.geoPointValue);
+    return { latitude: gp.latitude, longitude: gp.longitude };
+  }
+  if ("referenceValue" in value) return value.referenceValue;
+  if ("bytesValue" in value) return value.bytesValue;
+  return null;
+}
+
+function decodeFirestoreFields(fields: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    out[key] = decodeFirestoreValue(asRecord(value));
+  }
+  return out;
+}
+
+function base64UrlEncode(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function pemToDer(pem: string): Uint8Array<ArrayBuffer> {
+  const b64 = pem
+    .replace(/-----BEGIN [^-]+-----/g, "")
+    .replace(/-----END [^-]+-----/g, "")
+    .replace(/\s+/g, "");
+  const binary = atob(b64);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
+}
+
+/** Mint a signed service-account JWT (RS256, WebCrypto) for the OAuth exchange. */
+async function mintServiceAccountJwt(serviceAccount: Record<string, unknown>): Promise<string> {
+  const privateKeyPem = asNonEmptyString(serviceAccount.private_key);
+  const clientEmail = asNonEmptyString(serviceAccount.client_email);
+  if (!privateKeyPem || !clientEmail) {
+    throw new HttpError(
+      500,
+      "FIREBASE_SERVICE_ACCOUNT_JSON is missing private_key or client_email.",
+    );
+  }
+  const nowSec = Math.floor(Date.now() / 1000);
+  const header = base64UrlEncode(
+    new TextEncoder().encode(JSON.stringify({ alg: "RS256", typ: "JWT" })),
+  );
+  const claims = base64UrlEncode(
+    new TextEncoder().encode(
+      JSON.stringify({
+        iss: clientEmail,
+        scope: FIRESTORE_SCOPE,
+        aud: FIRESTORE_OAUTH_TOKEN_URL,
+        iat: nowSec,
+        exp: nowSec + 3600,
+      }),
+    ),
+  );
+  const unsigned = `${header}.${claims}`;
+  const key = await crypto.subtle.importKey(
+    "pkcs8",
+    pemToDer(privateKeyPem),
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign(
+    "RSASSA-PKCS1-v1_5",
+    key,
+    new TextEncoder().encode(unsigned),
+  );
+  return `${unsigned}.${base64UrlEncode(new Uint8Array(signature))}`;
+}
+
+/** Firestore-style 20-char doc id (same alphabet/length as server-assigned ids). */
+function generateFirestoreId(): string {
+  const bytes = new Uint8Array(20);
+  crypto.getRandomValues(bytes);
+  let id = "";
+  for (const b of bytes) id += FIRESTORE_ID_ALPHABET[b % FIRESTORE_ID_ALPHABET.length];
+  return id;
+}
+
+function restDocToFirestoreDoc(d: Record<string, unknown>): FirestoreDoc {
+  const name = String(d.name ?? "");
+  const id = name.split("/").pop() ?? "";
+  return {
+    id,
+    updateTimeMillis: toMillis(d.updateTime),
+    data: decodeFirestoreFields(asRecord(d.fields)),
+  };
+}
+
+/**
+ * Firestore REST client. Auth: service-account JWT -> OAuth access token,
+ * cached in memory until ~60s before expiry, refreshed on expiry or on a
+ * 401 (one retry). Every call uses plain fetch with a 15s timeout.
+ */
+class FirestoreRest {
+  private readonly projectId: string;
+  private readonly serviceAccount: Record<string, unknown>;
+  private accessToken: string | null = null;
+  private accessTokenExpiresAt = 0;
+
+  constructor(serviceAccount: Record<string, unknown>) {
+    this.serviceAccount = serviceAccount;
+    this.projectId = String(serviceAccount.project_id ?? FIRESTORE_PROJECT_ID_FALLBACK);
+  }
+
+  private docPath(collection: string, docId: string): string {
+    return `projects/${this.projectId}/databases/(default)/documents/${collection}/${docId}`;
+  }
+
+  private docsBase(): string {
+    return `projects/${this.projectId}/databases/(default)/documents`;
+  }
+
+  private async getAccessToken(forceRefresh = false): Promise<string> {
+    if (
+      !forceRefresh &&
+      this.accessToken &&
+      Date.now() < this.accessTokenExpiresAt - FIRESTORE_TOKEN_SKEW_MS
+    ) {
+      return this.accessToken;
+    }
+    const assertion = await mintServiceAccountJwt(this.serviceAccount);
+    const body = new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion,
+    });
+    let res: Response;
+    try {
+      res = await fetch(FIRESTORE_OAUTH_TOKEN_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: body.toString(),
+        signal: AbortSignal.timeout(FIRESTORE_TIMEOUT_MS),
+      });
+    } catch (err) {
+      throw new Error(
+        `Firestore OAuth token fetch failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(
+        `Firestore OAuth token exchange failed (${res.status}): ${text.slice(0, 500)}`,
+      );
+    }
+    const data = (await res.json()) as Record<string, unknown>;
+    const token = asNonEmptyString(data.access_token);
+    if (!token) throw new Error("Firestore OAuth token exchange returned no access_token.");
+    this.accessToken = token;
+    this.accessTokenExpiresAt = Date.now() + Number(data.expires_in ?? 3600) * 1000;
+    return token;
+  }
+
+  private async restCall(
+    path: string,
+    init: RequestInit,
+    opts?: { allow404?: boolean; retryOn401?: boolean },
+  ): Promise<Record<string, unknown> | null> {
+    const doFetch = async (token: string): Promise<Response> => {
+      try {
+        return await fetch(`${FIRESTORE_REST_BASE}/${path}`, {
+          ...init,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          signal: AbortSignal.timeout(FIRESTORE_TIMEOUT_MS),
+        });
+      } catch (err) {
+        throw new Error(
+          `Firestore REST call failed (${path}): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    };
+    let res = await doFetch(await this.getAccessToken());
+    if (res.status === 401 && opts?.retryOn401 !== false) {
+      // Token may have expired between the cache check and use — refresh once.
+      res = await doFetch(await this.getAccessToken(true));
+    }
+    if (res.status === 404 && opts?.allow404) return null;
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`Firestore REST error (${res.status}) on ${path}: ${text.slice(0, 1000)}`);
+    }
+    if (res.status === 204) return {};
+    return (await res.json()) as Record<string, unknown>;
+  }
+
+  private async commitWrite(write: Record<string, unknown>): Promise<void> {
+    await this.restCall(`${this.docsBase()}:commit`, {
+      method: "POST",
+      body: JSON.stringify({ writes: [write] }),
+    });
+  }
+
+  /** Split a doc into REST fields + server-timestamp transforms. */
+  private splitDoc(
+    doc: Record<string, unknown>,
+  ): {
+    fields: Record<string, FirestoreRestValue>;
+    transforms: Array<Record<string, unknown>>;
+  } {
+    const fields = encodeFirestoreFields(doc);
+    const transforms: Array<Record<string, unknown>> = [];
+    for (const [key, value] of Object.entries(doc)) {
+      if (value === SERVER_TIMESTAMP) {
+        transforms.push({ fieldPath: key, setToServerValue: "REQUEST_TIME" });
+      }
+    }
+    return { fields, transforms };
+  }
+
+  private buildWrite(
+    doc: Record<string, unknown>,
+    name: string,
+    currentDocument?: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const { fields, transforms } = this.splitDoc(doc);
+    const write: Record<string, unknown> = {
+      update: { name, fields },
+    };
+    const fieldPaths = Object.keys(fields);
+    if (fieldPaths.length > 0) write.updateMask = { fieldPaths };
+    if (transforms.length > 0) write.updateTransforms = transforms;
+    if (currentDocument) write.currentDocument = currentDocument;
+    return write;
+  }
+
+  /** Set-with-merge (upsert) on an existing doc ref. */
+  async setDoc(collection: string, docId: string, doc: Record<string, unknown>): Promise<void> {
+    await this.commitWrite(this.buildWrite(doc, this.docPath(collection, docId)));
+  }
+
+  /** Create a doc with a fresh id. Fails (no overwrite) if the id exists. */
+  async addDoc(collection: string, doc: Record<string, unknown>): Promise<string> {
+    const docId = generateFirestoreId();
+    await this.commitWrite(
+      this.buildWrite(doc, this.docPath(collection, docId), { exists: false }),
+    );
+    return docId;
+  }
+
+  async getDoc(collection: string, docId: string): Promise<FirestoreDoc | null> {
+    const res = await this.restCall(this.docPath(collection, docId), { method: "GET" }, {
+      allow404: true,
+    });
+    if (!res) return null;
+    return restDocToFirestoreDoc(res);
+  }
+
+  /**
+   * Delete a doc, via a commit delete write — the same write vehicle as
+   * every other mutation in this client. Deleting a doc that does not
+   * exist is a successful no-op in Firestore commit semantics, so
+   * removal drains are naturally idempotent.
+   */
+  async deleteDoc(collection: string, docId: string): Promise<void> {
+    await this.commitWrite({ delete: this.docPath(collection, docId) });
+  }
+
+  async listDocs(collection: string): Promise<FirestoreDoc[]> {
+    const out: FirestoreDoc[] = [];
+    let pageToken: string | undefined;
+    do {
+      const query = new URLSearchParams({ pageSize: "300" });
+      if (pageToken) query.set("pageToken", pageToken);
+      const res = await this.restCall(`${this.docsBase()}/${collection}?${query.toString()}`, {
+        method: "GET",
+      });
+      const docs = Array.isArray(res?.documents) ? (res.documents as unknown[]) : [];
+      for (const d of docs) out.push(restDocToFirestoreDoc(asRecord(d)));
+      pageToken = asNonEmptyString(res?.nextPageToken) ?? undefined;
+    } while (pageToken);
+    return out;
+  }
+}
+
+/**
+ * Firestore REST client. Throws HttpError(500) naming the missing secret
+ * when FIREBASE_SERVICE_ACCOUNT_JSON is absent or invalid — the function
+ * does nothing without it.
  */
 function getFirestore(): FirestoreDb {
   const raw = Deno.env.get("FIREBASE_SERVICE_ACCOUNT_JSON");
@@ -154,13 +556,7 @@ function getFirestore(): FirestoreDb {
   } catch {
     throw new HttpError(500, "FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON.");
   }
-  if (!admin.apps.length) {
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount as admin.ServiceAccount),
-      projectId: String(serviceAccount.project_id ?? FIRESTORE_PROJECT_ID_FALLBACK),
-    });
-  }
-  return admin.firestore();
+  return new FirestoreRest(serviceAccount);
 }
 
 // ------------------------------------------------------------------ Audit ---
@@ -261,7 +657,7 @@ const MISSING_COLUMN_RE = /Could not find the '([^']+)' column/;
  * that does not exist is omitted, not fatal. Throws on any other error.
  */
 async function tolerantWrite<T>(
-  attempt: (row: Record<string, unknown>) => Promise<{ data: T | null; error: { message: string } | null }>,
+  attempt: (row: Record<string, unknown>) => PromiseLike<{ data: T | null; error: { message: string } | null }>,
   row: Record<string, unknown>,
 ): Promise<T | null> {
   const working = { ...row };
@@ -391,6 +787,46 @@ async function noteRequestError(
   }
 }
 
+/**
+ * Venue verification gate (v1: manual operator review).
+ * A venue publishes only when venues.verification_status = 'verified'.
+ * Event publishes are gated on the venue the event belongs to.
+ * Operator test rows (venues.is_test = true) are EXEMPT — test data,
+ * never public. Fail-closed: a missing/unknown status blocks.
+ * The gate reads STATUS only, so v2 phone codes slot in by writing
+ * the same column (verification_method records how it was verified).
+ */
+async function checkVenueVerification(
+  service: SupabaseClient,
+  kind: "event" | "venue",
+  supabaseRow: Record<string, unknown>,
+): Promise<{ ok: boolean; detail: string }> {
+  let venue: Record<string, unknown> | null = null;
+  if (kind === "venue") {
+    venue = supabaseRow;
+  } else {
+    const venueId = asNonEmptyString(supabaseRow.venue_id);
+    if (!venueId) return { ok: true, detail: "" }; // venue-less event — nothing to gate on.
+    const { data, error } = await service
+      .from("venues")
+      .select("id, name, is_test, verification_status")
+      .eq("id", venueId)
+      .maybeSingle();
+    if (error) return { ok: false, detail: `Venue lookup for verification gate failed: ${error.message}` };
+    if (!data) return { ok: false, detail: `The event's venue (${venueId}) was not found.` };
+    venue = data as Record<string, unknown>;
+  }
+  if (venue.is_test === true) return { ok: true, detail: "" };
+  const status =
+    typeof venue.verification_status === "string" ? venue.verification_status : "unverified";
+  if (status === "verified") return { ok: true, detail: "" };
+  const name = asNonEmptyString(venue.name) ?? String(venue.id);
+  return {
+    ok: false,
+    detail: `Venue "${name}" is not verified (status: ${status}). An operator reviews every venue claim before it can publish to Bownd — request a review in Livework, then retry the publish.`,
+  };
+}
+
 /** Resolve the Firestore venue doc id for a Supabase venue id. */
 async function resolveFirestoreVenueRef(
   service: SupabaseClient,
@@ -400,8 +836,8 @@ async function resolveFirestoreVenueRef(
     .from("bownd_publish_requests")
     .select("bownd_venue_ref")
     .eq("venue_id", supabaseVenueId)
-    .eq("status", "done")
-    .order("created_at", { ascending: false })
+    .eq("status", "published")
+    .order("requested_at", { ascending: false })
     .limit(1);
   if (error) return null;
   const rows = (data ?? []) as Array<Record<string, unknown>>;
@@ -428,8 +864,9 @@ function supabaseEventToFirestore(
     description: asNonEmptyString(row.description) ?? "",
     tenantRef,
     tenantId,
+    isTest: rowIsTest(row),
     sourceRef: `supabase:${String(row.id)}`,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: SERVER_TIMESTAMP,
   };
 }
 
@@ -444,8 +881,13 @@ function supabaseVenueToFirestore(
     lng: typeof row.lng === "number" ? row.lng : 0,
     tenantRef,
     tenantId,
+    isTest: rowIsTest(row),
+    // Verification flag for Bownd's "Verified" venue badge. Only
+    // verified (or test) venues pass the publish gate above, so this is
+    // true for every non-test venue doc Bownd reads.
+    verified: row.verification_status === "verified",
     sourceRef: `supabase:${String(row.id)}`,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: SERVER_TIMESTAMP,
   };
 }
 
@@ -511,6 +953,11 @@ async function publishOne(
     );
   }
 
+  // Venue verification gate — server-side, the apps cannot bypass it.
+  // Unverified venues (and their events) never reach Bownd.
+  const gate = await checkVenueVerification(service, kind, supabaseRow);
+  if (!gate.ok) return await fail("venue_unverified", gate.detail);
+
   // Build the Firestore doc.
   let firestoreDoc: Record<string, unknown>;
   let collection: string;
@@ -529,23 +976,23 @@ async function publishOne(
   }
 
   // Write: set-with-merge on the stored ref, or create + store the new ref.
+  // (REST commit: merge = update + updateMask; create = fresh id + exists:false.)
   let docId: string;
   try {
     if (existingRef) {
-      await db.collection(collection).doc(existingRef).set(firestoreDoc, { merge: true });
+      await db.setDoc(collection, existingRef, firestoreDoc);
       docId = existingRef;
     } else {
-      const ref = await db.collection(collection).add(firestoreDoc);
-      docId = ref.id;
+      docId = await db.addDoc(collection, firestoreDoc);
     }
   } catch (err) {
     return await fail("firestore_write_failed", err instanceof Error ? err.message : String(err));
   }
 
-  // Mark done + store the Firestore doc ref.
+  // Mark published + store the Firestore doc ref.
   const refPatch = kind === "event" ? { bownd_event_ref: docId } : { bownd_venue_ref: docId };
   try {
-    await markRequest(service, requestId, { status: "done", ...refPatch });
+    await markRequest(service, requestId, { status: "published", ...refPatch });
   } catch (err) {
     // The Firestore write already succeeded; the request row update failing
     // must not report the publish as failed (re-running would merge-write
@@ -556,7 +1003,7 @@ async function publishOne(
       action: "bownd.publish.request_update_failed",
       entityType: "bownd_publish_request",
       entityId: requestId,
-      after: { status: "done", [kind === "event" ? "bownd_event_ref" : "bownd_venue_ref"]: docId },
+      after: { status: "published", [kind === "event" ? "bownd_event_ref" : "bownd_venue_ref"]: docId },
       metadata: { warning: "Firestore write succeeded; request row update failed", error: err instanceof Error ? err.message : String(err) },
     });
     return { ...base, status: "done", bownd_ref: docId, error: "warning: request row update failed after Firestore write succeeded" };
@@ -568,7 +1015,7 @@ async function publishOne(
     entityType: "bownd_publish_request",
     entityId: requestId,
     before: { status: "pending" },
-    after: { status: "done", [kind === "event" ? "bownd_event_ref" : "bownd_venue_ref"]: docId },
+    after: { status: "published", [kind === "event" ? "bownd_event_ref" : "bownd_venue_ref"]: docId },
     metadata: { kind, supabase_id: supabaseId, tenant_ref: tenantRef },
   });
   return { ...base, status: "done", bownd_ref: docId };
@@ -583,7 +1030,7 @@ async function runPublish(
   const requests = await fetchPendingRequests(service, limit);
   const results: PublishResult[] = [];
   for (const request of requests) {
-    // A request already marked done is never re-processed (we only
+    // A request already marked published is never re-processed (we only
     // selected pending rows, but re-check defensively).
     if (String(request.status) !== "pending") {
       results.push({ request_id: String(request.id), kind: "unknown", status: "skipped", bownd_ref: null, error: "not pending" });
@@ -599,6 +1046,325 @@ async function runPublish(
     skipped: results.filter((r) => r.status === "skipped").length,
     results,
   };
+}
+
+// ------------------------------------------------------------- Discovered ---
+
+// Scanner staging drain (design: forge-design/scanner-pipeline-design.md).
+// Reads discovered_events directly with the service role — no publish
+// request queue, no tenant map, no verification gate (discovered events
+// have no tenant and make no venue claim). Idempotent end to end:
+// upserts are set-with-merge on the deterministic doc id, deletes are
+// commit deletes of that same id, and the staging stamps converge on
+// re-runs. A removal row is drained at most once: the removal fetch only
+// takes rows whose removed_at is still NULL, and a successful drain sets
+// it — a failed stamp leaves it NULL so the next drain retries.
+
+const DISCOVERED_UPSERT_STATUSES = ["approved", "published"] as const;
+const DISCOVERED_REMOVAL_STATUSES = ["expired", "removed", "superseded"] as const;
+
+interface DiscoveredResult {
+  staging_id: string;
+  action: "upsert" | "delete";
+  status: "done" | "failed" | "skipped";
+  bownd_ref: string | null;
+  error: string | null;
+}
+
+/** The only Firestore doc id this direction may ever write or delete. */
+function discoveredDocId(stagingId: string): string {
+  return `disc_${stagingId}`;
+}
+
+/**
+ * Staging row -> Firestore event doc, in the reconciled rendering shape
+ * (design §5): venueId carries the venue NAME string (no Bownd venue doc
+ * exists for a discovered event; the app renders the raw venueId string
+ * as the venue name), category is always 'standard', featured is NEVER
+ * set, and photoUrl is present only when the staging row holds an
+ * image_url. priceLabel is display-only text exactly as the source
+ * stated it — it never implies Bownd sells the event. sourceRef uses
+ * the 'supabase:' prefix, which mirror skips (see mirrorCollection).
+ */
+function discoveredEventToFirestore(row: Record<string, unknown>): Record<string, unknown> {
+  const doc: Record<string, unknown> = {
+    title: asNonEmptyString(row.title) ?? "Untitled event",
+    startISO: asNonEmptyString(row.starts_at) ?? new Date().toISOString(),
+    venueId: asNonEmptyString(row.venue_name) ?? "",
+    priceLabel: asNonEmptyString(row.price_label) ?? "",
+    vibeTags: [],
+    audienceTags: [],
+    category: "standard",
+    discovered: true,
+    sourceName: asNonEmptyString(row.source_name) ?? "",
+    sourceUrl: asNonEmptyString(row.source_url) ?? "",
+    isTest: false,
+    sourceRef: `supabase:${String(row.id)}`,
+    updatedAt: SERVER_TIMESTAMP,
+  };
+  const photoUrl = asNonEmptyString(row.image_url);
+  if (photoUrl) doc.photoUrl = photoUrl;
+  return doc;
+}
+
+async function fetchDiscoveredRows(
+  service: SupabaseClient,
+  statuses: readonly string[],
+  limit: number,
+  removal: boolean,
+): Promise<Array<Record<string, unknown>>> {
+  const base = () =>
+    service.from("discovered_events").select("*").in("status", [...statuses]);
+  const { data, error } = removal
+    ? await base()
+      .not("firestore_doc_id", "is", null)
+      .is("removed_at", null)
+      .order("starts_at", { ascending: true })
+      .limit(limit)
+    : await base().order("starts_at", { ascending: true }).limit(limit);
+  if (error) throw new Error(`Discovered staging read failed: ${error.message}`);
+  return (data ?? []) as Array<Record<string, unknown>>;
+}
+
+/**
+ * removal_reason for a removal stamp: keep the reason the scanner
+ * recorded when it set the terminal status; otherwise derive only the
+ * two statuses that ARE reasons ('expired', 'superseded'). A bare
+ * 'removed' with no recorded reason keeps NULL — 'cancelled' / 'killed'
+ * / 'source_gone' are the scanner's call to record, not the drain's to
+ * guess.
+ */
+function discoveredRemovalReason(
+  row: Record<string, unknown>,
+  effectiveStatus: string,
+): string | null {
+  const existing = asNonEmptyString(row.removal_reason);
+  if (existing) return existing;
+  if (effectiveStatus === "expired") return "expired";
+  if (effectiveStatus === "superseded") return "superseded";
+  return null;
+}
+
+async function discoveredUpsertOne(
+  service: SupabaseClient,
+  db: FirestoreDb,
+  userId: string,
+  row: Record<string, unknown>,
+): Promise<DiscoveredResult> {
+  const stagingId = String(row.id);
+  const docId = discoveredDocId(stagingId);
+  const base: DiscoveredResult = {
+    staging_id: stagingId,
+    action: "upsert",
+    status: "failed",
+    bownd_ref: docId,
+    error: null,
+  };
+
+  try {
+    await db.setDoc("events", docId, discoveredEventToFirestore(row));
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    await safeAudit(service, {
+      actorUserId: userId,
+      action: "bownd.discovered.failed",
+      entityType: "discovered_event",
+      entityId: stagingId,
+      metadata: { action: "upsert", firestore_doc_id: docId, error: "firestore_write_failed", detail },
+    });
+    return { ...base, error: `firestore_write_failed: ${detail}` };
+  }
+
+  // Stamp the staging row: 'approved' becomes 'published' (with
+  // published_at); an already-'published' row just has its doc ref
+  // re-affirmed. If the stamp fails, the Firestore write already landed —
+  // report done-with-warning (the publish direction's convention):
+  // re-running the drain converges on the same deterministic doc.
+  const patch: Record<string, unknown> = { firestore_doc_id: docId };
+  if (row.status === "approved") {
+    patch.status = "published";
+    patch.published_at = new Date().toISOString();
+  }
+  try {
+    await updateRowById(service, "discovered_events", stagingId, patch);
+  } catch (err) {
+    console.error("bownd-sync: discovered doc written but staging stamp failed:", err);
+    await safeAudit(service, {
+      actorUserId: userId,
+      action: "bownd.discovered.stamp_failed",
+      entityType: "discovered_event",
+      entityId: stagingId,
+      metadata: {
+        firestore_doc_id: docId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+    });
+    return {
+      ...base,
+      status: "done",
+      error: "warning: staging stamp failed after Firestore write succeeded",
+    };
+  }
+
+  await safeAudit(service, {
+    actorUserId: userId,
+    action: "bownd.discovered.published",
+    entityType: "discovered_event",
+    entityId: stagingId,
+    before: { status: String(row.status) },
+    after: { status: "published", firestore_doc_id: docId },
+    metadata: {
+      source_key: asNonEmptyString(row.source_key),
+      source_name: asNonEmptyString(row.source_name),
+    },
+  });
+  return { ...base, status: "done" };
+}
+
+/**
+ * Retire one staging row: delete its Firestore doc (if it has one) and
+ * stamp removed_at (+ removal_reason). markSuperseded covers the
+ * in-drain dedupe guard — a row still in 'approved'/'published' that
+ * carries matched_event_id — which also flips the row's status to
+ * 'superseded'. The delete is hard-scoped: the stored firestore_doc_id
+ * must be exactly this writer's deterministic 'disc_<row id>'; anything
+ * else is refused, never deleted.
+ */
+async function discoveredRetireOne(
+  service: SupabaseClient,
+  db: FirestoreDb,
+  userId: string,
+  row: Record<string, unknown>,
+  markSuperseded: boolean,
+): Promise<DiscoveredResult> {
+  const stagingId = String(row.id);
+  const storedDocId = asNonEmptyString(row.firestore_doc_id);
+  const base: DiscoveredResult = {
+    staging_id: stagingId,
+    action: "delete",
+    status: "failed",
+    bownd_ref: storedDocId,
+    error: null,
+  };
+  const effectiveStatus = markSuperseded ? "superseded" : String(row.status);
+  const reason = discoveredRemovalReason(row, effectiveStatus);
+
+  const fail = async (code: string, detail: string): Promise<DiscoveredResult> => {
+    await safeAudit(service, {
+      actorUserId: userId,
+      action: "bownd.discovered.failed",
+      entityType: "discovered_event",
+      entityId: stagingId,
+      metadata: { action: "delete", firestore_doc_id: storedDocId, error: code, detail },
+    });
+    return { ...base, error: `${code}: ${detail}` };
+  };
+
+  let deleted = false;
+  if (storedDocId) {
+    if (storedDocId !== discoveredDocId(stagingId)) {
+      return await fail(
+        "unexpected_firestore_doc_id",
+        `Staging row ${stagingId} carries firestore_doc_id '${storedDocId}', which is not this writer's deterministic doc '${discoveredDocId(stagingId)}'. Refusing to delete a doc this direction did not create.`,
+      );
+    }
+    try {
+      await db.deleteDoc("events", storedDocId);
+      deleted = true;
+    } catch (err) {
+      // The row keeps its removal status with removed_at NULL, so the
+      // next drain retries the delete (design §5) — the failure is
+      // reported here and in the run summary, never silent.
+      return await fail(
+        "firestore_delete_failed",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
+  const patch: Record<string, unknown> = { removed_at: new Date().toISOString() };
+  if (reason) patch.removal_reason = reason;
+  if (markSuperseded) patch.status = "superseded";
+  try {
+    await updateRowById(service, "discovered_events", stagingId, patch);
+  } catch (err) {
+    console.error("bownd-sync: discovered doc handled but removal stamp failed:", err);
+    await safeAudit(service, {
+      actorUserId: userId,
+      action: "bownd.discovered.stamp_failed",
+      entityType: "discovered_event",
+      entityId: stagingId,
+      metadata: {
+        firestore_doc_id: storedDocId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+    });
+    return {
+      ...base,
+      status: "done",
+      error: "warning: removal stamp failed after Firestore delete succeeded",
+    };
+  }
+
+  await safeAudit(service, {
+    actorUserId: userId,
+    action: "bownd.discovered.removed",
+    entityType: "discovered_event",
+    entityId: stagingId,
+    before: { status: String(row.status), firestore_doc_id: storedDocId },
+    after: { status: effectiveStatus },
+    metadata: { firestore_doc_id: storedDocId, deleted, removal_reason: reason },
+  });
+  return { ...base, status: "done" };
+}
+
+async function runDiscovered(
+  service: SupabaseClient,
+  db: FirestoreDb,
+  userId: string,
+  limit: number,
+): Promise<Record<string, unknown>> {
+  const upsertRows = await fetchDiscoveredRows(service, DISCOVERED_UPSERT_STATUSES, limit, false);
+  const removalRows = await fetchDiscoveredRows(service, DISCOVERED_REMOVAL_STATUSES, limit, true);
+  const results: DiscoveredResult[] = [];
+
+  for (const row of upsertRows) {
+    // In-drain dedupe guard (design §8): a venue-submitted twin winning
+    // is recorded scanner-side as matched_event_id; a row that already
+    // carries one is retired as superseded instead of written.
+    if (asNonEmptyString(row.matched_event_id)) {
+      results.push(await discoveredRetireOne(service, db, userId, row, true));
+    } else {
+      results.push(await discoveredUpsertOne(service, db, userId, row));
+    }
+  }
+  for (const row of removalRows) {
+    results.push(await discoveredRetireOne(service, db, userId, row, false));
+  }
+
+  const summary = {
+    direction: "discovered",
+    processed: results.length,
+    done: results.filter((r) => r.status === "done").length,
+    failed: results.filter((r) => r.status === "failed").length,
+    skipped: results.filter((r) => r.status === "skipped").length,
+    results,
+  };
+  await safeAudit(service, {
+    actorUserId: userId,
+    action: "bownd.discovered.run",
+    entityType: "bownd_sync",
+    entityId: userId,
+    metadata: {
+      processed: summary.processed,
+      done: summary.done,
+      failed: summary.failed,
+      upserts: results.filter((r) => r.action === "upsert").length,
+      deletes: results.filter((r) => r.action === "delete").length,
+      failed_rows: results.filter((r) => r.status === "failed").slice(0, 20),
+    },
+  });
+  return summary;
 }
 
 // ----------------------------------------------------------------- Mirror ---
@@ -671,12 +1437,7 @@ async function writeWatermark(
 }
 
 async function listFirestoreDocs(db: FirestoreDb, collection: string): Promise<FirestoreDoc[]> {
-  const snap = await db.collection(collection).get();
-  return (snap.docs as Array<Record<string, unknown>>).map((d) => ({
-    id: String(d.id),
-    updateTimeMillis: toMillis((d as { updateTime?: unknown }).updateTime),
-    data: asRecord((d as { data?: () => unknown }).data?.call(d)),
-  }));
+  return await db.listDocs(collection);
 }
 
 async function fetchFirestoreDoc(
@@ -684,14 +1445,7 @@ async function fetchFirestoreDoc(
   collection: string,
   docId: string,
 ): Promise<FirestoreDoc | null> {
-  const snap = await db.collection(collection).doc(docId).get();
-  if (!snap.exists) return null;
-  const rec = snap as unknown as Record<string, unknown>;
-  return {
-    id: docId,
-    updateTimeMillis: toMillis(rec.updateTime),
-    data: asRecord((rec.data as (() => unknown) | undefined)?.call(rec)),
-  };
+  return await db.getDoc(collection, docId);
 }
 
 // --- Field mappers (Firestore -> Supabase). Only verified columns are
@@ -714,9 +1468,15 @@ function mapFirestoreEvent(
     status: asNonEmptyString(d.status) ?? "active",
     tenant_id: tenantId,
     venue_id: venueSupabaseId,
+    // Test flag: top-level `is_test` is dropped by the tolerant writer
+    // when the column does not exist yet (metadata.is_test is the
+    // durable carrier); once the optional migration adds the column,
+    // the same payload starts persisting it.
+    is_test: d.isTest === true,
     metadata: {
       bownd_doc_id: doc.id,
       bownd_tenant_ref: tenantRef,
+      is_test: d.isTest === true,
       vibe_tags: asStringArray(d.vibeTags ?? d.vibe_tags),
       audience_tags: asStringArray(d.audienceTags ?? d.audience_tags),
       category: asNonEmptyString(d.category),
@@ -736,9 +1496,11 @@ function mapFirestoreVenue(
     tenant_id: tenantId,
     lat: typeof d.lat === "number" ? d.lat : null,
     lng: typeof d.lng === "number" ? d.lng : null,
+    is_test: d.isTest === true,
     metadata: {
       bownd_doc_id: doc.id,
       bownd_tenant_ref: tenantRef,
+      is_test: d.isTest === true,
     },
   };
 }
@@ -828,6 +1590,15 @@ async function mirrorCollection(
     if (doc.updateTimeMillis > maxSeenMillis) {
       maxSeenMillis = doc.updateTimeMillis;
       maxSeenDocId = docId;
+    }
+    // Docs this function published carry sourceRef 'supabase:<id>' — they
+    // are canonical in Supabase already. Mirroring one back would create
+    // a DUPLICATE Supabase row (the upsert key 'bownd:<docId>' never
+    // matches the original row), so skip them. The watermark still
+    // advances past the doc (above).
+    if (typeof doc.data.sourceRef === "string" && doc.data.sourceRef.startsWith("supabase:")) {
+      bumpSkipped("supabase_origin");
+      continue;
     }
     try {
       if (collection === "events") {
@@ -1017,6 +1788,14 @@ Deno.serve((req) =>
       return jsonResponse(await runMirror(service, db, user.id, collections));
     }
 
-    throw new HttpError(400, "direction must be 'publish' or 'mirror'");
+    if (direction === "discovered") {
+      // Firebase is required for discovered (Firestore writes + deletes).
+      const db = getFirestore();
+      const rawLimit = typeof body.limit === "number" ? body.limit : MAX_PUBLISH_BATCH;
+      const limit = Math.max(1, Math.min(MAX_PUBLISH_LIMIT, Math.floor(rawLimit)));
+      return jsonResponse(await runDiscovered(service, db, user.id, limit));
+    }
+
+    throw new HttpError(400, "direction must be 'publish', 'mirror' or 'discovered'");
   })
 );

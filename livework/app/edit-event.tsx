@@ -10,7 +10,7 @@
 // The existing status is preserved untouched.
 //
 // Mirrors add-event.tsx's form (tiers ↔ price_label, performers ↔
-// description, free-text date). A future slice may extract a shared
+// description, picker date). A future slice may extract a shared
 // event form; this slice keeps add-event untouched.
 import React, { useCallback, useEffect, useState } from "react";
 import {
@@ -30,6 +30,7 @@ import { THEME } from "../lib/theme";
 import { supabase, supabaseConfigured } from "../lib/supabase";
 import { describeError } from "../lib/errors";
 import { useAuth } from "../lib/auth";
+import DateTimeField from "../components/DateTimeField";
 import { getUserTenantIds, getUserVenues, type TenantVenue } from "../lib/tenant";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -69,17 +70,11 @@ function parsePriceLabel(priceLabel: string | null): Tier[] {
   });
 }
 
-function formatDateForInput(iso: string | null): string {
-  if (!iso) return "";
+function parseStartTs(iso: string | null): Date | null {
+  if (!iso) return null;
+  // ISO strings always parse (no free-text parsing anywhere now).
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleString("en-US", {
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 const EVENT_TYPES = ["General Admission", "Ticketed", "Free"];
@@ -93,7 +88,8 @@ export default function EditEventScreen() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [title, setTitle] = useState("");
-  const [date, setDate] = useState("");
+  // Real Date from the picker — never a parsed string.
+  const [date, setDate] = useState<Date | null>(null);
   const [dateError, setDateError] = useState<string | null>(null);
   const [eventType, setEventType] = useState("General Admission");
   const [eventTypeOptions, setEventTypeOptions] = useState<string[]>(EVENT_TYPES);
@@ -130,7 +126,7 @@ export default function EditEventScreen() {
       }
       setTitle(typeof data.title === "string" ? data.title : "");
       setPerformers(typeof data.description === "string" ? data.description : "");
-      setDate(formatDateForInput(typeof data.start_ts === "string" ? data.start_ts : null));
+      setDate(parseStartTs(typeof data.start_ts === "string" ? data.start_ts : null));
       const existingType = typeof data.event_type === "string" && data.event_type ? data.event_type : "General Admission";
       setEventType(existingType);
       // Keep a legacy/unknown event_type selectable instead of silently
@@ -152,16 +148,6 @@ export default function EditEventScreen() {
     else setLoading(false);
   }, [session, load]);
 
-  function validateDate(value: string): string | null {
-    const trimmed = value.trim();
-    if (!trimmed) return "Enter a date & time.";
-    const parsed = new Date(trimmed);
-    if (Number.isNaN(parsed.getTime())) {
-      return "Enter a valid date & time (e.g. May 24, 2026, 8:00 PM).";
-    }
-    return null;
-  }
-
   function updateTier(tierId: string, patch: Partial<Tier>) {
     setTiers((prev) => prev.map((t) => (t.id === tierId ? { ...t, ...patch } : t)));
   }
@@ -175,9 +161,11 @@ export default function EditEventScreen() {
       Alert.alert("Missing title", "Enter an event title.");
       return;
     }
-    const err = validateDate(date);
-    setDateError(err);
-    if (err) return;
+    if (!date) {
+      setDateError("Pick a date & time.");
+      return;
+    }
+    setDateError(null);
     const selectedVenue = (venues ?? []).find((v) => v.id === selectedVenueId) ?? null;
     if (!selectedVenue) {
       Alert.alert("Missing venue", "Select a venue for this event.");
@@ -216,7 +204,7 @@ export default function EditEventScreen() {
         .update({
           title: title.trim(),
           description: performers.trim() || null,
-          start_ts: new Date(date.trim()).toISOString(),
+          start_ts: date.toISOString(),
           price_label: priceLabel,
           event_type: eventType,
           venue_id: selectedVenue.id,
@@ -320,17 +308,14 @@ export default function EditEventScreen() {
         </Field>
 
         <Field label="Date & Time">
-          <TextInput
+          <DateTimeField
             value={date}
-            onChangeText={(v) => {
-              setDate(v);
-              setDateError(validateDate(v));
+            onChange={(d) => {
+              setDate(d);
+              setDateError(null);
             }}
-            placeholder="May 24, 2026, 8:00 PM"
-            placeholderTextColor={THEME.textFaint}
-            style={styles.input}
+            error={dateError}
           />
-          {!!dateError && <Text style={styles.inlineError}>{dateError}</Text>}
         </Field>
 
         <Field label="Event Type">

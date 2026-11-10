@@ -32,6 +32,14 @@ import QRCode from "react-native-qrcode-svg";
 
 import { useAuth } from "../../lib/auth";
 import {
+  EmailAuthProvider,
+  reauthenticateWithCredential,
+  deleteUser,
+} from "firebase/auth";
+import { doc, setDoc, serverTimestamp } from "firebase/firestore";
+import { db } from "../../lib/firebase";
+import { clearAllTokens } from "../../lib/qrTokens";
+import {
   generateQrToken,
   getFavorites,
   getRedemptionHistory,
@@ -42,8 +50,12 @@ import {
   type RedemptionHistoryItem,
 } from "../../lib/store";
 import { BottomNav, refStyles } from "../ui/reference";
+import NotificationSettings from "../../components/push/NotificationSettings";
+import { MemberCode } from "../../components/ui/MemberCode";
+import { CardBackground } from "../../components/ui/CardBackground";
+import { resolveCardImage, categoryForVenueName, resolveEventCardImage } from "../../lib/placeholders";
 
-type PanelTab = "All" | "QR" | "Rewards" | "Venue";
+type PanelTab = "All" | "QR" | "Rewards";
 
 export default function PersonalScreen() {
   const router = useRouter();
@@ -66,6 +78,131 @@ export default function PersonalScreen() {
   // Favorites + redemption history (real backend when signed in).
   const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
   const [history, setHistory] = useState<RedemptionHistoryItem[]>([]);
+
+  // Account deletion (in-app flow, required by both app stores).
+  const [deleteBoxOpen, setDeleteBoxOpen] = useState(false);
+  const [deletePassword, setDeletePassword] = useState("");
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
+  async function executeDeleteAccount() {
+    if (!user || deleteBusy) return;
+    if (!user.email) {
+      Alert.alert(
+        "Could not delete account",
+        "This account has no email address on file. Please use the deletion request page on our website instead."
+      );
+      return;
+    }
+    if (!db) {
+      Alert.alert(
+        "Could not delete account",
+        "Backend is not configured yet, so deletion can't be recorded. Please try again later."
+      );
+      return;
+    }
+    setDeleteBusy(true);
+    try {
+      // 1. Re-authenticate — Firebase requires a recent login before
+      //    the auth user can be deleted.
+      const credential = EmailAuthProvider.credential(
+        user.email,
+        deletePassword
+      );
+      try {
+        await reauthenticateWithCredential(user, credential);
+      } catch {
+        Alert.alert(
+          "Password didn't match",
+          "That password doesn't match your account, so nothing was deleted. Check it and try again."
+        );
+        return;
+      }
+
+      // 2. Record the deletion request for the backend workflow, which
+      //    deletes/anonymizes the remaining account data (profile,
+      //    favorites, points, redemption history) within 30 days.
+      await setDoc(doc(db, "deletion_requests", user.uid), {
+        uid: user.uid,
+        email: user.email,
+        status: "requested",
+        source: "in_app",
+        requested_at: serverTimestamp(),
+        requested_at_iso: new Date().toISOString(),
+      });
+
+      // 3. Invalidate this device's QR tokens right away.
+      try {
+        await clearAllTokens();
+      } catch {
+        // Local token clearing is best-effort; the backend workflow
+        // invalidates the account's tokens server-side as well.
+      }
+
+      // 4. Delete the Firebase Auth user.
+      try {
+        await deleteUser(user);
+      } catch (e: any) {
+        if (e?.code === "auth/requires-recent-login") {
+          Alert.alert(
+            "Please sign in again",
+            "For your security, sign in again and retry deletion. Your deletion request has been recorded, so we will also follow up from our side."
+          );
+        } else {
+          Alert.alert(
+            "Deletion did not complete",
+            "Your deletion request has been recorded, but your sign-in could not be removed just now. Please try again, or we will complete it from your request."
+          );
+        }
+        return;
+      }
+
+      // 5. Clear local auth state and land signed out.
+      setDeletePassword("");
+      setDeleteBoxOpen(false);
+      try {
+        await signOut();
+      } catch {
+        // Auth user is already deleted; context state clears on the
+        // next auth-state change either way.
+      }
+      Alert.alert(
+        "Account deleted",
+        "Your Bownd account has been deleted. Your profile, favorites, and points are removed and your redemption history is anonymized."
+      );
+      router.replace("/(tabs)");
+    } catch {
+      Alert.alert(
+        "Deletion did not complete",
+        "Something went wrong before anything was deleted. Please try again."
+      );
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
+  function onConfirmDeleteAccount() {
+    if (!deletePassword) {
+      Alert.alert(
+        "Password required",
+        "Enter your password to confirm this is really you."
+      );
+      return;
+    }
+    Alert.alert(
+      "Delete your account?",
+      "This cannot be undone. Your sign-in, profile, favorites, and points will be deleted, and your redemption history will be anonymized.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Yes, delete my account",
+          style: "destructive",
+          onPress: () => {
+            void executeDeleteAccount();
+          },
+        },
+      ]
+    );
+  }
 
   const loadBackend = useCallback(async () => {
     try {
@@ -175,7 +312,9 @@ export default function PersonalScreen() {
 
   const showQr = panel === "All" || panel === "QR";
   const showRewards = panel === "All" || panel === "Rewards";
-  const showVenue = panel === "All" || panel === "Venue";
+  // Favorite venues live under "All" only. The old "Venue" panel tab is
+  // now the "What's Close" button — it opens the map page instead of
+  // switching the panel.
 
   return (
     <View style={refStyles.root}>
@@ -220,7 +359,7 @@ export default function PersonalScreen() {
           {/* Light panel */}
           <View style={refStyles.lightPanel}>
             <View style={refStyles.panelTabs}>
-              {(["All", "QR", "Rewards", "Venue"] as PanelTab[]).map((p) => (
+              {(["All", "QR", "Rewards"] as PanelTab[]).map((p) => (
                 <TouchableOpacity
                   key={p}
                   onPress={() => setPanel(p)}
@@ -231,6 +370,12 @@ export default function PersonalScreen() {
                   </Text>
                 </TouchableOpacity>
               ))}
+              <TouchableOpacity
+                onPress={() => router.push("/whats-close")}
+                style={refStyles.panelTab}
+              >
+                <Text style={refStyles.panelTabText}>What&apos;s Close</Text>
+              </TouchableOpacity>
             </View>
 
             {/* QR section */}
@@ -283,6 +428,10 @@ export default function PersonalScreen() {
                     <Ionicons name="scan-outline" size={18} color="#fff" />
                     <Text style={styles.scanBtnText}>Open Camera Scanner</Text>
                   </TouchableOpacity>
+
+                  {/* Member Card — the signed-in member's real QR + barcode. */}
+                  <Text style={styles.memberHeading}>Member Card</Text>
+                  <MemberCode uid={user?.uid ?? null} />
                 </View>
               </>
             )}
@@ -314,8 +463,16 @@ export default function PersonalScreen() {
               </>
             )}
 
-            {/* Venue section — favorite venues */}
-            {showVenue && (
+            {/* Notifications — push category toggles (plan §1.6) */}
+            {panel === "All" && (
+              <>
+                <Text style={[refStyles.darkHeading, styles.sectionHeading]}>Notifications</Text>
+                <NotificationSettings />
+              </>
+            )}
+
+            {/* Favorite venues — under the All panel */}
+            {panel === "All" && (
               <>
                 <Text style={[refStyles.darkHeading, styles.sectionHeading]}>Favorite Venues</Text>
                 {favoriteVenues.length === 0 ? (
@@ -326,17 +483,27 @@ export default function PersonalScreen() {
                       <TouchableOpacity
                         key={item.id}
                         onPress={() =>
-                          router.push({ pathname: "/(tabs)/events", params: { venue: item.title } })
+                          router.push({
+                            pathname: "/(tabs)/events",
+                            params: { venueId: item.id, venue: item.title },
+                          })
                         }
-                        style={[styles.tile, { marginRight: 12 }]}
+                        style={[styles.tile, { padding: 0 }]}
                       >
-                        <Text style={styles.tileBadge}>{item.badge ?? "Favorite"}</Text>
-                        <Text style={styles.tileTitle} numberOfLines={2}>
-                          {item.title}
-                        </Text>
-                        <Text style={styles.tileSub} numberOfLines={1}>
-                          {item.subtitle || "Kansas City"}
-                        </Text>
+                        <CardBackground
+                          source={resolveCardImage(undefined, categoryForVenueName(item.title))}
+                          style={styles.tileBg}
+                          contentStyle={styles.tileContent}
+                        >
+                          <Text style={styles.tileBadge}>{item.badge ?? "Favorite"}</Text>
+                          <Text style={styles.tileTitle} numberOfLines={2}>
+                            {item.title}
+                          </Text>
+                          <Text style={styles.tileSub} numberOfLines={1}>
+                            {item.subtitle || "Kansas City"}
+                          </Text>
+                          <Text style={styles.tileMeta}>Tap to view</Text>
+                        </CardBackground>
                       </TouchableOpacity>
                     ))}
                   </ScrollView>
@@ -358,20 +525,26 @@ export default function PersonalScreen() {
                         onPress={() =>
                           router.push({ pathname: "/detail", params: { id: item.id, kind: "event" } })
                         }
-                        style={[styles.tile, { marginRight: 12 }]}
+                        style={[styles.tile, { padding: 0 }]}
                       >
-                        <Text style={styles.tileBadge}>{item.badge ?? "Saved"}</Text>
-                        <Text style={styles.tileTitle} numberOfLines={2}>
-                          {item.title}
-                        </Text>
-                        <Text style={styles.tileSub} numberOfLines={1}>
-                          {item.subtitle}
-                        </Text>
-                        {!!item.when && (
-                          <Text style={styles.tileWhen} numberOfLines={1}>
-                            {item.when}
+                        <CardBackground
+                          source={resolveEventCardImage(undefined)}
+                          style={styles.tileBg}
+                          contentStyle={styles.tileContent}
+                        >
+                          <Text style={styles.tileBadge}>{item.badge ?? "Saved"}</Text>
+                          <Text style={styles.tileTitle} numberOfLines={2}>
+                            {item.title}
                           </Text>
-                        )}
+                          <Text style={styles.tileSub} numberOfLines={1}>
+                            {item.subtitle}
+                          </Text>
+                          {!!item.when && (
+                            <Text style={styles.tileWhen} numberOfLines={1}>
+                              {item.when}
+                            </Text>
+                          )}
+                        </CardBackground>
                       </TouchableOpacity>
                     ))}
                   </ScrollView>
@@ -404,6 +577,68 @@ export default function PersonalScreen() {
                 ))}
               </>
             )}
+
+            {/* Account — deletion entry point (stores require in-app deletion) */}
+            {user && (
+              <>
+                <Text style={[refStyles.darkHeading, styles.sectionHeading]}>Account</Text>
+                <View style={refStyles.tokenCard}>
+                  <Text style={styles.accountEmail}>{user.email ?? "Signed in"}</Text>
+                  {!deleteBoxOpen ? (
+                    <TouchableOpacity
+                      onPress={() => setDeleteBoxOpen(true)}
+                      style={styles.deleteOpenBtn}
+                    >
+                      <Text style={styles.deleteOpenBtnText}>Delete account</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <View>
+                      <Text style={styles.deleteExplain}>
+                        Deleting your account permanently deletes your sign-in, profile,
+                        favorites, and points. Your redemption history is anonymized —
+                        your name, email, and QR tokens are removed so it can no longer
+                        be linked to you. Any unused tickets or offers tied to your
+                        account may stop working. Deletion is completed within 30 days,
+                        and most of it happens right away. This cannot be undone.
+                      </Text>
+                      <Text style={styles.deleteLabel}>
+                        Enter your password to confirm it&apos;s you
+                      </Text>
+                      <TextInput
+                        value={deletePassword}
+                        onChangeText={setDeletePassword}
+                        placeholder="Your password"
+                        placeholderTextColor="#88848f"
+                        style={styles.deleteInput}
+                        secureTextEntry
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        editable={!deleteBusy}
+                      />
+                      <TouchableOpacity
+                        onPress={onConfirmDeleteAccount}
+                        style={[styles.deleteConfirmBtn, deleteBusy && { opacity: 0.6 }]}
+                        disabled={deleteBusy}
+                      >
+                        <Text style={styles.deleteConfirmBtnText}>
+                          {deleteBusy ? "Deleting…" : "Delete my account"}
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => {
+                          setDeleteBoxOpen(false);
+                          setDeletePassword("");
+                        }}
+                        style={styles.deleteCancelBtn}
+                        disabled={deleteBusy}
+                      >
+                        <Text style={styles.deleteCancelBtnText}>Cancel</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+              </>
+            )}
           </View>
         </ScrollView>
       </SafeAreaView>
@@ -425,6 +660,41 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.35)",
   },
   authBtnText: { color: "#fff", fontWeight: "700", fontSize: 13 },
+  accountEmail: { fontSize: 13, color: "#514a5a", fontWeight: "800", marginBottom: 12 },
+  deleteOpenBtn: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#b3261e",
+    backgroundColor: "#ffffff",
+  },
+  deleteOpenBtnText: { color: "#b3261e", fontWeight: "900", fontSize: 12 },
+  deleteExplain: { fontSize: 12, color: "#514a5a", lineHeight: 17, marginBottom: 12 },
+  deleteLabel: { fontSize: 12, color: "#221c2a", fontWeight: "800", marginBottom: 8 },
+  deleteInput: {
+    borderWidth: 1,
+    borderColor: "#d5d0df",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: "#221c2a",
+    backgroundColor: "#ffffff",
+    marginBottom: 12,
+  },
+  deleteConfirmBtn: {
+    height: 45,
+    borderRadius: 13,
+    backgroundColor: "#b3261e",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  deleteConfirmBtnText: { color: "#fff", fontWeight: "700" },
+  deleteCancelBtn: { alignItems: "center", paddingVertical: 12, marginTop: 4 },
+  deleteCancelBtnText: { color: "#514a5a", fontWeight: "800", fontSize: 13 },
+  memberHeading: { fontSize: 18, fontWeight: "700", color: "#231e29", marginTop: 18, marginBottom: 10 },
   qrPlaceholderText: { fontSize: 12, color: "#514a5a", fontWeight: "700", marginTop: 8 },
   scanBtn: {
     marginTop: 12,
@@ -468,26 +738,27 @@ const styles = StyleSheet.create({
     height: 150,
     borderRadius: 18,
     overflow: "hidden",
-    padding: 14,
-    justifyContent: "flex-end",
-    backgroundColor: "#ffffff",
     borderWidth: 1,
     borderColor: "#d5d0df",
+    marginRight: 12,
   },
+  tileBg: { flex: 1, borderRadius: 18 },
+  tileContent: { flex: 1, padding: 14, justifyContent: "flex-end" },
   tileBadge: {
     alignSelf: "flex-start",
-    backgroundColor: "#e4e0ed",
+    backgroundColor: "rgba(0,0,0,0.45)",
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
-    color: "#221c2a",
+    color: "#ffffff",
     fontWeight: "900",
     fontSize: 11,
     marginBottom: 10,
   },
-  tileTitle: { color: "#221c2a", fontSize: 16, fontWeight: "900", lineHeight: 20 },
-  tileSub: { color: "#514a5a", marginTop: 6, fontSize: 12, fontWeight: "800" },
-  tileWhen: { marginTop: 8, color: "#221c2a", fontSize: 12, fontWeight: "900" },
+  tileTitle: { color: "#ffffff", fontSize: 16, fontWeight: "900", lineHeight: 20 },
+  tileSub: { color: "rgba(255,255,255,0.85)", marginTop: 6, fontSize: 12, fontWeight: "800" },
+  tileWhen: { marginTop: 8, color: "#ffffff", fontSize: 12, fontWeight: "900" },
+  tileMeta: { marginTop: 8, color: "rgba(255,255,255,0.62)", fontSize: 12, fontWeight: "800" },
   rowCard: {
     flexDirection: "row",
     alignItems: "center",

@@ -1,7 +1,8 @@
 // Livework — Add New Event form (Phase 5 + Phase 7 Slice 1).
 // Ticket tiers are real and editable, and saved in the existing
-// `events.price_label` column ("GA — $25; VIP — $50"). Date is validated
-// before save. No fake success: unconfigured Supabase shows an error and
+// `events.price_label` column ("GA — $25; VIP — $50"). Date comes from
+// the native picker (components/DateTimeField) — no free-text parsing.
+// No fake success: unconfigured Supabase shows an error and
 // does NOT navigate back; success is shown only after the insert
 // confirms. Event Image stays disabled (needs expo-image-picker +
 // Supabase Storage — not installed yet).
@@ -30,6 +31,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { THEME } from "../lib/theme";
+import DateTimeField from "../components/DateTimeField";
 import { supabase, supabaseConfigured } from "../lib/supabase";
 import { useAuth } from "../lib/auth";
 import { getUserVenues, type TenantVenue } from "../lib/tenant";
@@ -69,7 +71,9 @@ export default function AddEventScreen() {
   const router = useRouter();
   const { session, loading: authLoading } = useAuth();
   const [title, setTitle] = useState("");
-  const [date, setDate] = useState("");
+  // The picker hands us a real Date — no free-text parsing (Hermes'
+  // Date.parse rejected many typed formats on Android). null = not picked.
+  const [date, setDate] = useState<Date | null>(null);
   const [dateError, setDateError] = useState<string | null>(null);
   const [eventType, setEventType] = useState("General Admission");
   const [performers, setPerformers] = useState("");
@@ -94,17 +98,6 @@ export default function AddEventScreen() {
     if (session) void loadVenues();
   }, [session, loadVenues]);
 
-  function validateDate(value: string): string | null {
-    const trimmed = value.trim();
-    // events.start_ts is NOT NULL with no default — a date is required.
-    if (!trimmed) return "Enter a date & time.";
-    const parsed = new Date(trimmed);
-    if (Number.isNaN(parsed.getTime())) {
-      return "Enter a valid date & time (e.g. May 24, 2026, 8:00 PM).";
-    }
-    return null;
-  }
-
   function updateTier(id: string, patch: Partial<Tier>) {
     setTiers((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   }
@@ -118,9 +111,12 @@ export default function AddEventScreen() {
       Alert.alert("Missing title", "Enter an event title.");
       return;
     }
-    const err = validateDate(date);
-    setDateError(err);
-    if (err) return;
+    // events.start_ts is NOT NULL with no default — a date is required.
+    if (!date) {
+      setDateError("Pick a date & time.");
+      return;
+    }
+    setDateError(null);
     const selectedVenue = (venues ?? []).find((v) => v.id === selectedVenueId) ?? null;
     if (!selectedVenue) {
       Alert.alert("Missing venue", "Select a venue for this event.");
@@ -154,7 +150,7 @@ export default function AddEventScreen() {
         venue_id: selectedVenue.id,
         title: title.trim(),
         description: performers.trim() || null,
-        start_ts: new Date(date.trim()).toISOString(),
+        start_ts: date.toISOString(),
         price_label: priceLabel,
         event_type: eventType,
         status: "draft",
@@ -276,17 +272,14 @@ export default function AddEventScreen() {
         </Field>
 
         <Field label="Date & Time">
-          <TextInput
+          <DateTimeField
             value={date}
-            onChangeText={(v) => {
-              setDate(v);
-              setDateError(validateDate(v));
+            onChange={(d) => {
+              setDate(d);
+              setDateError(null);
             }}
-            placeholder="May 24, 2026, 8:00 PM"
-            placeholderTextColor={THEME.textFaint}
-            style={styles.input}
+            error={dateError}
           />
-          {!!dateError && <Text style={styles.inlineError}>{dateError}</Text>}
         </Field>
 
         <Field label="Event Type">

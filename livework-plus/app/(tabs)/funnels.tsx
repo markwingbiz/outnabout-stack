@@ -1,11 +1,15 @@
-// Livework+ Funnel controls — every funnel with its money goal and
-// lifecycle controls. Status comes from the backend (forge-funnel) only;
-// this screen NEVER shows ACTIVE unless the backend says so, and it
-// NEVER shows projected revenue as earned — only verified revenue.
+// Livework+ Funnel controls — every canonical funnel with its money goal
+// and lifecycle controls. Status comes from the backend (forge-funnel)
+// only; this screen NEVER shows ACTIVE unless the backend says so, and
+// it NEVER shows projected revenue as earned — only verified revenue.
 // A funnel cannot reach READY/ACTIVE without a money goal (revenue_model
 // + target); if Validate/Activate returns missing gates, they show
 // under that funnel. Each card links to the funnel-detail screen
 // (Phase 8 Slice 3).
+// 2026-10-21 Monfun remap: the funnels table also holds sub-rows
+// (config.parent_funnel — they nest under their canonical funnel, money
+// included) and one legacy row (metadata.registry_note — KC Content,
+// not a funnel; never listed or counted).
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
@@ -146,12 +150,71 @@ function FunnelsContent() {
     return map;
   }, [moneyRows]);
 
-  /** Canonical money view: prefer the backfill_* mirror row, else the first. */
-  function canonicalMoney(funnelId: string): MoneyFunnelRow | null {
-    const rows = moneyByFunnel.get(funnelId) ?? [];
-    if (rows.length === 0) return null;
-    return rows.find((r) => (r.key ?? "").startsWith("backfill_")) ?? rows[0];
+  /** Parent funnel id for sub-rows (config.parent_funnel), else null. */
+  function parentOf(f: FunnelRow): string | null {
+    const v = f.config?.parent_funnel;
+    return typeof v === "string" ? v : null;
   }
+
+  /** Legacy rows (metadata.registry_note) are history, not funnels. */
+  function isLegacy(f: FunnelRow): boolean {
+    const v = f.metadata?.registry_note;
+    return typeof v === "string" && v.length > 0;
+  }
+
+  type FunnelView = {
+    funnel: FunnelRow;
+    subFunnels: FunnelRow[];
+    money: MoneyFunnelRow | null;
+  };
+
+  /**
+   * Canonical funnel views: legacy rows dropped, sub-rows nested under
+   * their canonical funnel. A funnel's money family is its own money rows
+   * plus its sub-rows' rows; the canonical money row is the one carrying
+   * the monthly target (Social + SEO's target lives on its SEO sub-row's
+   * backfill mirror), else the backfill_* mirror, else the first row.
+   * Only canonical rows feed the totals — no double counting.
+   */
+  const views = useMemo<FunnelView[]>(() => {
+    const live = funnels.filter((f) => !isLegacy(f));
+    const liveIds = new Set(live.map((f) => f.id));
+    const subsByParent = new Map<string, FunnelRow[]>();
+    const canonicalList: FunnelRow[] = [];
+    for (const f of live) {
+      const parent = parentOf(f);
+      if (parent && parent !== f.id && liveIds.has(parent)) {
+        const list = subsByParent.get(parent) ?? [];
+        list.push(f);
+        subsByParent.set(parent, list);
+      } else {
+        canonicalList.push(f);
+      }
+    }
+    return canonicalList.map((funnel) => {
+      const subFunnels = subsByParent.get(funnel.id) ?? [];
+      const family = [funnel.id, ...subFunnels.map((s) => s.id)].flatMap(
+        (id) => moneyByFunnel.get(id) ?? [],
+      );
+      const money =
+        family.find((r) => moneyTargetCents(r) !== null) ??
+        family.find((r) => (r.key ?? "").startsWith("backfill_")) ??
+        family[0] ??
+        null;
+      return { funnel, subFunnels, money };
+    });
+  }, [funnels, moneyByFunnel]);
+
+  const totals = useMemo(() => {
+    let target = 0;
+    let verified = 0;
+    for (const v of views) {
+      if (!v.money) continue;
+      target += moneyTargetCents(v.money) ?? 0;
+      verified += v.money.verified_revenue_cents ?? 0;
+    }
+    return { target, verified };
+  }, [views]);
 
   async function doAction(funnel: FunnelRow, action: FunnelAction) {
     setActingId(funnel.id);
@@ -208,13 +271,22 @@ function FunnelsContent() {
         </View>
       )}
 
+      {!loading && views.length > 0 && (
+        <Text style={styles.summaryLine}>
+          {views.length} funnels · Combined target {formatCents(totals.target)}/mo ·
+          Verified revenue {formatCents(totals.verified)}
+        </Text>
+      )}
+
       {loading ? (
         <ActivityIndicator color={THEME.purpleBright} size="large" style={{ marginTop: 24 }} />
-      ) : funnels.length === 0 ? (
+      ) : views.length === 0 ? (
         <Text style={styles.empty}>No funnels yet.</Text>
       ) : (
-        funnels.map((funnel) => {
-          const money = canonicalMoney(funnel.id);
+        views.map((view) => {
+          const funnel = view.funnel;
+          const money = view.money;
+          const subFunnels = view.subFunnels;
           const target = money ? moneyTargetCents(money) : null;
           const verified = money?.verified_revenue_cents ?? 0;
           const spent = money?.spent_cents ?? 0;
@@ -259,6 +331,20 @@ function FunnelsContent() {
                   </Text>
                 )}
               </View>
+
+              {subFunnels.length > 0 && (
+                <View style={styles.subBox}>
+                  <Text style={styles.subLabel}>Includes</Text>
+                  {subFunnels.map((s) => (
+                    <View key={s.id} style={styles.subRow}>
+                      <Text style={styles.subName} numberOfLines={2}>
+                        {s.name || s.slug || "Sub-funnel"}
+                      </Text>
+                      <StatusBadge status={s.status} />
+                    </View>
+                  ))}
+                </View>
+              )}
 
               {gates.length > 0 && (
                 <View style={styles.gateBox}>
@@ -343,6 +429,22 @@ const styles = StyleSheet.create({
   errorText: { color: THEME.pink, fontSize: 13, lineHeight: 18 },
   retryText: { color: THEME.purpleBright, fontSize: 13, fontWeight: "800", marginTop: 8 },
   empty: { color: THEME.textMuted, fontSize: 14, textAlign: "center", marginTop: 24 },
+  summaryLine: { color: THEME.textMuted, fontSize: 12, fontWeight: "700" },
+  subBox: {
+    backgroundColor: "rgba(255,255,255,0.03)",
+    borderRadius: 12,
+    padding: 10,
+    marginTop: 10,
+    gap: 6,
+  },
+  subLabel: { color: THEME.textMuted, fontSize: 11, fontWeight: "800" },
+  subRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  subName: { color: THEME.textMuted, fontSize: 12, fontWeight: "700", flex: 1 },
   rowBetween: {
     flexDirection: "row",
     alignItems: "flex-start",

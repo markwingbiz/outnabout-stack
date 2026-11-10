@@ -8,16 +8,56 @@
 //   one-time demo seed, which Phase 6 deletes (demo data must never be
 //   written into Firestore). Catalog writes come from the bownd-sync
 //   service identity (server-side) and, later, an admin/venue role —
-//   never from the customer app. Reads stay public.
-// - Redemptions rules are UNCHANGED: the NEW -> REDEEMED transition
-//   with the restricted changed-keys set is the second layer of the
-//   anti-double-redemption guard (the first layer is the Firestore
-//   transaction in lib/redemptions.ts).
+//   never from the customer app.
+// - The redemptions NEW -> REDEEMED transition rule is UNCHANGED:
+//   with the restricted changed-keys set it is the second layer of
+//   the anti-double-redemption guard (the first layer is the
+//   Firestore transaction in lib/redemptions.ts). The read side of
+//   that match IS narrowed below (2026-10-23) — see the hardening
+//   notes and the comment on the match itself.
+//
+// Exposure hardening (2026-10-22 audit, see
+// forge-design/firestore-exposure-audit.md):
+// - events/venues reads are NO LONGER unconditional. Verified live
+//   2026-10-22: with `allow read: if true`, a completely
+//   unauthenticated HTTPS GET returned the operator test venue and
+//   both test events in full, and both collection lists. The app's
+//   isTest filter (lib/store.ts) is a UI gate, not a security
+//   boundary — the docs themselves were world-readable.
+// - Public read now requires a genuinely published doc: events must
+//   not be test docs (isTest); venues must additionally carry the
+//   `verified` flag bownd-sync stamps on gated publishes. Test and
+//   unpublished docs are readable ONLY by the operator account.
+// - Firestore rules are NOT filters: a list query is allowed only
+//   when its constraints prove every returned doc passes. The paired
+//   app change in lib/store.ts makes non-operator catalog queries
+//   carry matching where() filters (isTest == false, plus
+//   verified == true for venues); the operator keeps the unfiltered
+//   query. DEPLOY ORDER: this rules change and that app build must
+//   ship together — an old app build's unfiltered query is denied
+//   (and its catch returns an empty catalog) once these rules are
+//   live. As of the audit the live catalog contains ONLY test docs,
+//   so deploying now changes nothing a non-operator can see.
+// - deletion_requests (added with the in-app account-deletion flow):
+//   a signed-in user may create ONLY their own request doc (id ==
+//   their uid, status 'requested'); reads are operator-only and no
+//   client may update or delete — the backend deletion workflow
+//   (service identity) owns the record after creation.
+// - redemptions/{token} reads are SPLIT (2026-10-23): `get` stays
+//   any-signed-in — the only client read of a token doc is the get
+//   inside validateAndRedeem's transaction, performed by whichever
+//   device presents the token, and the doc carries NO owner field a
+//   rule could scope by (full closure rides the server-issued token
+//   build). `list` is operator-only: no client flow ever lists this
+//   collection, so the any-signed-in enumeration path is closed.
 //
 // Principles:
-// - Events/venues are public to read. Client writes are denied.
+// - Published events/venues are public to read; test/unpublished
+//   docs are operator-only. Client writes are denied.
 // - Each user can only read/write their own user doc, favorites, and
 //   redemption history.
+// - deletion_requests: create-own only, operator-only reads, no
+//   client updates/deletes (the deletion workflow is server-side).
 // - Top-level `redemptions` tokens: any signed-in user may create a
 //   token and may flip a NEW token to REDEEMED exactly once. They may
 //   NOT edit other fields, un-redeem, or delete tokens.
@@ -34,16 +74,54 @@ service cloud.firestore {
       return signedIn() && request.auth.uid == uid;
     }
 
-    // Public catalog (read). Client writes DENIED (Phase 6) — catalog
-    // writes come from bownd-sync (service identity) and, later, an
-    // admin/venue role. The old signed-in write allowance existed only
-    // for the deleted demo seed.
+    // The operator account (same address as OPERATOR_EMAIL in
+    // bownd/lib/store.ts). Only the operator may read test docs.
+    function isOperator() {
+      return signedIn()
+        && request.auth.token.email == 'mr.marshall3@yahoo.com';
+    }
+
+    // A doc is public only when it is genuinely published catalog:
+    // test docs (bownd-sync stamps isTest from the Supabase is_test
+    // flag) are never public. Docs missing the field default to
+    // non-test, matching the app's `data.isTest === true` read.
+    function isPublicEvent(data) {
+      return data.get('isTest', false) != true;
+    }
+
+    // Venues additionally require the `verified` flag bownd-sync
+    // stamps after the venue-verification gate (test venues publish
+    // exempt but stay isTest, so they fail the first condition).
+    function isPublicVenue(data) {
+      return data.get('isTest', false) != true
+        && data.get('verified', false) == true;
+    }
+
+    // Public catalog (conditional read). Client writes DENIED
+    // (Phase 6) — catalog writes come from bownd-sync (service
+    // identity, which bypasses these rules) and, later, an
+    // admin/venue role. `list` repeats the get condition: a
+    // non-operator list query must carry where() filters proving it
+    // (see lib/store.ts fetchEvents/fetchVenues); the operator's
+    // unfiltered list is allowed by the isOperator() branch, which
+    // depends only on the request.
+    // INTERIM LOCKDOWN (2026-11-09, operator decision): catalog reads
+    // are operator-only while the catalog holds only test docs and no
+    // public build is live. Verified live 2026-11-09: the conditional
+    // public rule below-era leaked test events through unfiltered
+    // list/query results — Firestore cannot enforce the negative
+    // isPublicEvent condition (isTest != true) on queries, though
+    // direct gets were denied correctly. RESTORE the conditional
+    // public reads (isPublicEvent / isPublicVenue get+list) only
+    // alongside the production build whose queries carry the filters,
+    // and only once bownd-sync stamps a positive published marker so
+    // the public condition is enforceable like the venues rule.
     match /events/{id} {
-      allow read: if true;
+      allow get, list: if isOperator();
       allow create, update, delete: if false;
     }
     match /venues/{id} {
-      allow read: if true;
+      allow get, list: if isOperator();
       allow create, update, delete: if false;
     }
 
@@ -64,9 +142,43 @@ service cloud.firestore {
       }
     }
 
+    // Account deletion requests — written by the in-app deletion
+    // flow (app/(tabs)/personal.tsx): setDoc on
+    // deletion_requests/{uid} with status 'requested' and source
+    // 'in_app', just before the auth user is deleted. A signed-in
+    // user may CREATE only their own request (doc id == their uid,
+    // the uid field must match, status must be 'requested'). There
+    // are NO client updates or deletes: the backend deletion
+    // workflow runs under a service identity (bypasses these rules)
+    // and advances/completes the record within 30 days. Reads are
+    // operator-only — the app never reads a request back, and the
+    // record carries the requester's email, so it is neither public
+    // nor owner-readable.
+    match /deletion_requests/{requestId} {
+      allow get, list: if isOperator();
+      allow create: if isOwner(requestId)
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.status == 'requested';
+      allow update, delete: if false;
+    }
+
     // Verifiable redemption tokens — atomic single-use.
     match /redemptions/{token} {
-      allow read: if signedIn();
+      // Reads split (2026-10-23, see firestore-exposure-audit.md):
+      // the ONLY client read of a token doc is the transactional get
+      // in validateAndRedeem (lib/redemptions.ts), performed by
+      // whichever device presents the token — the token is a bearer
+      // credential and its doc (experienceId, status, timestamps,
+      // redeemedByDevice) carries NO owner/uid field a rule could
+      // scope by, so per-user read scoping is impossible without
+      // changing what the app writes; that change rides the
+      // server-issued token build. What rules close today is
+      // enumeration: no client flow lists this collection (customer
+      // history reads the owner-only users/{uid}/redemptions
+      // subcollection instead), so list drops from any-signed-in to
+      // operator-only. Create/update/delete are untouched.
+      allow get: if signedIn();
+      allow list: if isOperator();
       allow create: if signedIn();
       // Only a NEW -> REDEEMED transition, and only the status +
       // redemption metadata fields may change.

@@ -21,7 +21,9 @@
     "orientation": "portrait",
     "plugins": [
       "expo-router",
-      "expo-font"
+      "expo-font",
+      "expo-notifications",
+      "@react-native-community/datetimepicker"
     ],
     "scheme": "livework",
     "slug": "livework",

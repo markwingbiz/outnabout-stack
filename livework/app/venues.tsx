@@ -28,6 +28,7 @@ import {
   Pressable,
   SafeAreaView,
   ActivityIndicator,
+  Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "expo-router";
@@ -35,7 +36,14 @@ import { useRouter } from "expo-router";
 import { THEME } from "../lib/theme";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../lib/auth";
+import { isOperatorEmail } from "../lib/demo";
 import { getUserVenues, type TenantVenue } from "../lib/tenant";
+import {
+  verificationStatusOf,
+  verificationLabel,
+  verificationHint,
+  requestVerificationReview,
+} from "../lib/verification";
 
 type VenueWithCount = TenantVenue & { eventCount: number | null; redemptionCount: number | null };
 
@@ -43,11 +51,25 @@ function addressLine(v: TenantVenue): string {
   return [v.address, v.city, v.state].filter((p) => p && p.trim()).join(", ");
 }
 
+/** Status chip color by verification state — display only. */
+function chipStyle(status: ReturnType<typeof verificationStatusOf>): {
+  backgroundColor: string;
+  borderColor: string;
+} {
+  if (status === "verified") return { backgroundColor: "rgba(46,160,90,0.16)", borderColor: "rgba(46,160,90,0.55)" };
+  if (status === "pending_review") return { backgroundColor: "rgba(230,160,40,0.16)", borderColor: "rgba(230,160,40,0.55)" };
+  if (status === "rejected") return { backgroundColor: "rgba(220,70,70,0.16)", borderColor: "rgba(220,70,70,0.55)" };
+  if (status === "test") return { backgroundColor: "rgba(150,120,255,0.16)", borderColor: "rgba(150,120,255,0.55)" };
+  return { backgroundColor: "rgba(140,140,140,0.16)", borderColor: "rgba(140,140,140,0.45)" };
+}
+
 export default function VenuesScreen() {
   const router = useRouter();
   const { session, loading: authLoading } = useAuth();
   const [venues, setVenues] = useState<VenueWithCount[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [requestingId, setRequestingId] = useState<string | null>(null);
+  const isOperator = isOperatorEmail(session?.user?.email ?? null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -95,6 +117,29 @@ export default function VenuesScreen() {
       if (session) void load();
     }, [session, load]),
   );
+
+  // Request an operator verification review for one venue. The database
+  // trigger allows ONLY the unverified/rejected -> pending_review move,
+  // so this can never grant verification by itself.
+  async function onRequestReview(venueId: string) {
+    if (requestingId) return;
+    setRequestingId(venueId);
+    try {
+      await requestVerificationReview(venueId);
+      Alert.alert(
+        "Review requested",
+        "Your venue is in the operator review queue. Publishing to Bownd unlocks after approval.",
+      );
+      await load();
+    } catch (e: unknown) {
+      Alert.alert(
+        "Could not request review",
+        e instanceof Error ? e.message : "Something went wrong. Try again.",
+      );
+    } finally {
+      setRequestingId(null);
+    }
+  }
 
   if (authLoading || venues === null) {
     return (
@@ -147,6 +192,13 @@ export default function VenuesScreen() {
           <Text style={styles.addText}>+ Add Venue</Text>
         </Pressable>
 
+        {isOperator && (
+          <Pressable style={styles.queueBtn} onPress={() => router.push("/verify-review")}>
+            <Text style={styles.queueBtnText}>Review pending verifications</Text>
+            <Ionicons name="chevron-forward" size={16} color={THEME.purple} />
+          </Pressable>
+        )}
+
         {venues.length === 0 ? (
           <View style={styles.card}>
             <Text style={styles.empty}>No venues yet.</Text>
@@ -155,14 +207,33 @@ export default function VenuesScreen() {
         ) : (
           venues.map((v) => {
             const line = addressLine(v);
+            // Verification gate (v1): status is display + UX gate only —
+            // bownd-sync enforces it server-side before anything publishes.
+            const vStatus = verificationStatusOf(v);
+            const canRequest = vStatus === "unverified" || vStatus === "rejected";
             return (
               <Pressable key={v.id} style={styles.card} onPress={() => router.push(`/venue-form?id=${v.id}`)}>
                 <View style={styles.row}>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.venueName}>{v.name}</Text>
+                    <View style={[styles.chip, chipStyle(vStatus)]}>
+                      <Text style={styles.chipText}>{verificationLabel(vStatus)}</Text>
+                    </View>
+                    <Text style={styles.verifyHint}>{verificationHint(vStatus)}</Text>
                     {!!line && <Text style={styles.detail}>{line}</Text>}
                     {!!v.phone && <Text style={styles.detail}>{v.phone}</Text>}
                     {!!v.website && <Text style={styles.detail}>{v.website}</Text>}
+                    {canRequest && (
+                      <Pressable
+                        style={styles.reviewBtn}
+                        disabled={requestingId === v.id}
+                        onPress={() => void onRequestReview(v.id)}
+                      >
+                        <Text style={styles.reviewBtnText}>
+                          {requestingId === v.id ? "Requesting…" : "Request verification review"}
+                        </Text>
+                      </Pressable>
+                    )}
                     <Text style={styles.count}>
                       {v.eventCount === null
                         ? "Events: —"
@@ -212,6 +283,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   addText: { color: "#fff", fontWeight: "900", fontSize: 13 },
+  queueBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    borderWidth: 1,
+    borderColor: THEME.purple,
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+  },
+  queueBtnText: { color: THEME.purple, fontWeight: "900", fontSize: 13 },
   card: {
     backgroundColor: THEME.card,
     borderRadius: THEME.radius,
@@ -221,6 +304,25 @@ const styles = StyleSheet.create({
   },
   row: { flexDirection: "row", alignItems: "center", gap: 12 },
   venueName: { color: "#fff", fontSize: 16, fontWeight: "900" },
+  chip: {
+    alignSelf: "flex-start",
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    marginTop: 8,
+  },
+  chipText: { color: "#fff", fontSize: 11, fontWeight: "800" },
+  verifyHint: { color: THEME.textFaint, fontSize: 12, marginTop: 6, lineHeight: 17 },
+  reviewBtn: {
+    alignSelf: "flex-start",
+    backgroundColor: THEME.purple,
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    marginTop: 10,
+  },
+  reviewBtnText: { color: "#fff", fontSize: 12, fontWeight: "800" },
   detail: { color: THEME.textMuted, fontSize: 13, marginTop: 3, lineHeight: 18 },
   count: { color: THEME.purple, fontSize: 13, fontWeight: "800", marginTop: 8 },
   countSub: { color: THEME.textMuted, fontSize: 13, fontWeight: "700", marginTop: 3 },

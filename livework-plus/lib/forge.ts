@@ -107,6 +107,7 @@ export type FunnelRow = {
   status: string | null;
   description: string | null;
   config?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | null;
   created_at: string | null;
   updated_at: string | null;
 };
