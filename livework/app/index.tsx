@@ -52,6 +52,7 @@ import {
   isOperatorEmail,
 } from "../lib/demo";
 import { useAuth } from "../lib/auth";
+import PushPermissionCard from "../components/PushPermissionCard";
 import { supabase } from "../lib/supabase";
 import { getUserTenantIds, getUserVenues } from "../lib/tenant";
 
@@ -313,6 +314,10 @@ export default function DashboardScreen() {
           <Text style={styles.createEventTopText}>Create Event</Text>
         </Pressable>
 
+        {/* Push permission — the plan §1.2 in-context ask; the card
+            renders only for a vendor with a tenant who hasn't decided. */}
+        <PushPermissionCard />
+
         {/* Operator-only demo toggle. While demo is on, the whole
             dashboard shows the bundled sample dataset (lib/demo.ts)
             — no real queries run and nothing on screen is real. */}
@@ -355,6 +360,16 @@ export default function DashboardScreen() {
           </Pressable>
           <Pressable style={styles.linkBtn} onPress={() => router.push("/publish")}>
             <Text style={styles.linkText}>Publish to Bownd</Text>
+          </Pressable>
+        </View>
+
+        {/* Push notification category settings. */}
+        <View style={styles.headerRow}>
+          <Pressable
+            style={styles.linkBtn}
+            onPress={() => router.push("/notification-settings")}
+          >
+            <Text style={styles.linkText}>Notification settings</Text>
           </Pressable>
         </View>
 

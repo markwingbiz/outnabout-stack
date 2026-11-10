@@ -22,6 +22,7 @@
     "plugins": [
       "expo-router",
       "expo-font",
+      "expo-notifications",
       "@react-native-community/datetimepicker"
     ],
     "scheme": "livework",

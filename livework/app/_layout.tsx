@@ -11,12 +11,45 @@
 // Slice 3: redemptions + publish screens. The gate needs no change:
 // vendors without a membership are still redirected to /setup-venue
 // from these screens (they are membership-only screens).
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { THEME } from "../lib/theme";
 import { AuthProvider, useAuth } from "../lib/auth";
 import { getUserTenantIds } from "../lib/tenant";
+import { usePushBootstrap } from "../lib/push";
+
+// Push notifications bootstrap (push-notifications-plan.md §1.1): wires
+// the foreground handler, Android channels, tap deep-link routing, and
+// token registration on sign-in. Renders nothing.
+function PushBootstrap() {
+  const { session } = useAuth();
+  const router = useRouter();
+  const [tenantId, setTenantId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!session) {
+      setTenantId(null);
+      return;
+    }
+    let alive = true;
+    getUserTenantIds()
+      .then((ids) => {
+        if (alive) setTenantId(ids[0] ?? null);
+      })
+      .catch(() => {
+        // Registration retries on the next sign-in / rotation.
+      });
+    return () => {
+      alive = false;
+    };
+  }, [session]);
+
+  usePushBootstrap(session?.user?.id ?? null, tenantId, (route) =>
+    router.push(route as never),
+  );
+  return null;
+}
 
 function TenantGate({ children }: { children: React.ReactNode }) {
   const { session, loading: authLoading } = useAuth();
@@ -45,6 +78,7 @@ function TenantGate({ children }: { children: React.ReactNode }) {
 export default function RootLayout() {
   return (
     <AuthProvider>
+      <PushBootstrap />
       <TenantGate>
         <StatusBar style="light" />
         <Stack
@@ -61,6 +95,7 @@ export default function RootLayout() {
           <Stack.Screen name="edit-event" />
           <Stack.Screen name="redemptions" />
           <Stack.Screen name="publish" />
+          <Stack.Screen name="notification-settings" />
           <Stack.Screen name="verify-review" />
           <Stack.Screen name="(auth)" />
         </Stack>
