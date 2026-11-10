@@ -223,6 +223,13 @@ export default function DetailScreen() {
                   <Text style={styles.demoBadgeText}>Test — operator only, not a live listing</Text>
                 </View>
               )}
+              {event.discovered && (
+                <View style={styles.demoBadge}>
+                  <Text style={styles.demoBadgeText}>
+                    From the web{event.sourceName ? ` · ${event.sourceName}` : ""} — not sold on Bownd
+                  </Text>
+                </View>
+              )}
               <ImageBackground
                 source={resolveEventCardImage(event.photoUrl)}
                 style={styles.detailBanner}
@@ -244,14 +251,40 @@ export default function DetailScreen() {
                 ))}
               </View>
 
-              <View style={styles.actionsRow}>
-                <Pressable onPress={onToggleFav} style={styles.actionBtn}>
-                  <Text style={styles.actionBtnText}>{fav ? "♥ Saved" : "♡ Save"}</Text>
-                </Pressable>
-                <Pressable onPress={openVenueEvents} style={[styles.actionBtn, styles.actionBtnGhost]}>
-                  <Text style={[styles.actionBtnText, styles.actionBtnGhostText]}>See venue events</Text>
-                </Pressable>
-              </View>
+              {event.discovered ? (
+                // Link-out ONLY: the primary action opens the event at
+                // its source. No "See venue events" (a discovered listing
+                // has no Bownd venue) and never any purchase/redeem UI.
+                <View style={styles.actionsRow}>
+                  {!!event.sourceUrl && (
+                    <Pressable
+                      onPress={() => openWebsite(event.sourceUrl as string)}
+                      style={styles.actionBtn}
+                    >
+                      <Text style={styles.actionBtnText}>
+                        View at {event.sourceName ?? "source"}
+                      </Text>
+                    </Pressable>
+                  )}
+                  <Pressable
+                    onPress={onToggleFav}
+                    style={[styles.actionBtn, styles.actionBtnGhost]}
+                  >
+                    <Text style={[styles.actionBtnText, styles.actionBtnGhostText]}>
+                      {fav ? "♥ Saved" : "♡ Save"}
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <View style={styles.actionsRow}>
+                  <Pressable onPress={onToggleFav} style={styles.actionBtn}>
+                    <Text style={styles.actionBtnText}>{fav ? "♥ Saved" : "♡ Save"}</Text>
+                  </Pressable>
+                  <Pressable onPress={openVenueEvents} style={[styles.actionBtn, styles.actionBtnGhost]}>
+                    <Text style={[styles.actionBtnText, styles.actionBtnGhostText]}>See venue events</Text>
+                  </Pressable>
+                </View>
+              )}
             </BrandCard>
           ) : demoVenue ? (
             <BrandCard>

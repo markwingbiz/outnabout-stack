@@ -95,8 +95,11 @@ export default function Home() {
 
   // Wholesale showcase fallback: demo only when the real catalog is
   // completely empty. Never mixed with real data.
+  // Discovered (web-sourced, link-out-only) events are excluded from
+  // EVERYTHING on Home — spotlight, playlists, featured, search: they
+  // live only in the Events tab's All Events list (see events.tsx).
   const usingDemo = events.length === 0 && venues.length === 0;
-  const effEvents = usingDemo ? getShowcaseEvents() : events;
+  const effEvents = usingDemo ? getShowcaseEvents() : events.filter((e) => !e.discovered);
   const effVenues = usingDemo ? getShowcaseVenues() : venues;
 
   const visibleEvents = useMemo(

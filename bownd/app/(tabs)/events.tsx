@@ -19,6 +19,7 @@ import {
   StatusBar,
   TouchableOpacity,
   Alert,
+  Linking,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
@@ -254,6 +255,21 @@ export default function EventsScreen() {
     router.push({ pathname: "/detail", params: { id, kind: "event" } });
   }
 
+  // Discovered (web-sourced) events are LINK-OUT ONLY: tapping the card
+  // opens the event at its source in the browser. Bownd never tickets,
+  // sells, or redeems them, so they never enter the in-app detail flow
+  // from the list. No sourceUrl = no dead button: fall back to detail,
+  // which renders the "From the web" label with no action affordance.
+  function openExternal(item: EventItem) {
+    if (!item.sourceUrl) {
+      openEvent(item.id);
+      return;
+    }
+    Linking.openURL(item.sourceUrl).catch(() => {
+      Alert.alert("Cannot open link", "Something went wrong opening that website.");
+    });
+  }
+
   function openVenue(name: string) {
     // Look up the id so matching is exact even if two venues share a
     // name; viewing a venue resets the time chip to "all".
@@ -284,8 +300,12 @@ export default function EventsScreen() {
     }
   }
 
+  // Spotlight + Tailored are curated placement rails: discovered
+  // (link-out-only) events are excluded from both. They appear ONLY in
+  // the All Events list below.
   const spotlight = useMemo(() => {
     return effEvents
+      .filter((e) => !e.discovered)
       .filter((e) => e.category === "spotlight")
       .filter((e) => inTimeWindow(e, "week"))
       .slice(0, 10);
@@ -293,6 +313,7 @@ export default function EventsScreen() {
 
   const tailored = useMemo(() => {
     return effEvents
+      .filter((e) => !e.discovered)
       .filter((e) => inTimeWindow(e, "week"))
       .filter((e) => matchesPersona(e, persona))
       .slice(0, 10);
@@ -503,13 +524,21 @@ export default function EventsScreen() {
               style={styles.bigRow}
               contentStyle={styles.bigRowContent}
             >
-              <TouchableOpacity onPress={() => openEvent(item.id)} style={StyleSheet.absoluteFill} />
+              <TouchableOpacity
+                onPress={() => (item.discovered ? openExternal(item) : openEvent(item.id))}
+                style={StyleSheet.absoluteFill}
+              />
               <View style={{ flex: 1 }}>
                 <Text style={styles.bigWhen}>{formatWhen(item.startISO)}</Text>
                 <Text style={styles.bigTitle} numberOfLines={2}>
                   {item.title}
                 </Text>
                 {item.isTest && <Text style={styles.testBadgeText}>Test</Text>}
+                {item.discovered && (
+                  <Text style={styles.webBadgeText}>
+                    From the web{item.sourceName ? ` · ${item.sourceName}` : ""}
+                  </Text>
+                )}
                 <Text style={styles.bigVenue} numberOfLines={1}>
                   {getVenueName(item.venueId, effVenues)}
                 </Text>
@@ -525,7 +554,9 @@ export default function EventsScreen() {
               </View>
               <View style={styles.bigRight}>
                 <Text style={styles.priceText}>{item.priceLabel || ""}</Text>
-                <Text style={styles.moreText}>View</Text>
+                <Text style={styles.moreText}>
+                  {item.discovered ? `View at ${item.sourceName ?? "source"} ↗` : "View"}
+                </Text>
               </View>
               <FavButton
                 isFav={favKeys.has(`event:${item.id}`)}
@@ -574,6 +605,12 @@ const styles = StyleSheet.create({
   },
   testBadgeText: {
     color: "#f5c36a",
+    fontWeight: "900",
+    fontSize: 11,
+    marginTop: 4,
+  },
+  webBadgeText: {
+    color: "#8ec5ff",
     fontWeight: "900",
     fontSize: 11,
     marginTop: 4,

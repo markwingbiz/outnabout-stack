@@ -94,6 +94,19 @@ export type EventItem = {
   // only to the operator and labeled "Test" in the UI. Never counted
   // in revenue/analytics (Bownd has none) and never shown to others.
   isTest?: boolean;
+  // Discovered (external, web-sourced) event — LINK-OUT ONLY. True means
+  // this listing came from an outside source, is NOT Bownd inventory,
+  // and must never be sold, ticketed, redeemed, featured, or playlisted
+  // in the app. It renders ONLY in the Events tab's All Events list,
+  // labeled "From the web · <sourceName>", and tapping it opens
+  // sourceUrl externally instead of the in-app detail/purchase flow.
+  discovered?: boolean;
+  // Human-readable source name for a discovered event (e.g. the site or
+  // organizer page it was found on). Shown in the "From the web" label.
+  sourceName?: string;
+  // Canonical URL of the event at its source. Discovered events link
+  // OUT to this URL; Bownd never hosts their ticketing.
+  sourceUrl?: string;
 };
 
 export type Venue = {
@@ -187,6 +200,9 @@ function toEventItem(id: string, data: any): EventItem {
     featured: data.featured === true,
     photoUrl: typeof data.photoUrl === "string" ? data.photoUrl : undefined,
     isTest: data.isTest === true,
+    discovered: data.discovered === true,
+    sourceName: typeof data.sourceName === "string" ? data.sourceName : undefined,
+    sourceUrl: typeof data.sourceUrl === "string" ? data.sourceUrl : undefined,
   };
 }
 

@@ -96,7 +96,9 @@ export default function WhatsCloseScreen() {
   }, [user?.email]);
 
   const usingDemo = events.length === 0 && venues.length === 0;
-  const effEvents = usingDemo ? getShowcaseEvents() : events;
+  // Discovered (web-sourced, link-out-only) events never appear here —
+  // they live only in the Events tab's All Events list.
+  const effEvents = usingDemo ? getShowcaseEvents() : events.filter((e) => !e.discovered);
   const effVenues = usingDemo ? getShowcaseVenues() : venues;
 
   const center = userLoc ?? KC_FALLBACK;
