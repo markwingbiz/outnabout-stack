@@ -6,28 +6,33 @@
     "version": "1.0.1",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
-    "platforms": ["ios", "android"],
-
+    "platforms": [
+      "ios",
+      "android"
+    ],
     "icon": "./assets/icon.png",
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#0A0616"
     },
-
     "android": {
       "package": "com.bownd.app",
-      "versionCode": 2,
+      "versionCode": 5,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#000000"
-      }
+      },
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
     },
-
     "ios": {
       "bundleIdentifier": "com.bownd.app"
     },
-
     "plugins": [
       "expo-notifications",
       [
@@ -39,19 +44,19 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Allow Bownd to use your location to show venues and events near you. Your location stays on this device — it is never stored or shared.",
-          "locationAlwaysAndWhenInUsePermission": "Allow Bownd to use your location to show venues and events near you. Your location stays on this device — it is never stored or shared.",
+          "locationWhenInUsePermission": "Allow Bownd to use your location to show venues and events near you. Your location stays on this device \u2014 it is never stored or shared.",
+          "locationAlwaysAndWhenInUsePermission": "Allow Bownd to use your location to show venues and events near you. Your location stays on this device \u2014 it is never stored or shared.",
           "isIosBackgroundLocationEnabled": false,
           "isAndroidBackgroundLocationEnabled": false
         }
       ]
     ],
-
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "02628eed-6cf4-424a-9b6c-77148948ddfb"
+        "projectId": "2413ed3e-40d2-491b-8780-88cbe470ba3e"
       }
-    }
+    },
+    "owner": "markwing"
   }
 }
