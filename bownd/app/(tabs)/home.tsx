@@ -8,7 +8,10 @@
 // - Search filters the catalog in place (title, venue, vibe/audience
 //   tags). "See all results in Events" navigates with the query prefilled.
 // - Spotlight cards + Featured sections navigate to the real detail
-//   screen. Venue orbs / venue row navigate to Events filtered to a venue.
+//   screen. Venue tiles / venue row navigate to Events filtered to a venue.
+// - Premium pass (2026-11-11): scene-photo cards (photo above caption),
+//   icon-tile venues, Featured Playlists rail, campaign banner — see
+//   app/ui/premium.tsx + data/campaigns.ts. Data flow unchanged.
 // - Featured renders TWICE, exactly as the reference does: first instance
 //   followed by the horizontal venue row, second instance bare.
 import React, { useEffect, useMemo, useState } from "react";
@@ -26,11 +29,18 @@ import {
   resolvePlaylists,
   type ResolvedPlaylist,
 } from "../../data/showcase";
-import { categoryForVenueName, resolveCardImage } from "../../lib/placeholders";
-import { CardBackground } from "../../components/ui/CardBackground";
+import { getActiveCampaign } from "../../data/campaigns";
+import {
+  CampaignBanner,
+  PlaylistRailCard,
+  PointsPill,
+  SceneEventCard,
+  VenueTile,
+  usePremiumFonts,
+  venueMetaFor,
+} from "../ui/premium";
 import {
   BottomNav,
-  EventCard,
   Search,
   Section,
   TopTabs,
@@ -64,7 +74,8 @@ function matchesHomeSearch(e: EventItem, venueName: string, q: string) {
 export default function Home() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
+  const fonts = usePremiumFonts();
   const [q, setQ] = useState("");
 
   // Events + venues come from Firestore; when BOTH are empty, the
@@ -126,6 +137,31 @@ export default function Home() {
     [effEvents, effVenues]
   );
 
+  // Featured Playlists rail (premium pass): only playlists carrying
+  // the optional `featured` flag (default false) render here.
+  const featuredPlaylists = useMemo(
+    () => playlists.filter((p) => p.featured === true),
+    [playlists]
+  );
+
+  // Campaign slot (premium pass): the active campaign from
+  // data/campaigns.ts renders a Home banner. Config-driven — when NYE
+  // ends, the next campaign takes the slot with no code change.
+  const activeCampaign = useMemo(() => getActiveCampaign(), []);
+
+  // Points pill: REAL balance only, and only when the signed-in
+  // profile actually holds points. Free accounts and guests never see
+  // a fabricated balance here — points are framed as a member benefit
+  // in the Personal hub instead.
+  const pillPoints = profile?.points ?? 0;
+
+  const greeting = useMemo(() => {
+    const h = new Date().getHours();
+    if (h < 12) return "Good morning";
+    if (h < 18) return "Good afternoon";
+    return "Good evening";
+  }, []);
+
   // Home section order (fixed): Showcase spotlight cards, Tonight in KC,
   // Top Venues, Date Night, Family Fun, Featured. Playlists are looked up
   // by id so the order holds even if resolvePlaylists returns them in a
@@ -156,42 +192,28 @@ export default function Home() {
           {pl.items.map((item) =>
             item.kind === "event" ? (
               <View key={`event:${item.event.id}`} style={styles.playlistCardWrap}>
-                <EventCard
+                <SceneEventCard
                   title={item.event.title}
                   venueName={getVenueName(item.event.venueId, effVenues)}
-                  label={formatWhen(item.event.startISO)}
+                  whenLabel={formatWhen(item.event.startISO)}
                   badge={item.event.isTest ? "Test" : undefined}
+                  priceLabel={item.event.priceLabel || undefined}
                   photoUrl={item.event.photoUrl}
                   onPress={() => openEvent(item.event.id)}
                 />
               </View>
             ) : (
-              <TouchableOpacity
+              <VenueTile
                 key={`venue:${item.venue.id}`}
+                name={item.venue.name}
+                meta={venueMetaFor(item.venue.name)}
+                photoUrl={item.venue.photoUrl}
+                verified={item.venue.verified}
+                isTest={item.venue.isTest}
+                featured={item.venue.featured}
                 onPress={() => openVenue(item.venue.id, item.venue.name)}
-                activeOpacity={0.86}
-                style={styles.venueCard}
-              >
-                <CardBackground
-                  source={resolveCardImage(
-                    item.venue.photoUrl,
-                    categoryForVenueName(item.venue.name)
-                  )}
-                  style={styles.venueCardBg}
-                  contentStyle={styles.venueCardContent}
-                >
-                  <Text style={styles.venueCardName} numberOfLines={2}>
-                    {item.venue.name}
-                  </Text>
-                  {item.venue.isTest && (
-                    <Text style={styles.testBadgeText}>Test</Text>
-                  )}
-                  {item.venue.verified && (
-                    <Text style={styles.verifiedBadgeText}>✓ Verified</Text>
-                  )}
-                  <Text style={styles.venueCardMeta}>Tap to view</Text>
-                </CardBackground>
-              </TouchableOpacity>
+                style={{ marginRight: 12 }}
+              />
             )
           )}
         </ScrollView>
@@ -207,8 +229,10 @@ export default function Home() {
     router.push({ pathname: "/detail", params: { id, kind: "event" } });
   }
 
-  function openVenue(id: string, name: string) {
-    router.push({ pathname: "/(tabs)/events", params: { venueId: id, venue: name } });
+  function openVenue(id: string, _name: string) {
+    // Venue tiles open the venue PAGE (detail.tsx kind=venue), which
+    // lists that venue's upcoming events.
+    router.push({ pathname: "/detail", params: { id, kind: "venue" } });
   }
 
   function openSearchInEvents() {
@@ -221,7 +245,7 @@ export default function Home() {
   return (
     <View style={refStyles.root}>
       <LinearGradient
-        colors={["#0e0b19", "#1b132f", "#0b0915"]}
+        colors={["#0A0616", "#1E1733", "#0A0616"]}
         style={StyleSheet.absoluteFillObject}
       />
       <ScrollView
@@ -232,7 +256,21 @@ export default function Home() {
           { paddingTop: 16 + insets.top, paddingBottom: 70 + insets.bottom + 16 },
         ]}
       >
-        <StatusBar barStyle="light-content" backgroundColor="#0e0b19" />
+        <StatusBar barStyle="light-content" backgroundColor="#0A0616" />
+        {/* Premium header: greeting + headline + real points pill */}
+        <View style={styles.headBlock}>
+          <Text style={[styles.headHi, fonts.bodyBold]}>{greeting} · Kansas City</Text>
+          <Text style={[styles.headTitle, fonts.display]}>Find what&apos;s happening</Text>
+          {pillPoints > 0 && (
+            <TouchableOpacity
+              onPress={() => go("/(tabs)/personal")}
+              activeOpacity={0.85}
+              style={{ marginTop: 9, alignSelf: "flex-start" }}
+            >
+              <PointsPill points={pillPoints} />
+            </TouchableOpacity>
+          )}
+        </View>
         <Search value={q} onChange={setQ} placeholder="Explore" />
         <TopTabs active="Home" onNavigate={go} />
         <View style={{ height: 22 }} />
@@ -241,6 +279,22 @@ export default function Home() {
           <View style={styles.showcaseChip}>
             <Text style={styles.showcaseChipText}>Showcase preview · Sample listings</Text>
           </View>
+        )}
+
+        {/* Campaign slot banner (config-driven, data/campaigns.ts) */}
+        {activeCampaign && !qNorm && (
+          <CampaignBanner
+            presenter={activeCampaign.presenter}
+            name={activeCampaign.name}
+            datesLabel={activeCampaign.datesLabel}
+            gradient={activeCampaign.gradient}
+            onPress={() =>
+              router.push({
+                pathname: "/detail",
+                params: { id: activeCampaign.id, kind: "campaign" },
+              })
+            }
+          />
         )}
 
         {!!qNorm && (
@@ -258,24 +312,62 @@ export default function Home() {
           <Text style={styles.emptyText}>No matches for “{q.trim()}”.</Text>
         ) : (
           <>
-            {/* Showcase — spotlight hero cards (vertical list), first section */}
+            {/* Showcase — spotlight hero cards (vertical list), first section.
+                Premium anatomy: scene photo crop above the caption. */}
             {spotlightEvents.map((item) => (
-              <EventCard
+              <SceneEventCard
                 key={item.id}
                 title={item.title}
                 venueName={getVenueName(item.venueId, effVenues)}
-                label={formatWhen(item.startISO)}
+                whenLabel={formatWhen(item.startISO)}
                 badge={item.isTest ? "Test" : "Spotlight"}
+                priceLabel={item.priceLabel || undefined}
                 photoUrl={item.photoUrl}
                 onPress={() => openEvent(item.id)}
               />
             ))}
 
+            {/* Featured Playlists rail — playlists carrying the optional
+                `featured` flag (default false). Tapping a card opens the
+                Events tab (the app has no playlist detail screen). */}
+            {featuredPlaylists.length > 0 && !qNorm && (
+              <View>
+                <Section title="Featured Playlists" />
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={{ gap: 12, paddingBottom: 10 }}
+                >
+                  {featuredPlaylists.map((pl, i) => {
+                    const first = pl.items[0];
+                    const cover = first
+                      ? first.kind === "event"
+                        ? first.event.photoUrl
+                        : first.venue.photoUrl
+                      : undefined;
+                    return (
+                      <PlaylistRailCard
+                        key={pl.id}
+                        title={pl.title}
+                        subtitle={pl.subtitle}
+                        itemCount={pl.items.length}
+                        coverPhotoUrl={cover}
+                        tag={i === 0 ? "Featured" : "Curated"}
+                        tagGold={i === 0}
+                        onPress={() => router.replace("/(tabs)/events")}
+                      />
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            )}
+
             {/* Home order: Showcase (spotlight) → Tonight in KC → Top Venues
                 → Date Night → Family Fun → Featured. */}
             {renderPlaylist(playlistById.get("tonight-in-kc"))}
 
-            {/* Top Venues orbs (first 3 venues, name only) */}
+            {/* Top Venues — premium icon tiles (v1 venue language:
+                icon on solid color + name; a real photoUrl still wins) */}
             {topVenues.length > 0 && (
               <View>
                 <Text style={styles.orbsLabel}>Top Venues</Text>
@@ -285,25 +377,16 @@ export default function Home() {
                   contentContainerStyle={{ gap: 12, paddingBottom: 10 }}
                 >
                   {topVenues.map((v) => (
-                    <TouchableOpacity
+                    <VenueTile
                       key={v.id}
+                      name={v.name}
+                      meta={venueMetaFor(v.name)}
+                      photoUrl={v.photoUrl}
+                      verified={v.verified}
+                      isTest={v.isTest}
+                      featured={v.featured}
                       onPress={() => openVenue(v.id, v.name)}
-                      activeOpacity={0.86}
-                      style={styles.venueCard}
-                    >
-                      <CardBackground
-                        source={resolveCardImage(v.photoUrl, categoryForVenueName(v.name))}
-                        style={styles.venueCardBg}
-                        contentStyle={styles.venueCardContent}
-                      >
-                        <Text style={styles.venueCardName} numberOfLines={2}>
-                          {v.name}
-                        </Text>
-                        {v.isTest && <Text style={styles.testBadgeText}>Test</Text>}
-                        {v.verified && <Text style={styles.verifiedBadgeText}>✓ Verified</Text>}
-                        <Text style={styles.venueCardMeta}>Tap to view</Text>
-                      </CardBackground>
-                    </TouchableOpacity>
+                    />
                   ))}
                 </ScrollView>
               </View>
@@ -327,25 +410,16 @@ export default function Home() {
                   contentContainerStyle={{ gap: 12, paddingBottom: 10 }}
                 >
                   {visibleVenues.slice(0, 3).map((v) => (
-                    <TouchableOpacity
+                    <VenueTile
                       key={v.id}
+                      name={v.name}
+                      meta={venueMetaFor(v.name)}
+                      photoUrl={v.photoUrl}
+                      verified={v.verified}
+                      isTest={v.isTest}
+                      featured={v.featured}
                       onPress={() => openVenue(v.id, v.name)}
-                      activeOpacity={0.86}
-                      style={styles.venueCard}
-                    >
-                      <CardBackground
-                        source={resolveCardImage(v.photoUrl, categoryForVenueName(v.name))}
-                        style={styles.venueCardBg}
-                        contentStyle={styles.venueCardContent}
-                      >
-                        <Text style={styles.venueCardName} numberOfLines={2}>
-                          {v.name}
-                        </Text>
-                        {v.isTest && <Text style={styles.testBadgeText}>Test</Text>}
-                        {v.verified && <Text style={styles.verifiedBadgeText}>✓ Verified</Text>}
-                        <Text style={styles.venueCardMeta}>Tap to view</Text>
-                      </CardBackground>
-                    </TouchableOpacity>
+                    />
                   ))}
                 </ScrollView>
                 <Section
@@ -358,7 +432,7 @@ export default function Home() {
           </>
         )}
       </ScrollView>
-      <View style={{ backgroundColor: "#161120", paddingBottom: insets.bottom }}>
+      <View style={{ backgroundColor: "#171129", paddingBottom: insets.bottom }}>
         <BottomNav active="Home" onNavigate={go} />
       </View>
     </View>
@@ -366,6 +440,9 @@ export default function Home() {
 }
 
 const styles = StyleSheet.create({
+  headBlock: { marginTop: 2, marginBottom: 14 },
+  headHi: { color: "#8f96b0", fontSize: 12.5, fontWeight: "700" },
+  headTitle: { color: "#fff", fontSize: 23, fontWeight: "800", marginTop: 2 },
   seeResultsRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -409,42 +486,5 @@ const styles = StyleSheet.create({
   },
   playlistCardWrap: {
     width: 280,
-  },
-  // Venue cards — same photo-card style as the Events tab Top Venues
-  // rail (photo background, name, "Tap to view"). Replaces the old
-  // small icon tiles.
-  venueCard: {
-    width: 190,
-    marginRight: 12,
-    marginBottom: 0,
-    minHeight: 110,
-    borderRadius: 17,
-    overflow: "hidden",
-  },
-  venueCardBg: { flex: 1, borderRadius: 17 },
-  venueCardContent: { padding: 13, justifyContent: "space-between" },
-  venueCardName: {
-    color: "rgba(255,255,255,0.95)",
-    fontSize: 16,
-    fontWeight: "900",
-    lineHeight: 20,
-  },
-  venueCardMeta: {
-    marginTop: 10,
-    color: "rgba(255,255,255,0.62)",
-    fontSize: 12,
-    fontWeight: "800",
-  },
-  testBadgeText: {
-    color: "#f5c36a",
-    fontWeight: "900",
-    fontSize: 11,
-    marginTop: 4,
-  },
-  verifiedBadgeText: {
-    color: "#7ee2a0",
-    fontWeight: "900",
-    fontSize: 11,
-    marginTop: 4,
   },
 });

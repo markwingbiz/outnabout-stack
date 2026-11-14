@@ -15,10 +15,27 @@ import React, { useEffect, useMemo, useState } from "react";
 import { SafeAreaView, View, Text, StyleSheet, ScrollView, Pressable, Alert, ImageBackground } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Linking from "expo-linking";
+import { LinearGradient } from "expo-linear-gradient";
+import { Ionicons } from "@expo/vector-icons";
 import { BrandBackground } from "./ui/BrandBackground";
 import { BrandCard } from "./ui/BrandCard";
-import BrandHeader from "./ui/BrandHeader";
-import { spacing, theme } from "./ui/theme";
+import { premium, spacing, theme, venueTilePalette } from "./ui/theme";
+import {
+  InfoRow,
+  PremiumWordmark,
+  SceneEventCard,
+  formatMoney,
+  ticketFeeCents,
+  usePremiumFonts,
+  venueMetaFor,
+} from "./ui/premium";
+import {
+  CAMPAIGNS,
+  campaignEvents,
+  FEATURED_NO_DOUBLE_CHARGE_NOTE,
+  FEATURED_VENUE_RATES,
+  SPOTLIGHT_EVENT_RATES,
+} from "../data/campaigns";
 import { EXPERIENCES } from "../data/experiences";
 import {
   fetchEvents,
@@ -34,6 +51,7 @@ import { maybeAskForPushPermission } from "../lib/push";
 import {
   findShowcaseEvent,
   findShowcaseVenue,
+  getShowcaseEvents,
   isShowcaseId,
 } from "../data/showcase";
 import {
@@ -59,11 +77,19 @@ export default function DetailScreen() {
   const { id, kind } = useLocalSearchParams<{ id?: string; kind?: string }>();
   const router = useRouter();
   const { user } = useAuth();
+  // Brochure fonts (Poppins titles / Manrope body) — loaded in
+  // app/ui/premium.tsx; families are undefined until loaded, so text
+  // falls back to the system font rather than blocking the screen.
+  const fonts = usePremiumFonts();
 
   const [events, setEvents] = useState<EventItem[]>([]);
   const [venues, setVenues] = useState<Venue[]>([]);
   const [loading, setLoading] = useState(true);
   const [fav, setFav] = useState(false);
+
+  // Campaign page (kind=campaign) ticket panel state.
+  const [tierId, setTierId] = useState<string | null>(null);
+  const [qty, setQty] = useState(2);
 
   useEffect(() => {
     let alive = true;
@@ -93,6 +119,17 @@ export default function DetailScreen() {
     return undefined;
   }, [id, kind]);
 
+  // Venue page (2026-11-13): kind=venue resolves a REAL catalog venue
+  // by doc id first, then by name (the app's matching rule). The page
+  // renders for real venues and, in showcase mode, for demo venues —
+  // one branch, same anatomy (see pageVenue below).
+  const realVenue = useMemo(() => {
+    if (kind !== "venue" || !id) return undefined;
+    return venues.find((x) => x.id === id) ?? venues.find((x) => x.name === id);
+  }, [kind, id, venues]);
+
+  const pageVenue: Venue | undefined = realVenue ?? demoVenue;
+
   const event = useMemo(
     () =>
       kind === "experience"
@@ -103,10 +140,81 @@ export default function DetailScreen() {
 
   const isDemo = !!demoEvent || !!demoVenue;
 
+  // Campaign page (premium pass): kind=campaign&id=<campaign id>
+  // renders the reusable campaign slot from data/campaigns.ts. The
+  // lineup is matched from the real catalog; in showcase mode (real
+  // catalog completely empty) the sample listings stand in, under the
+  // showcase badge — same wholesale-fallback rule as Home/Events.
+  const campaign = useMemo(
+    () => (kind === "campaign" ? CAMPAIGNS.find((c) => c.id === id) : undefined),
+    [kind, id]
+  );
+
+  const catalogEmpty = events.length === 0 && venues.length === 0;
+
+  // The venue page's upcoming events: this venue's events from the
+  // already-fetched catalog (showcase events stand in wholesale when
+  // the real catalog is empty — never mixed). Matching is id first,
+  // then name, the same rule the Events tab filter uses. Past events
+  // drop off (1h grace for one that just started); discovered events
+  // stay link-out, rendered from the same card as everywhere else.
+  const venueEvents = useMemo(() => {
+    if (!pageVenue) return [];
+    const source = catalogEmpty ? getShowcaseEvents() : events;
+    const now = Date.now();
+    return source
+      .filter((e) => {
+        if (e.venueId === pageVenue.id || e.venueId === pageVenue.name) return true;
+        const resolved = venues.find((x) => x.id === e.venueId || x.name === e.venueId);
+        return resolved?.id === pageVenue.id;
+      })
+      .filter((e) => {
+        const t = Date.parse(e.startISO);
+        return Number.isNaN(t) || t >= now - 60 * 60 * 1000;
+      })
+      .sort((a, b) => (Date.parse(a.startISO) || 0) - (Date.parse(b.startISO) || 0));
+  }, [pageVenue, events, venues, catalogEmpty]);
+
+  const campaignLineup = useMemo(() => {
+    if (!campaign) return [];
+    if (catalogEmpty) return getShowcaseEvents();
+    return campaignEvents(campaign, events);
+  }, [campaign, events, catalogEmpty]);
+
+  const campaignTier = useMemo(() => {
+    const tiers = campaign?.ticketTiers ?? [];
+    return tiers.find((t) => t.id === tierId) ?? tiers[0];
+  }, [campaign, tierId]);
+
+  function venueNameFor(e: EventItem): string {
+    const v = venues.find((x) => x.id === e.venueId || x.name === e.venueId);
+    return v?.name ?? findShowcaseVenue(e.venueId)?.name ?? (e.venueId || "Venue");
+  }
+
+  function onGetFeatured() {
+    if (!campaign) return;
+    const url =
+      "mailto:support@getbownd.com" +
+      `?subject=${encodeURIComponent(`Get featured — ${campaign.presenter} ${campaign.name}`)}` +
+      `&body=${encodeURIComponent(
+        "Hi Bownd — I'd like my venue/event featured in this campaign. Placement activates when payment verifies; nothing is charged until then."
+      )}`;
+    Linking.openURL(url).catch(() => {
+      Alert.alert("Could not open mail", "Email us at support@getbownd.com to get featured.");
+    });
+  }
+
+  function onCampaignTickets(totalCents: number) {
+    Alert.alert(
+      "Tickets aren't on sale yet",
+      `Your total would be ${formatMoney(totalCents)} — the full price, fees included, shown up front like always. Sales open with the campaign's payment launch.`
+    );
+  }
+
   const experience = useMemo(() => {
-    if (event || demoVenue) return undefined;
+    if (event || pageVenue) return undefined;
     return EXPERIENCES.find((e) => e.id === id);
-  }, [event, demoVenue, id]);
+  }, [event, pageVenue, id]);
 
   const venueName = useMemo(() => {
     if (demoVenue) return demoVenue.name;
@@ -118,9 +226,9 @@ export default function DetailScreen() {
   // Favorite state for whichever item is shown.
   useEffect(() => {
     let alive = true;
-    const favId = event?.id ?? demoVenue?.id ?? experience?.id;
+    const favId = event?.id ?? pageVenue?.id ?? experience?.id;
     if (!favId) return;
-    isFavorite(user?.uid ?? null, demoVenue ? "venue" : "event", favId)
+    isFavorite(user?.uid ?? null, pageVenue ? "venue" : "event", favId)
       .then((v) => {
         if (alive) setFav(v);
       })
@@ -128,16 +236,16 @@ export default function DetailScreen() {
     return () => {
       alive = false;
     };
-  }, [event?.id, demoVenue?.id, experience?.id, demoVenue, user?.uid]);
+  }, [event?.id, pageVenue?.id, experience?.id, pageVenue, user?.uid]);
 
   async function onToggleFav() {
     // Demo items: bookmark-only Save. Never any purchase/redeem action.
-    const item: FavoriteItem | null = demoVenue
+    const item: FavoriteItem | null = pageVenue
       ? {
-          id: demoVenue.id,
+          id: pageVenue.id,
           kind: "venue",
-          title: demoVenue.name,
-          subtitle: "Showcase preview",
+          title: pageVenue.name,
+          subtitle: demoVenue ? "Showcase preview" : venueMetaFor(pageVenue.name),
         }
       : event
         ? {
@@ -170,20 +278,17 @@ export default function DetailScreen() {
   }
 
   function openVenueEvents() {
-    // Pass the venue's Firestore doc id (exact match) AND its display
-    // name (chip label + legacy name matching). The Events tab matches
-    // by id first, so this always lands on the correct venue even when
-    // the event's venueId is a legacy name.
-    const venue = demoVenue
-      ? undefined
-      : venues.find((x) => x.id === event?.venueId || x.name === event?.venueId);
-    router.push({
-      pathname: "/(tabs)/events",
-      params: {
-        venueId: demoVenue ? demoVenue.id : (venue?.id ?? event?.venueId ?? ""),
-        venue: venueName,
-      },
-    });
+    // "See venue events" opens the venue PAGE (kind=venue branch
+    // below), which lists that venue's upcoming events — resolving the
+    // venue's doc id first, then its name, so it lands on the correct
+    // venue even when the event's venueId is a legacy name. Showcase
+    // events resolve to their demo venue the same way.
+    const venue =
+      venues.find((x) => x.id === event?.venueId || x.name === event?.venueId) ??
+      findShowcaseVenue(event?.venueId ?? "");
+    const vid = venue?.id ?? event?.venueId;
+    if (!vid) return;
+    router.push({ pathname: "/detail", params: { id: vid, kind: "venue" } });
   }
 
   async function openWebsite(url: string) {
@@ -199,39 +304,202 @@ export default function DetailScreen() {
     }
   }
 
+  // Campaign ticket math (real fee: 2.5% + $0.99/ticket, totals shown
+  // before purchase — see app/ui/premium.tsx ticketFeeCents).
+  const campSubtotal = campaignTier ? campaignTier.priceCents * qty : 0;
+  const campFee = ticketFeeCents(campSubtotal, qty);
+  const campTotal = campSubtotal + campFee;
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }}>
       <BrandBackground />
 
       <View style={styles.container}>
-        <BrandHeader tagline="Pick a vibe. Pick a plan." />
+        <PremiumWordmark tagline="Pick a vibe. Pick a plan." />
 
         <Pressable onPress={() => router.back()} hitSlop={8} style={styles.backBtn}>
-          <Text style={styles.backText}>‹ Back</Text>
+          <Text style={[styles.backText, fonts.bodyExtraBold]}>‹ Back</Text>
         </Pressable>
 
         <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
           {loading ? (
             <BrandCard>
-              <Text style={styles.h2}>Loading…</Text>
+              <Text style={[styles.h2, fonts.display]}>Loading…</Text>
             </BrandCard>
+          ) : campaign ? (
+            <>
+              <BrandCard>
+                {catalogEmpty && (
+                  <View style={styles.demoBadge}>
+                    <Text style={[styles.demoBadgeText, fonts.bodyExtraBold]}>Showcase preview — sample listings</Text>
+                  </View>
+                )}
+                <ImageBackground
+                  source={resolveEventCardImage(campaignLineup[0]?.photoUrl)}
+                  style={styles.detailBanner}
+                  resizeMode="cover"
+                >
+                  <View style={styles.detailBannerScrim} />
+                </ImageBackground>
+                <View style={styles.campTag}>
+                  <Text style={[styles.campTagText, fonts.bodyExtraBold]}>{campaign.presenter} · Spotlight</Text>
+                </View>
+                <Text style={[styles.h2, fonts.display]}>{campaign.name}</Text>
+                <Text style={[styles.meta, fonts.bodySemiBold]}>{campaign.datesLabel}</Text>
+                <Text style={[styles.sub, fonts.body]}>{campaign.description}</Text>
+              </BrandCard>
+
+              <BrandCard>
+                <Text style={[styles.h2, fonts.display]}>The lineup</Text>
+                {campaignLineup.length === 0 ? (
+                  <Text style={[styles.sub, fonts.body]}>The lineup drops soon — check back.</Text>
+                ) : (
+                  <View style={{ marginTop: 14 }}>
+                    {campaignLineup.map((e) => (
+                      <SceneEventCard
+                        key={e.id}
+                        title={e.title}
+                        venueName={venueNameFor(e)}
+                        whenLabel={formatWhen(e.startISO)}
+                        badge={e.isTest ? "Test" : undefined}
+                        priceLabel={e.priceLabel || undefined}
+                        photoUrl={e.photoUrl}
+                        onPress={() =>
+                          router.push({ pathname: "/detail", params: { id: e.id, kind: "event" } })
+                        }
+                      />
+                    ))}
+                  </View>
+                )}
+              </BrandCard>
+
+              {campaignTier && campaign.ticketTiers && (
+                <BrandCard>
+                  <View style={styles.campRowBetween}>
+                    <Text style={[styles.h2, fonts.display]}>Tickets</Text>
+                    {!!campaign.refundLabel && (
+                      <Text style={[styles.campMuted, fonts.bodySemiBold]}>Refund: {campaign.refundLabel}</Text>
+                    )}
+                  </View>
+                  <View style={{ marginTop: 14 }}>
+                    {campaign.ticketTiers.map((t) => {
+                      const on = t.id === campaignTier.id;
+                      return (
+                        <Pressable
+                          key={t.id}
+                          onPress={() => setTierId(t.id)}
+                          style={[styles.tierRow, on && styles.tierRowOn]}
+                        >
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.tierName, fonts.displayBold]}>{t.name}</Text>
+                            <Text style={[styles.tierBlurb, fonts.body]}>{t.blurb}</Text>
+                          </View>
+                          <Text style={[styles.tierPrice, fonts.displayBold]}>{formatMoney(t.priceCents)}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                  <View style={styles.campRowBetween}>
+                    <Text style={[styles.tierName, fonts.displayBold]}>Quantity</Text>
+                    <View style={styles.qtyWrap}>
+                      <Pressable
+                        onPress={() => setQty((n) => Math.max(1, n - 1))}
+                        style={styles.qtyBtn}
+                        hitSlop={6}
+                      >
+                        <Text style={[styles.qtyBtnText, fonts.bodyExtraBold]}>−</Text>
+                      </Pressable>
+                      <Text style={[styles.qtyVal, fonts.bodyExtraBold]}>{qty}</Text>
+                      <Pressable
+                        onPress={() => setQty((n) => Math.min(20, n + 1))}
+                        style={styles.qtyBtn}
+                        hitSlop={6}
+                      >
+                        <Text style={[styles.qtyBtnText, fonts.bodyExtraBold]}>+</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                  <View style={styles.bill}>
+                    <View style={styles.billRow}>
+                      <Text style={[styles.billText, fonts.bodySemiBold]}>
+                        {campaignTier.name} × {qty}
+                      </Text>
+                      <Text style={[styles.billText, fonts.bodySemiBold]}>{formatMoney(campSubtotal)}</Text>
+                    </View>
+                    <View style={styles.billRow}>
+                      <Text style={[styles.billText, fonts.bodySemiBold]}>Bownd fee (2.5% + $0.99 / ticket)</Text>
+                      <Text style={[styles.billText, fonts.bodySemiBold]}>{formatMoney(campFee)}</Text>
+                    </View>
+                    <View style={[styles.billRow, styles.billTotalRow]}>
+                      <Text style={[styles.billTotalText, fonts.displayBold]}>Total due today</Text>
+                      <Text style={[styles.billTotalText, fonts.displayBold]}>{formatMoney(campTotal)}</Text>
+                    </View>
+                  </View>
+                  <Pressable onPress={() => onCampaignTickets(campTotal)}>
+                    <LinearGradient
+                      colors={[...premium.gradient]}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 0 }}
+                      style={styles.campCta}
+                    >
+                      <Text style={[styles.campCtaText, fonts.bodyExtraBold]}>Get tickets · {formatMoney(campTotal)}</Text>
+                    </LinearGradient>
+                  </Pressable>
+                  <Text style={[styles.fineprint, fonts.body]}>
+                    Full price and fees are shown before you pay — never added at the last step.
+                    Members and free accounts pay the same ticket fee. {campaign.refundLabel}{" "}
+                    policy: full refund, fee included, until 24 hours before doors.
+                  </Text>
+                </BrandCard>
+              )}
+
+              <BrandCard>
+                <Text style={[styles.h2, fonts.display]}>Get featured in {campaign.name}</Text>
+                <Text style={[styles.sub, fonts.body]}>
+                  Sellable Featured placement inside this campaign — for venues and for events.
+                  Placement activates only when payment verifies; nothing is charged here.
+                </Text>
+                <View style={styles.rateBlock}>
+                  <Text style={[styles.rateTitle, fonts.displayBold]}>Featured venue</Text>
+                  {FEATURED_VENUE_RATES.map((r) => (
+                    <View key={r.label} style={styles.billRow}>
+                      <Text style={[styles.billText, fonts.bodySemiBold]}>{r.label}</Text>
+                      <Text style={[styles.billText, fonts.bodySemiBold]}>{r.price}</Text>
+                    </View>
+                  ))}
+                </View>
+                <View style={styles.rateBlock}>
+                  <Text style={[styles.rateTitle, fonts.displayBold]}>Spotlight event</Text>
+                  {SPOTLIGHT_EVENT_RATES.map((r) => (
+                    <View key={r.label} style={styles.billRow}>
+                      <Text style={[styles.billText, fonts.bodySemiBold]}>{r.label}</Text>
+                      <Text style={[styles.billText, fonts.bodySemiBold]}>{r.price}</Text>
+                    </View>
+                  ))}
+                </View>
+                <Text style={[styles.fineprint, fonts.body]}>{FEATURED_NO_DOUBLE_CHARGE_NOTE}</Text>
+                <Pressable onPress={onGetFeatured} style={styles.actionBtn}>
+                  <Text style={[styles.actionBtnText, fonts.bodyExtraBold]}>Get featured</Text>
+                </Pressable>
+              </BrandCard>
+            </>
           ) : event ? (
             <BrandCard>
               {isDemo && (
                 <View style={styles.demoBadge}>
-                  <Text style={styles.demoBadgeText}>
+                  <Text style={[styles.demoBadgeText, fonts.bodyExtraBold]}>
                     Showcase preview — not a live listing
                   </Text>
                 </View>
               )}
               {event.isTest && (
                 <View style={styles.demoBadge}>
-                  <Text style={styles.demoBadgeText}>Test — operator only, not a live listing</Text>
+                  <Text style={[styles.demoBadgeText, fonts.bodyExtraBold]}>Test — operator only, not a live listing</Text>
                 </View>
               )}
               {event.discovered && (
                 <View style={styles.demoBadge}>
-                  <Text style={styles.demoBadgeText}>
+                  <Text style={[styles.demoBadgeText, fonts.bodyExtraBold]}>
                     From the web{event.sourceName ? ` · ${event.sourceName}` : ""} — not sold on Bownd
                   </Text>
                 </View>
@@ -243,8 +511,8 @@ export default function DetailScreen() {
               >
                 <View style={styles.detailBannerScrim} />
               </ImageBackground>
-              <Text style={styles.h2}>{event.title}</Text>
-              <Text style={styles.meta}>
+              <Text style={[styles.h2, fonts.display]}>{event.title}</Text>
+              <Text style={[styles.meta, fonts.bodySemiBold]}>
                 {venueName} • {formatWhen(event.startISO)}
                 {event.priceLabel ? ` • ${event.priceLabel}` : ""}
               </Text>
@@ -252,7 +520,7 @@ export default function DetailScreen() {
               <View style={styles.tagRow}>
                 {[...(event.vibeTags || []), ...(event.audienceTags || [])].map((t) => (
                   <View key={t} style={styles.tag}>
-                    <Text style={styles.tagText}>{t}</Text>
+                    <Text style={[styles.tagText, fonts.bodyBold]}>{t}</Text>
                   </View>
                 ))}
               </View>
@@ -267,7 +535,7 @@ export default function DetailScreen() {
                       onPress={() => openWebsite(event.sourceUrl as string)}
                       style={styles.actionBtn}
                     >
-                      <Text style={styles.actionBtnText}>
+                      <Text style={[styles.actionBtnText, fonts.bodyExtraBold]}>
                         View at {event.sourceName ?? "source"}
                       </Text>
                     </Pressable>
@@ -276,7 +544,7 @@ export default function DetailScreen() {
                     onPress={onToggleFav}
                     style={[styles.actionBtn, styles.actionBtnGhost]}
                   >
-                    <Text style={[styles.actionBtnText, styles.actionBtnGhostText]}>
+                    <Text style={[styles.actionBtnText, styles.actionBtnGhostText, fonts.bodyExtraBold]}>
                       {fav ? "♥ Saved" : "♡ Save"}
                     </Text>
                   </Pressable>
@@ -284,40 +552,117 @@ export default function DetailScreen() {
               ) : (
                 <View style={styles.actionsRow}>
                   <Pressable onPress={onToggleFav} style={styles.actionBtn}>
-                    <Text style={styles.actionBtnText}>{fav ? "♥ Saved" : "♡ Save"}</Text>
+                    <Text style={[styles.actionBtnText, fonts.bodyExtraBold]}>{fav ? "♥ Saved" : "♡ Save"}</Text>
                   </Pressable>
                   <Pressable onPress={openVenueEvents} style={[styles.actionBtn, styles.actionBtnGhost]}>
-                    <Text style={[styles.actionBtnText, styles.actionBtnGhostText]}>See venue events</Text>
+                    <Text style={[styles.actionBtnText, styles.actionBtnGhostText, fonts.bodyExtraBold]}>See venue events</Text>
                   </Pressable>
                 </View>
               )}
             </BrandCard>
-          ) : demoVenue ? (
-            <BrandCard>
-              <View style={styles.demoBadge}>
-                <Text style={styles.demoBadgeText}>
-                  Showcase preview — not a live listing
+          ) : pageVenue ? (
+            <>
+              <BrandCard>
+                {isDemo && (
+                  <View style={styles.demoBadge}>
+                    <Text style={[styles.demoBadgeText, fonts.bodyExtraBold]}>
+                      Showcase preview — not a live listing
+                    </Text>
+                  </View>
+                )}
+                {pageVenue.isTest && (
+                  <View style={styles.demoBadge}>
+                    <Text style={[styles.demoBadgeText, fonts.bodyExtraBold]}>
+                      Test — operator only, not a live listing
+                    </Text>
+                  </View>
+                )}
+                {pageVenue.photoUrl ? (
+                  <ImageBackground
+                    source={resolveCardImage(pageVenue.photoUrl, categoryForVenueName(pageVenue.name))}
+                    style={styles.detailBanner}
+                    resizeMode="cover"
+                  >
+                    <View style={styles.detailBannerScrim} />
+                  </ImageBackground>
+                ) : (
+                  // No venue photo: the decided icon-tile treatment,
+                  // large — category icon on its solid tile color.
+                  <View
+                    style={[
+                      styles.venueHeroTile,
+                      {
+                        backgroundColor:
+                          venueTilePalette[categoryForVenueName(pageVenue.name)],
+                      },
+                    ]}
+                  >
+                    <Ionicons name="location" size={46} color="#fff" />
+                  </View>
+                )}
+                <Text style={[styles.h2, fonts.display]}>{pageVenue.name}</Text>
+                <Text style={[styles.meta, fonts.bodySemiBold]}>
+                  {venueMetaFor(pageVenue.name)}
+                  {pageVenue.verified ? " · ✓ Verified" : ""}
+                  {pageVenue.featured ? " · ★ Featured" : ""}
                 </Text>
-              </View>
-              <ImageBackground
-                source={resolveCardImage(demoVenue.photoUrl, categoryForVenueName(demoVenue.name))}
-                style={styles.detailBanner}
-                resizeMode="cover"
-              >
-                <View style={styles.detailBannerScrim} />
-              </ImageBackground>
-              <Text style={styles.h2}>{demoVenue.name}</Text>
-              <Text style={styles.meta}>Showcase preview venue</Text>
 
-              <View style={styles.actionsRow}>
-                <Pressable onPress={onToggleFav} style={styles.actionBtn}>
-                  <Text style={styles.actionBtnText}>{fav ? "♥ Saved" : "♡ Save"}</Text>
-                </Pressable>
-                <Pressable onPress={openVenueEvents} style={[styles.actionBtn, styles.actionBtnGhost]}>
-                  <Text style={[styles.actionBtnText, styles.actionBtnGhostText]}>See venue events</Text>
-                </Pressable>
-              </View>
-            </BrandCard>
+                {/* Standing partner perk — explainer only: venues carry
+                    no perk field yet, so the page states the decided
+                    partner rule, never an invented venue-specific perk. */}
+                <View style={{ marginTop: 14 }}>
+                  <InfoRow
+                    icon="gift"
+                    title="A standing perk for members"
+                    body="Partner venues give paid Bownd members a standing free perk, defined by the venue at onboarding. Claim one free perk per partner per calendar quarter, verified with a member scan at the door."
+                  />
+                </View>
+
+                <View style={styles.actionsRow}>
+                  <Pressable onPress={onToggleFav} style={styles.actionBtn}>
+                    <Text style={[styles.actionBtnText, fonts.bodyExtraBold]}>
+                      {fav ? "♥ Saved" : "♡ Save"}
+                    </Text>
+                  </Pressable>
+                </View>
+              </BrandCard>
+
+              <BrandCard>
+                <Text style={[styles.h2, fonts.display]}>Coming up at {pageVenue.name}</Text>
+                {venueEvents.length === 0 ? (
+                  <Text style={[styles.sub, fonts.bodySemiBold]}>
+                    No upcoming events listed yet — check back soon.
+                  </Text>
+                ) : (
+                  <View style={{ marginTop: 14 }}>
+                    {venueEvents.map((e) => (
+                      <SceneEventCard
+                        key={e.id}
+                        title={e.title}
+                        venueName={pageVenue.name}
+                        whenLabel={formatWhen(e.startISO)}
+                        badge={e.isTest ? "Test" : undefined}
+                        webBadge={
+                          e.discovered
+                            ? `From the web${e.sourceName ? ` · ${e.sourceName}` : ""} — view at source ↗`
+                            : undefined
+                        }
+                        priceLabel={e.priceLabel || undefined}
+                        photoUrl={e.photoUrl}
+                        onPress={() =>
+                          e.discovered && e.sourceUrl
+                            ? openWebsite(e.sourceUrl)
+                            : router.push({
+                                pathname: "/detail",
+                                params: { id: e.id, kind: "event" },
+                              })
+                        }
+                      />
+                    ))}
+                  </View>
+                )}
+              </BrandCard>
+            </>
           ) : experience ? (
             <BrandCard>
               <ImageBackground
@@ -330,38 +675,38 @@ export default function DetailScreen() {
               >
                 <View style={styles.detailBannerScrim} />
               </ImageBackground>
-              <Text style={styles.h2}>{experience.title}</Text>
-              <Text style={styles.meta}>
+              <Text style={[styles.h2, fonts.display]}>{experience.title}</Text>
+              <Text style={[styles.meta, fonts.bodySemiBold]}>
                 {experience.neighborhood} • {experience.price} • {experience.duration}
               </Text>
-              <Text style={styles.sub}>{experience.description}</Text>
+              <Text style={[styles.sub, fonts.body]}>{experience.description}</Text>
 
               <View style={styles.tagRow}>
                 {[...experience.personas, ...experience.vibes].map((t) => (
                   <View key={t} style={styles.tag}>
-                    <Text style={styles.tagText}>{t}</Text>
+                    <Text style={[styles.tagText, fonts.bodyBold]}>{t}</Text>
                   </View>
                 ))}
               </View>
 
               <View style={styles.actionsRow}>
                 <Pressable onPress={onToggleFav} style={styles.actionBtn}>
-                  <Text style={styles.actionBtnText}>{fav ? "♥ Saved" : "♡ Save"}</Text>
+                  <Text style={[styles.actionBtnText, fonts.bodyExtraBold]}>{fav ? "♥ Saved" : "♡ Save"}</Text>
                 </Pressable>
                 {!!experience.website && (
                   <Pressable
                     onPress={() => openWebsite(experience.website as string)}
                     style={[styles.actionBtn, styles.actionBtnGhost]}
                   >
-                    <Text style={[styles.actionBtnText, styles.actionBtnGhostText]}>Visit website</Text>
+                    <Text style={[styles.actionBtnText, styles.actionBtnGhostText, fonts.bodyExtraBold]}>Visit website</Text>
                   </Pressable>
                 )}
               </View>
             </BrandCard>
           ) : (
             <BrandCard>
-              <Text style={styles.h2}>Not found</Text>
-              <Text style={styles.sub}>
+              <Text style={[styles.h2, fonts.display]}>Not found</Text>
+              <Text style={[styles.sub, fonts.body]}>
                 We couldn't find that experience. Try picking another one.
               </Text>
             </BrandCard>
@@ -404,10 +749,24 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     overflow: "hidden",
     marginBottom: 14,
+    borderWidth: 1,
+    borderColor: premium.line2,
   },
   detailBannerScrim: {
     flex: 1,
     backgroundColor: "rgba(8,5,18,0.18)",
+  },
+  // Venue page hero when the venue has no photo: the icon-tile
+  // treatment at hero size (category color, white glyph).
+  venueHeroTile: {
+    height: 180,
+    borderRadius: 14,
+    overflow: "hidden",
+    marginBottom: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: premium.line2,
   },
 
   demoBadge: {
@@ -415,13 +774,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: "rgba(245,195,106,0.16)",
+    backgroundColor: premium.goldSoft,
     borderWidth: 1,
-    borderColor: "rgba(245,195,106,0.45)",
+    borderColor: premium.goldBorder,
     marginBottom: 10,
   },
   demoBadgeText: {
-    color: "#f5c36a",
+    color: premium.gold,
     fontSize: 12,
     fontWeight: "900",
   },
@@ -450,13 +809,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.12)",
+    backgroundColor: premium.surface3,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.18)",
+    borderColor: premium.line2,
   },
 
   tagText: {
-    color: theme.text,
+    color: premium.ink2,
     fontSize: 12,
     fontWeight: "800",
   },
@@ -471,21 +830,106 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 11,
     borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.92)",
+    backgroundColor: premium.gold,
     alignItems: "center",
     justifyContent: "center",
   },
   actionBtnText: {
-    color: "#0b0b0b",
+    color: "#171129",
     fontWeight: "900",
     fontSize: 14,
   },
   actionBtnGhost: {
     backgroundColor: "transparent",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.30)",
+    borderColor: premium.goldBorder,
   },
   actionBtnGhostText: {
     color: theme.text,
   },
+
+  // Campaign page (premium pass) — mockup event-page anatomy on the
+  // detail screen's BrandCard surfaces.
+  campTag: {
+    alignSelf: "flex-start",
+    backgroundColor: "rgba(232,196,118,0.16)",
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    marginBottom: 10,
+  },
+  campTagText: { color: premium.gold, fontSize: 11, fontWeight: "900" },
+  campRowBetween: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  campMuted: { color: theme.subtext, fontSize: 12.5, fontWeight: "700" },
+  tierRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: premium.surface,
+    borderWidth: 1,
+    borderColor: premium.line2,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    marginBottom: 9,
+  },
+  tierRowOn: { borderColor: premium.gold, backgroundColor: premium.surface2 },
+  tierName: { color: theme.text, fontSize: 14.5, fontWeight: "800" },
+  tierBlurb: { color: theme.subtext, fontSize: 12, fontWeight: "600", marginTop: 2 },
+  tierPrice: { color: theme.text, fontSize: 15, fontWeight: "900" },
+  qtyWrap: { flexDirection: "row", alignItems: "center", gap: 14 },
+  qtyBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 999,
+    backgroundColor: premium.surface3,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  qtyBtnText: { color: theme.text, fontSize: 17, fontWeight: "900" },
+  qtyVal: { color: theme.text, fontSize: 15, fontWeight: "900", minWidth: 16, textAlign: "center" },
+  bill: {
+    backgroundColor: premium.surface,
+    borderWidth: 1,
+    borderColor: premium.line,
+    borderRadius: 14,
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    marginTop: 12,
+  },
+  billRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 10,
+    paddingVertical: 4,
+  },
+  billText: { color: premium.ink2, fontSize: 13, fontWeight: "600" },
+  billTotalRow: {
+    borderTopWidth: 1,
+    borderTopColor: premium.line,
+    marginTop: 8,
+    paddingTop: 11,
+  },
+  billTotalText: { color: theme.text, fontSize: 15, fontWeight: "800" },
+  campCta: {
+    borderRadius: 15,
+    paddingVertical: 15,
+    alignItems: "center",
+    marginTop: 14,
+  },
+  campCtaText: { color: "#fff", fontSize: 16, fontWeight: "800" },
+  fineprint: {
+    color: theme.subtext,
+    fontSize: 12,
+    fontWeight: "600",
+    lineHeight: 17,
+    marginTop: 12,
+  },
+  rateBlock: { marginTop: 14 },
+  rateTitle: { color: theme.text, fontSize: 14, fontWeight: "800", marginBottom: 4 },
 });

@@ -37,11 +37,10 @@ import {
 } from "../../lib/store";
 import { useAuth } from "../../lib/auth";
 import { getShowcaseEvents, getShowcaseVenues } from "../../data/showcase";
-import { categoryForVenueName, resolveCardImage, resolveEventCardImage } from "../../lib/placeholders";
-import { CardBackground } from "../../components/ui/CardBackground";
+import { categoryForText } from "../../lib/placeholders";
+import { SceneEventCard, VenueTile, usePremiumFonts, venueMetaFor } from "../ui/premium";
 import {
   BottomNav,
-  EventCard,
   Pill,
   Search,
   Section,
@@ -53,6 +52,31 @@ import {
 } from "../ui/reference";
 
 type TimeChip = "tonight" | "tomorrow" | "weekend" | "week" | "all";
+
+// Category chips (premium pass, from the approved mockup): All, Music,
+// Nightlife, Food & Drink, Holiday, Family. An event's category comes
+// from the app's own keyword categorization of its title + tags, with
+// holiday detected first (NYE/Christmas titles often categorize as
+// nightlife/music otherwise). Events outside these buckets (arts,
+// default) appear under "All".
+type CategoryChip = "all" | "music" | "nightlife" | "food" | "holiday" | "family";
+
+const CATEGORY_CHIPS: Array<{ key: CategoryChip; label: string }> = [
+  { key: "all", label: "All" },
+  { key: "music", label: "Music" },
+  { key: "nightlife", label: "Nightlife" },
+  { key: "food", label: "Food & Drink" },
+  { key: "holiday", label: "Holiday" },
+  { key: "family", label: "Family" },
+];
+
+function eventCategoryKey(e: EventItem): string {
+  const hay = [e.title, ...(e.vibeTags || []), ...(e.audienceTags || [])]
+    .join(" ")
+    .toLowerCase();
+  if (/(holiday|nye|new year|christmas|xmas)/.test(hay)) return "holiday";
+  return categoryForText(e.title, ...(e.vibeTags || []), ...(e.audienceTags || []));
+}
 
 function startOfDay(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
@@ -153,16 +177,23 @@ function matchesPersona(e: EventItem, persona: PersonaProfile) {
 
 // Favorite heart. Rendered as a SIBLING of the card Pressable (not
 // nested inside it) so tapping the heart never also opens the detail.
+// Premium pass: it floats on the card photo's top-right corner via
+// SceneEventCard's accessory slot.
 function FavButton({ isFav, onToggle }: { isFav: boolean; onToggle: () => void }) {
   return (
     <TouchableOpacity onPress={onToggle} hitSlop={8} style={styles.favBtn}>
-      <Ionicons name={isFav ? "heart" : "heart-outline"} size={20} color="#fff" />
+      <Ionicons
+        name={isFav ? "heart" : "heart-outline"}
+        size={19}
+        color={isFav ? "#ff5c8a" : "#fff"}
+      />
     </TouchableOpacity>
   );
 }
 
 export default function EventsScreen() {
   const router = useRouter();
+  const fonts = usePremiumFonts();
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ q?: string; venue?: string; venueId?: string }>();
   const { user } = useAuth();
@@ -172,6 +203,7 @@ export default function EventsScreen() {
   const [venueIdFilter, setVenueIdFilter] = useState<string | null>(null);
   const [persona, setPersona] = useState<PersonaProfile>(DEFAULT_PERSONA);
   const [timeChip, setTimeChip] = useState<TimeChip>("tonight");
+  const [categoryFilter, setCategoryFilter] = useState<CategoryChip>("all");
   const [personalizedOn, setPersonalizedOn] = useState<boolean>(false);
 
   // Collapsible sections (chevrons toggle these)
@@ -270,13 +302,11 @@ export default function EventsScreen() {
     });
   }
 
-  function openVenue(name: string) {
-    // Look up the id so matching is exact even if two venues share a
-    // name; viewing a venue resets the time chip to "all".
-    const v = effVenues.find((x) => x.name === name);
-    setVenueIdFilter(v?.id ?? null);
-    setVenueFilter(name);
-    setTimeChip("all");
+  function openVenue(id: string) {
+    // Venue tiles open the venue PAGE (detail.tsx kind=venue), which
+    // lists that venue's upcoming events. (The in-place venue filter
+    // below still serves deep links that arrive with venue params.)
+    router.push({ pathname: "/detail", params: { id, kind: "venue" } });
   }
 
   async function onToggleFav(item: EventItem) {
@@ -320,21 +350,22 @@ export default function EventsScreen() {
   }, [persona, effEvents]);
 
   const topVenues = useMemo(() => {
-    return effVenues.map((v) => v.name).slice(0, 10);
+    return effVenues.slice(0, 10);
   }, [effVenues]);
 
   const allEvents = useMemo(() => {
     const base = effEvents
       .filter((e) => inTimeWindow(e, timeChip))
       .filter((e) => matchesSearch(e, getVenueName(e.venueId, effVenues), query))
-      .filter((e) => matchesVenueFilter(e, venueIdFilter, venueFilter, effVenues));
+      .filter((e) => matchesVenueFilter(e, venueIdFilter, venueFilter, effVenues))
+      .filter((e) => categoryFilter === "all" || eventCategoryKey(e) === categoryFilter);
     const personaFiltered = personalizedOn ? base.filter((e) => matchesPersona(e, persona)) : base;
     return [...personaFiltered].sort((a, b) => {
       const da = parseISO(a.startISO)?.getTime() ?? Number.MAX_SAFE_INTEGER;
       const db = parseISO(b.startISO)?.getTime() ?? Number.MAX_SAFE_INTEGER;
       return da - db;
     });
-  }, [persona, personalizedOn, query, timeChip, effEvents, venueFilter, venueIdFilter, effVenues]);
+  }, [persona, personalizedOn, query, timeChip, categoryFilter, effEvents, venueFilter, venueIdFilter, effVenues]);
 
   const headerSubtitle = useMemo(() => {
     const city = "Kansas City";
@@ -362,12 +393,12 @@ export default function EventsScreen() {
           { paddingTop: 16 + insets.top, paddingBottom: 70 + insets.bottom + 16 },
         ]}
       >
-        <StatusBar barStyle="light-content" backgroundColor="#0e0b19" />
+        <StatusBar barStyle="light-content" backgroundColor="#0A0616" />
         <Search value={query} onChange={setQuery} placeholder="Explore events, venues, vibes..." />
         <TopTabs active="Events" onNavigate={go} />
 
-        <Text style={refStyles.pageTitle}>Events</Text>
-        <Text style={refStyles.subtitle}>{headerSubtitle}</Text>
+        <Text style={[refStyles.pageTitle, fonts.display]}>Events</Text>
+        <Text style={[refStyles.subtitle, fonts.bodySemiBold]}>{headerSubtitle}</Text>
 
         {usingDemo && (
           <View style={styles.showcaseChip}>
@@ -391,6 +422,18 @@ export default function EventsScreen() {
           <View style={{ marginLeft: "auto" }}>
             <Pill label="Change persona" onPress={() => router.push("/(tabs)/persona")} />
           </View>
+        </View>
+
+        {/* Category chips (premium pass) — filter the All Events list */}
+        <View style={refStyles.filterWrap}>
+          {CATEGORY_CHIPS.map((c) => (
+            <Pill
+              key={c.key}
+              label={c.label}
+              active={categoryFilter === c.key}
+              onPress={() => setCategoryFilter(c.key)}
+            />
+          ))}
         </View>
 
         {/* Venue filter chip */}
@@ -422,33 +465,18 @@ export default function EventsScreen() {
         {tailoredOpen && (
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             {tailored.map((item) => (
-              <TouchableOpacity
+              <SceneEventCard
                 key={item.id}
+                title={item.title}
+                venueName={getVenueName(item.venueId, effVenues)}
+                whenLabel={formatWhen(item.startISO)}
+                badge={item.isTest ? "Test" : undefined}
+                priceLabel={item.priceLabel || undefined}
+                photoUrl={item.photoUrl}
+                tags={uniq([...(item.vibeTags || []), ...(item.audienceTags || [])]).slice(0, 3)}
                 onPress={() => openEvent(item.id)}
-                activeOpacity={0.86}
-                style={[refStyles.tailored, styles.tailoredCard, { padding: 0, overflow: "hidden" }]}
-              >
-                <CardBackground
-                  source={resolveEventCardImage(item.photoUrl)}
-                  style={styles.tailoredBg}
-                  contentStyle={styles.tailoredContent}
-                >
-                  <Text style={refStyles.micro}>{formatWhen(item.startISO)}</Text>
-                  <Text style={refStyles.tailoredTitle} numberOfLines={3}>
-                    {item.title}
-                  </Text>
-                  <Text style={refStyles.muted}>{getVenueName(item.venueId, effVenues)}</Text>
-                  <View style={refStyles.tagRow}>
-                    {uniq([...(item.vibeTags || []), ...(item.audienceTags || [])])
-                      .slice(0, 3)
-                      .map((t) => (
-                        <View key={`${item.id}_${t}`} style={refStyles.tag}>
-                          <Text style={refStyles.tagText}>{t}</Text>
-                        </View>
-                      ))}
-                  </View>
-                </CardBackground>
-              </TouchableOpacity>
+                style={styles.tailoredCard}
+              />
             ))}
           </ScrollView>
         )}
@@ -461,12 +489,13 @@ export default function EventsScreen() {
         />
         {spotlightOpen &&
           spotlight.map((item) => (
-            <EventCard
+            <SceneEventCard
               key={item.id}
               title={item.title}
               venueName={getVenueName(item.venueId, effVenues)}
-              label={formatWhen(item.startISO)}
-              compact
+              whenLabel={formatWhen(item.startISO)}
+              badge={item.isTest ? "Test" : "Spotlight"}
+              priceLabel={item.priceLabel || undefined}
               photoUrl={item.photoUrl}
               onPress={() => openEvent(item.id)}
             />
@@ -480,93 +509,62 @@ export default function EventsScreen() {
         />
         {venuesOpen && (
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {topVenues.map((name) => (
-              <TouchableOpacity
-                key={name}
-                onPress={() => openVenue(name)}
-                activeOpacity={0.86}
-                style={[refStyles.tailored, styles.venueRailCard, { padding: 0, overflow: "hidden" }]}
-              >
-                <CardBackground
-                  source={resolveCardImage(
-                    effVenues.find((v) => v.name === name)?.photoUrl,
-                    categoryForVenueName(name)
-                  )}
-                  style={styles.tailoredBg}
-                  contentStyle={styles.venueRailContent}
-                >
-                  <Text style={styles.venueRailName} numberOfLines={2}>
-                    {name}
-                  </Text>
-                  {effVenues.find((v) => v.name === name)?.isTest && (
-                    <Text style={styles.testBadgeText}>Test</Text>
-                  )}
-                  <Text style={styles.venueRailMeta}>Tap to view</Text>
-                </CardBackground>
-              </TouchableOpacity>
+            {topVenues.map((v) => (
+              <VenueTile
+                key={v.id}
+                name={v.name}
+                meta={venueMetaFor(v.name)}
+                photoUrl={v.photoUrl}
+                verified={v.verified}
+                isTest={v.isTest}
+                featured={v.featured}
+                onPress={() => openVenue(v.id)}
+                style={{ marginRight: 12 }}
+              />
             ))}
           </ScrollView>
         )}
 
-        {/* All Events list */}
+        {/* All Events list — premium scene-photo cards. Discovered
+            events keep their link-out behavior + "From the web" label;
+            the favorite heart floats on the photo (card accessory). */}
         <Section title="All Events" subtitle="Full list" />
         {allEvents.length === 0 ? (
           <Text style={styles.emptyText}>
             {effEvents.length === 0
               ? "No events yet — check back soon."
-              : "No events match your filters."}
+              : categoryFilter !== "all"
+                ? "Nothing in this filter tonight — try another."
+                : "No events match your filters."}
           </Text>
         ) : (
           allEvents.map((item) => (
-            <CardBackground
+            <SceneEventCard
               key={item.id}
-              source={resolveEventCardImage(item.photoUrl)}
-              style={styles.bigRow}
-              contentStyle={styles.bigRowContent}
-            >
-              <TouchableOpacity
-                onPress={() => (item.discovered ? openExternal(item) : openEvent(item.id))}
-                style={StyleSheet.absoluteFill}
-              />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.bigWhen}>{formatWhen(item.startISO)}</Text>
-                <Text style={styles.bigTitle} numberOfLines={2}>
-                  {item.title}
-                </Text>
-                {item.isTest && <Text style={styles.testBadgeText}>Test</Text>}
-                {item.discovered && (
-                  <Text style={styles.webBadgeText}>
-                    From the web{item.sourceName ? ` · ${item.sourceName}` : ""}
-                  </Text>
-                )}
-                <Text style={styles.bigVenue} numberOfLines={1}>
-                  {getVenueName(item.venueId, effVenues)}
-                </Text>
-                <View style={[refStyles.tagRow, { flexWrap: "wrap" }]}>
-                  {uniq([...(item.vibeTags || []), ...(item.audienceTags || [])])
-                    .slice(0, 4)
-                    .map((t) => (
-                      <View key={`${item.id}_big_${t}`} style={refStyles.tag}>
-                        <Text style={refStyles.tagText}>{t}</Text>
-                      </View>
-                    ))}
-                </View>
-              </View>
-              <View style={styles.bigRight}>
-                <Text style={styles.priceText}>{item.priceLabel || ""}</Text>
-                <Text style={styles.moreText}>
-                  {item.discovered ? `View at ${item.sourceName ?? "source"} ↗` : "View"}
-                </Text>
-              </View>
-              <FavButton
-                isFav={favKeys.has(`event:${item.id}`)}
-                onToggle={() => onToggleFav(item)}
-              />
-            </CardBackground>
+              title={item.title}
+              venueName={getVenueName(item.venueId, effVenues)}
+              whenLabel={formatWhen(item.startISO)}
+              badge={item.isTest ? "Test" : undefined}
+              webBadge={
+                item.discovered
+                  ? `From the web${item.sourceName ? ` · ${item.sourceName}` : ""} — view at source ↗`
+                  : undefined
+              }
+              priceLabel={item.priceLabel || undefined}
+              photoUrl={item.photoUrl}
+              tags={uniq([...(item.vibeTags || []), ...(item.audienceTags || [])]).slice(0, 4)}
+              onPress={() => (item.discovered ? openExternal(item) : openEvent(item.id))}
+              accessory={
+                <FavButton
+                  isFav={favKeys.has(`event:${item.id}`)}
+                  onToggle={() => onToggleFav(item)}
+                />
+              }
+            />
           ))
         )}
       </ScrollView>
-      <View style={{ backgroundColor: "#161120", paddingBottom: insets.bottom }}>
+      <View style={{ backgroundColor: "#171129", paddingBottom: insets.bottom }}>
         <BottomNav active="Events" onNavigate={go} />
       </View>
     </View>
@@ -663,10 +661,9 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   favBtn: {
-    position: "absolute",
-    top: 8,
-    right: 10,
-    padding: 4,
+    backgroundColor: "rgba(7,8,15,0.55)",
+    borderRadius: 999,
+    padding: 7,
   },
   bigRow: {
     borderRadius: 18,

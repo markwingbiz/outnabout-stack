@@ -50,6 +50,13 @@ import {
   type RedemptionHistoryItem,
 } from "../../lib/store";
 import { BottomNav, refStyles } from "../ui/reference";
+import { InfoRow, usePremiumFonts } from "../ui/premium";
+import { premium } from "../ui/theme";
+import {
+  loadPersona,
+  DEFAULT_PERSONA,
+  type PersonaProfile,
+} from "../../lib/personaStore";
 import NotificationSettings from "../../components/push/NotificationSettings";
 import { MemberCode } from "../../components/ui/MemberCode";
 import { CardBackground } from "../../components/ui/CardBackground";
@@ -59,6 +66,7 @@ type PanelTab = "All" | "QR" | "Rewards";
 
 export default function PersonalScreen() {
   const router = useRouter();
+  const fonts = usePremiumFonts();
   const insets = useSafeAreaInsets();
   const { user, profile, signOut, refreshProfile } = useAuth();
 
@@ -68,6 +76,11 @@ export default function PersonalScreen() {
   const points = profile?.points ?? 0;
   const progress = Math.min(1, points / TIER_VIP_AT);
   const tier = tierFor(points);
+
+  // Persona lives in this hub (premium pass): shown as a summary card
+  // with an edit link to the persona screen; it still drives the
+  // Events tab's Tailored For You rail.
+  const [persona, setPersona] = useState<PersonaProfile>(DEFAULT_PERSONA);
 
   // QR — verifiable token (generated on demand).
   const [generatedCode, setGeneratedCode] = useState<string>("");
@@ -206,12 +219,14 @@ export default function PersonalScreen() {
 
   const loadBackend = useCallback(async () => {
     try {
-      const [favs, hist] = await Promise.all([
+      const [favs, hist, pers] = await Promise.all([
         getFavorites(user?.uid ?? null),
         user ? getRedemptionHistory(user.uid) : Promise.resolve([]),
+        loadPersona(),
       ]);
       setFavorites(favs);
       setHistory(hist);
+      setPersona(pers);
     } catch {
       // Keep previous data on error.
     }
@@ -310,6 +325,13 @@ export default function PersonalScreen() {
     router.replace(route);
   }
 
+  // Points-account framing (Mark's free-tier rule): a points account
+  // is created on paid-tier activation, so until a signed-in profile
+  // shows real points activity (a balance or redemption history),
+  // points are framed as a MEMBER BENEFIT — never displayed as a fake
+  // $0 balance. Guests get the same framing.
+  const hasPointsAccount = !!user && (points > 0 || history.length > 0);
+
   const showQr = panel === "All" || panel === "QR";
   const showRewards = panel === "All" || panel === "Rewards";
   // Favorite venues live under "All" only. The old "Venue" panel tab is
@@ -324,15 +346,15 @@ export default function PersonalScreen() {
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={{ paddingBottom: 70 + insets.bottom + 16 }}
         >
-          <StatusBar barStyle="light-content" backgroundColor="#1d1642" />
+          <StatusBar barStyle="light-content" backgroundColor="#1E1733" />
           {/* Hero — App.tsx elements + sign in/out under next-tier */}
           <LinearGradient
-            colors={["#1d1642", "#6a45b8", "#cc8d9f", "#18112c"]}
+            colors={["#1E1733", "#43257F", "#7A2BD0", "#0A0616"]}
             locations={[0, 0.32, 0.72, 1]}
             style={refStyles.personalHero}
           >
             <View style={refStyles.personalHead}>
-              <Text style={refStyles.personalTitle}>Personal</Text>
+              <Text style={[refStyles.personalTitle, fonts.display]}>Personal</Text>
               <TouchableOpacity onPress={() => router.push("/(tabs)/persona")} hitSlop={8}>
                 <Ionicons name="settings-outline" color="white" size={22} />
               </TouchableOpacity>
@@ -343,8 +365,17 @@ export default function PersonalScreen() {
                 <Ionicons name="person" size={68} color="#eeeaf3" />
               </View>
             </View>
-            <Text style={refStyles.points}>{points} pts</Text>
-            <Text style={refStyles.nextTier}>Next tier at {TIER_VIP_AT}</Text>
+            {hasPointsAccount ? (
+              <>
+                <Text style={[refStyles.points, fonts.display]}>{points} pts</Text>
+                <Text style={refStyles.nextTier}>Next tier at {TIER_VIP_AT}</Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.heroBenefit}>Points are a member benefit</Text>
+                <Text style={refStyles.nextTier}>Free accounts buy · Members earn</Text>
+              </>
+            )}
             {user ? (
               <TouchableOpacity onPress={() => signOut()} style={styles.authBtn}>
                 <Text style={styles.authBtnText}>Sign out</Text>
@@ -436,30 +467,104 @@ export default function PersonalScreen() {
               </>
             )}
 
-            {/* Rewards section */}
+            {/* Rewards section — premium pass: real balance card for
+                points accounts; member-benefit framing otherwise.
+                Plus earn rates, the member rules in plain sight, and
+                partner perks (one hub: Rewards + Personal + persona). */}
             {showRewards && (
               <>
                 <Text style={[refStyles.darkHeading, styles.sectionHeading]}>Rewards</Text>
-                <View style={refStyles.tokenCard}>
-                  <View style={styles.rewardsTopRow}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.rewardsPoints}>{points} points</Text>
-                      <Text style={styles.rewardsHint}>
-                        Earn points by redeeming offers + going on adventures.
+                {hasPointsAccount ? (
+                  <LinearGradient
+                    colors={[...premium.rewardsGradient]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={styles.balanceCard}
+                  >
+                    <View style={styles.rewardsTopRow}>
+                      <Text style={styles.balanceLabel}>Bownd Points</Text>
+                      <TouchableOpacity onPress={() => setPanel("QR")} style={styles.showQrBtn}>
+                        <Text style={styles.showQrBtnText}>Show QR</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <Text style={styles.balanceValue}>
+                      {points.toLocaleString()} <Text style={styles.balanceUnit}>pts</Text>
+                    </Text>
+                    <Text style={styles.balanceSub}>
+                      = ${(points / 100).toFixed(2)} in checkout credit · 100 pts = $1.00
+                    </Text>
+                    <View style={styles.balanceTrack}>
+                      <View
+                        style={[
+                          styles.balanceFill,
+                          { width: `${Math.max(3, progress * 100)}%` },
+                        ]}
+                      />
+                    </View>
+                    <View style={styles.rewardsMetaRow}>
+                      <Text style={styles.balanceMeta}>Current: {tier}</Text>
+                      <Text style={styles.balanceMeta}>
+                        {tier === "VIP"
+                          ? "Top tier"
+                          : `${TIER_VIP_AT - points} pts to VIP at ${TIER_VIP_AT}`}
                       </Text>
                     </View>
-                    <TouchableOpacity onPress={() => setPanel("QR")} style={styles.showQrBtn}>
-                      <Text style={styles.showQrBtnText}>Show QR</Text>
-                    </TouchableOpacity>
+                  </LinearGradient>
+                ) : (
+                  <View style={refStyles.tokenCard}>
+                    <Text style={styles.rewardsPoints}>Bownd Points — a member benefit</Text>
+                    <Text style={styles.rewardsHint}>
+                      Free accounts can buy tickets and bundles like everyone else. Points,
+                      member-only special events and partner perks start with a paid plan —
+                      your points account opens the moment you upgrade, and points are never
+                      sold or shown as a $0 balance before then.
+                    </Text>
                   </View>
-                  <View style={styles.progressTrack}>
-                    <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
-                  </View>
-                  <View style={styles.rewardsMetaRow}>
-                    <Text style={styles.metaText}>Current: {tier}</Text>
-                    <Text style={styles.metaText}>Next: {tier === "VIP" ? "Max" : "VIP"}</Text>
-                  </View>
-                </View>
+                )}
+
+                <Text style={[refStyles.darkHeading, styles.sectionHeading]}>How you earn</Text>
+                <InfoRow
+                  light
+                  glyph="1"
+                  title="1 pt per $1 on tickets"
+                  body="Counted when the payment verifies server-side — never on a tap alone."
+                />
+                <InfoRow
+                  light
+                  glyph="50"
+                  title="Venue check-in · 50 pts"
+                  body="Scan in at a partner venue, once per visit."
+                />
+                <InfoRow
+                  light
+                  glyph="25"
+                  title="Show up · 25 pts"
+                  body="Attendance confirmed at the door scan."
+                />
+
+                <Text style={[refStyles.darkHeading, styles.sectionHeading]}>
+                  Member rules, in plain sight
+                </Text>
+                <InfoRow
+                  light
+                  icon="heart"
+                  title="Points never expire while you're paid"
+                  body="Downgrade to Free and the balance freezes — unspendable, never forfeited — with 12 months to re-upgrade before it expires. Points only ever go down by spending them."
+                />
+                <InfoRow
+                  light
+                  icon="information-circle"
+                  title="Free accounts buy, members earn"
+                  body="Anyone can purchase tickets and bundles. Points, member-only events and partner perks are paid-tier benefits."
+                />
+
+                <Text style={[refStyles.darkHeading, styles.sectionHeading]}>Partner perks</Text>
+                <InfoRow
+                  light
+                  icon="gift"
+                  title="A standing free perk at every partner"
+                  body="Each partner venue defines a free perk for paid members at onboarding. Claim one free perk per partner, per calendar quarter, on a verified member scan at the door."
+                />
               </>
             )}
 
@@ -468,6 +573,35 @@ export default function PersonalScreen() {
               <>
                 <Text style={[refStyles.darkHeading, styles.sectionHeading]}>Notifications</Text>
                 <NotificationSettings />
+              </>
+            )}
+
+            {/* Persona — lives in this hub (premium pass). The summary
+                is real (lib/personaStore); editing happens on the
+                persona screen, same as the gear icon. Persona still
+                drives Tailored For You in Events. */}
+            {panel === "All" && (
+              <>
+                <Text style={[refStyles.darkHeading, styles.sectionHeading]}>Your Persona</Text>
+                <View style={refStyles.tokenCard}>
+                  <View style={styles.rewardsTopRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.rewardsPoints}>
+                        {persona.audience.charAt(0).toUpperCase() + persona.audience.slice(1)} ·{" "}
+                        {persona.vibe.charAt(0).toUpperCase() + persona.vibe.slice(1)}
+                      </Text>
+                      <Text style={styles.rewardsHint}>
+                        Your persona shapes the Tailored For You picks in Events.
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => router.push("/(tabs)/persona")}
+                      style={styles.showQrBtn}
+                    >
+                      <Text style={styles.showQrBtnText}>Edit</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
               </>
             )}
 
@@ -484,8 +618,8 @@ export default function PersonalScreen() {
                         key={item.id}
                         onPress={() =>
                           router.push({
-                            pathname: "/(tabs)/events",
-                            params: { venueId: item.id, venue: item.title },
+                            pathname: "/detail",
+                            params: { id: item.id, kind: "venue" },
                           })
                         }
                         style={[styles.tile, { padding: 0 }]}
@@ -642,7 +776,7 @@ export default function PersonalScreen() {
           </View>
         </ScrollView>
       </SafeAreaView>
-      <View style={{ backgroundColor: "#161120", paddingBottom: insets.bottom }}>
+      <View style={{ backgroundColor: "#171129", paddingBottom: insets.bottom }}>
         <BottomNav active="Personal" onNavigate={go} />
       </View>
     </View>
@@ -781,4 +915,39 @@ const styles = StyleSheet.create({
   rowTitle: { fontSize: 14, fontWeight: "900", color: "#221c2a" },
   rowSub: { marginTop: 3, fontSize: 12, color: "#514a5a", fontWeight: "800" },
   rowMeta: { marginTop: 6, fontSize: 11, color: "#88848f", fontWeight: "900" },
+  // Premium pass — hero member-benefit framing + dark balance card.
+  heroBenefit: {
+    color: "white",
+    fontSize: 25,
+    fontWeight: "700",
+    marginTop: 10,
+    textAlign: "center",
+    lineHeight: 31,
+  },
+  balanceCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(139,92,246,0.40)",
+    padding: 18,
+    marginBottom: 4,
+  },
+  balanceLabel: {
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 1.4,
+    textTransform: "uppercase",
+    color: premium.gold,
+  },
+  balanceValue: { color: "#fff", fontSize: 38, fontWeight: "800", lineHeight: 42, marginTop: 8 },
+  balanceUnit: { fontSize: 14, color: premium.gold, fontWeight: "800" },
+  balanceSub: { fontSize: 13, color: premium.ink2, fontWeight: "600", marginTop: 5 },
+  balanceTrack: {
+    marginTop: 14,
+    height: 8,
+    borderRadius: 8,
+    backgroundColor: "rgba(255,255,255,0.14)",
+    overflow: "hidden",
+  },
+  balanceFill: { height: "100%", borderRadius: 8, backgroundColor: premium.gold },
+  balanceMeta: { fontSize: 12, color: premium.ink2, fontWeight: "700" },
 });
