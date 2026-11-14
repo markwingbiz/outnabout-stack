@@ -361,6 +361,9 @@ export default function DashboardScreen() {
           <Pressable style={styles.linkBtn} onPress={() => router.push("/publish")}>
             <Text style={styles.linkText}>Publish to Bownd</Text>
           </Pressable>
+          <Pressable style={styles.linkBtn} onPress={() => router.push("/analytics")}>
+            <Text style={styles.linkText}>Analytics & Insights</Text>
+          </Pressable>
         </View>
 
         {/* Push notification category settings. */}
