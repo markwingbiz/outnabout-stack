@@ -23,8 +23,8 @@ import type { Venue } from "../../lib/store";
 import { resolveEventCardImage } from "../../lib/placeholders";
 
 export type Tab = "Home" | "Events" | "Personal";
-export const PURPLE = "#7861d9";
-export const INK = "#0e0b19";
+export const PURPLE = "#5B34E0";
+export const INK = "#0A0616";
 export const WIDTH = Dimensions.get("window").width;
 
 export const TAB_ROUTES: Record<Tab, string> = {
@@ -345,7 +345,7 @@ export const refStyles = StyleSheet.create({
   bottom: {
     height: 70,
     flexDirection: "row",
-    backgroundColor: "#161120",
+    backgroundColor: "#171129",
     borderTopWidth: 1,
     borderColor: "#40334f",
     paddingBottom: 5,

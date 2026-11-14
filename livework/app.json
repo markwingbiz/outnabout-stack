@@ -1,6 +1,10 @@
 {
   "expo": {
     "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1A0028"
+      },
       "package": "com.livework.app"
     },
     "experiments": {
@@ -12,6 +16,7 @@
       },
       "router": {}
     },
+    "icon": "./assets/icon.png",
     "ios": {
       "bundleIdentifier": "com.livework.app",
       "supportsTablet": true
@@ -27,6 +32,11 @@
     ],
     "scheme": "livework",
     "slug": "livework",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1A0028"
+    },
     "userInterfaceStyle": "dark",
     "version": "1.0.0",
     "owner": "markwing"
