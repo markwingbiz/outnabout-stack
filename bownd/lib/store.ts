@@ -226,13 +226,18 @@ function toVenue(id: string, data: any): Venue {
 export async function fetchEvents(viewerEmail?: string | null): Promise<EventItem[]> {
   if (!db) return [];
   try {
-    // Non-operator queries must carry the isTest == false constraint
-    // so the Firestore rules can prove the list is public-only (rules
-    // are not filters — an unfiltered non-operator list is denied).
+    // Non-operator queries must carry the published == true AND
+    // isTest == false constraints so the Firestore rules can prove
+    // the list is public-only (rules are not filters — a list query
+    // missing either constraint is denied).
     const snap = await getDocs(
       isOperatorEmail(viewerEmail)
         ? collection(db, "events")
-        : query(collection(db, "events"), where("isTest", "==", false)),
+        : query(
+            collection(db, "events"),
+            where("published", "==", true),
+            where("isTest", "==", false),
+          ),
     );
     if (snap.empty) return [];
     const rows = snap.docs.map((d) => toEventItem(d.id, d.data()));
@@ -246,14 +251,16 @@ export async function fetchEvents(viewerEmail?: string | null): Promise<EventIte
 export async function fetchVenues(viewerEmail?: string | null): Promise<Venue[]> {
   if (!db) return [];
   try {
-    // Same rules-proof constraint as fetchEvents, plus verified ==
-    // true: a public venue is a non-test, verified doc (see
-    // bownd/firestore.rules isPublicVenue).
+    // Same rules-proof constraints as fetchEvents (published == true
+    // AND isTest == false), plus verified == true: a public venue is
+    // a published, non-test, verified doc (see bownd/firestore.rules
+    // isPublicVenue).
     const snap = await getDocs(
       isOperatorEmail(viewerEmail)
         ? collection(db, "venues")
         : query(
             collection(db, "venues"),
+            where("published", "==", true),
             where("isTest", "==", false),
             where("verified", "==", true),
           ),

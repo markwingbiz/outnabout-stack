@@ -864,6 +864,11 @@ function supabaseEventToFirestore(
     description: asNonEmptyString(row.description) ?? "",
     tenantRef,
     tenantId,
+    // This writer only runs inside the publish flow, so every doc it
+    // emits is published by construction; stamp it explicitly — the
+    // live rules serve only published == true docs (isTest remains
+    // the operator-test gate).
+    published: true,
     isTest: rowIsTest(row),
     sourceRef: `supabase:${String(row.id)}`,
     updatedAt: SERVER_TIMESTAMP,
@@ -881,6 +886,9 @@ function supabaseVenueToFirestore(
     lng: typeof row.lng === "number" ? row.lng : 0,
     tenantRef,
     tenantId,
+    // Publish-flow stamp, as in supabaseEventToFirestore: the live
+    // rules' public-venue proof requires published == true.
+    published: true,
     isTest: rowIsTest(row),
     // Verification flag for Bownd's "Verified" venue badge. Only
     // verified (or test) venues pass the publish gate above, so this is
@@ -1098,6 +1106,11 @@ function discoveredEventToFirestore(row: Record<string, unknown>): Record<string
     discovered: true,
     sourceName: asNonEmptyString(row.source_name) ?? "",
     sourceUrl: asNonEmptyString(row.source_url) ?? "",
+    // Born public: the live Firestore rules only serve docs carrying
+    // published == true (with isTest == false). The deployed function
+    // stamps this; keep the repo source in lockstep so a redeploy
+    // cannot create invisible docs.
+    published: true,
     isTest: false,
     sourceRef: `supabase:${String(row.id)}`,
     updatedAt: SERVER_TIMESTAMP,
