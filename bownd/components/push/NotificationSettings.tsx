@@ -95,7 +95,7 @@ export default function NotificationSettings() {
             <Switch
               value={prefs[c.key] !== false}
               onValueChange={(v) => void onToggle(c.key, v)}
-              trackColor={{ false: "#271D47", true: "#5B34E0" }}
+              trackColor={{ false: "#271D47", true: "#4A4368" }}
               thumbColor="#ffffff"
             />
           )}
@@ -129,7 +129,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 14,
-    backgroundColor: "#5B34E0",
+    backgroundColor: "#4A4368",
   },
   enableBtnText: { color: "#fff", fontWeight: "900", fontSize: 12 },
   row: {
@@ -143,5 +143,5 @@ const styles = StyleSheet.create({
   rowLast: { borderBottomWidth: 0 },
   rowTitle: { fontSize: 13.5, fontWeight: "800", color: "#F5F3FB" },
   rowSub: { marginTop: 2, fontSize: 12, color: "#968FB2", fontWeight: "600", lineHeight: 16 },
-  alwaysOn: { fontSize: 11, fontWeight: "800", color: "#A678F0" },
+  alwaysOn: { fontSize: 11, fontWeight: "800", color: "#9DB9FF" },
 });

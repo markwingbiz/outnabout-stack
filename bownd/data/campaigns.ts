@@ -62,7 +62,7 @@ export const CAMPAIGNS: Campaign[] = [
     datesLabel: "Wed, Dec 31 · 9:00 PM – 1:00 AM",
     displayFromISO: "2026-11-01T00:00:00",
     endsISO: "2027-01-01T06:00:00",
-    gradient: ["#151833", "#4c2a85", "#8a3b8f"],
+    gradient: ["#140E2A", "#2A1650", "#1D1440"],
     matchTags: ["nye", "new year", "new year's eve", "new years eve"],
     matchMonth: 12,
     matchDay: 31,

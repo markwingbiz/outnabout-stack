@@ -1,8 +1,11 @@
 // app/ui/BrandBackground.tsx
 // Premium pass (2026-11-15): retuned to the brochure plum family —
-// the shared screen gradient plus soft violet/blue depth glows. The
+// the shared screen gradient plus soft deep-plum depth glows. The
 // old magenta glow blob (#FF3EA5 family) is gone everywhere this
 // background renders (detail, list, vibe).
+// Plum pass (2026-11-15): the blobs were the vivid brand ramp
+// (#5B34E0 / #2F6BFF / #7A2BD0); they are now the mockup's deep plum
+// tones at higher opacity — plum depth, not purple glow.
 import React from "react";
 import { View, StyleSheet } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
@@ -30,21 +33,21 @@ const styles = StyleSheet.create({
     width: 520,
     height: 520,
     borderRadius: 520,
-    opacity: 0.16,
+    opacity: 0.4,
   },
   blob1: {
     top: -220,
     left: -180,
-    backgroundColor: "#5B34E0",
+    backgroundColor: "#2A1650",
   },
   blob2: {
     top: 120,
     right: -220,
-    backgroundColor: "#2F6BFF",
+    backgroundColor: "#271D47",
   },
   blob3: {
     bottom: -260,
     left: -120,
-    backgroundColor: "#7A2BD0",
+    backgroundColor: "#1D1440",
   },
 });

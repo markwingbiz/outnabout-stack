@@ -2,7 +2,7 @@
 // Shared UI extracted from the reference preview (App.tsx): design tokens,
 // Pill, Section, EventCard, Search, BottomNav, plus the shared
 // formatWhen / venue-name helpers. EventCard renders a background image
-// (TEMP Scene photo via lib/placeholders.ts, or the listing's real
+// (the mockup placeholder picture via lib/placeholders.ts, or the listing's real
 // photoUrl when one exists) under the App.tsx overlay gradient — never
 // a remote image, never presented as a photo. All data comes from the
 // real backend via the screens.
@@ -31,7 +31,10 @@ import { premium } from "./theme";
 import { usePremiumFonts } from "./premium";
 
 export type Tab = "Home" | "Events" | "NYE" | "Venues" | "Rewards";
-export const PURPLE = "#5B34E0";
+// Deep plum solid (premium.violet) — was vivid brand violet #5B34E0
+// before the owner's 2026-11-15 plum direction. Currently unreferenced;
+// kept in step with the token so nothing reaches for the old purple.
+export const PURPLE = "#4A4368";
 export const INK = "#0A0616";
 export const WIDTH = Dimensions.get("window").width;
 
@@ -165,7 +168,7 @@ export function EventCard({
   badge?: string;
   compact?: boolean;
   onPress: () => void;
-  /** Real photo URL when the listing has one; TEMP Scene photo otherwise. */
+  /** Real photo URL when the listing has one; the mockup placeholder picture otherwise. */
   photoUrl?: string;
 }) {
   return (
@@ -175,7 +178,7 @@ export function EventCard({
       style={[refStyles.eventCard, { height: compact ? 156 : 177 }]}
     >
       <ImageBackground
-        source={resolveEventCardImage(photoUrl)}
+        source={resolveEventCardImage(photoUrl, title, venueName)}
         style={refStyles.cardImage}
         resizeMode="cover"
       >

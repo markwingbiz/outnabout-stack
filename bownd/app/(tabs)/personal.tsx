@@ -670,7 +670,7 @@ export default function PersonalScreen() {
                         style={[styles.tile, { padding: 0 }]}
                       >
                         <CardBackground
-                          source={resolveEventCardImage(undefined)}
+                          source={resolveEventCardImage(undefined, item.title, item.subtitle)}
                           style={styles.tileBg}
                           contentStyle={styles.tileContent}
                         >

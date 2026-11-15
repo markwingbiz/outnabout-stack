@@ -13,8 +13,8 @@ export const colors = {
   card: "rgba(255,255,255,0.06)",
   cardBorder: "rgba(255,255,255,0.14)",
 
-  // Glows
-  glowPurple: "rgba(124,58,237,0.55)",
+  // Glows (deep plum since 2026-11-15 — was vivid violet rgba(124,58,237,…))
+  glowPurple: "rgba(42,22,80,0.55)",
   glowMagenta: "rgba(255,62,165,0.45)",
   glowBlue: "rgba(59,130,246,0.45)",
 
@@ -55,7 +55,7 @@ export const shadow = {
     elevation: 4,
   },
   glow: {
-    shadowColor: "#A855F7",
+    shadowColor: "#2A1650",
     shadowOpacity: 0.55,
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 10 },
@@ -86,8 +86,12 @@ export const theme = {
 // 2026-11-13 restyle (Mark, approving the brochure-cover look —
 // "Perfect."): the pastel/magenta end of the old palette is gone.
 // Surfaces are the brochure's deep midnight plum-navy (bg near
-// #0A0616), hairlines are champagne-gold tinted, and the brand
-// gradient runs royal blue -> violet -> deep violet.
+// #0A0616) and hairlines are champagne-gold tinted.
+//
+// 2026-11-15 (Mark): replace the purple with the mockup's DEEP PLUM.
+// Surface treatments (gradient, violet solid, glows) are plum now;
+// the vivid blue -> violet ramp survives ONLY as the brand mark
+// (the pin emblem) — the mockup itself labels that ramp "brand only".
 export const premium = {
   // Page base (brochure midnight plum-navy)
   bg: "#0A0616",
@@ -116,11 +120,23 @@ export const premium = {
   goldBorder: "rgba(232,196,118,0.40)",
   green: "#3ddc97",
   blue: "#2F6BFF",
-  violet: "#5B34E0",
+  // Solid plum for small filled controls (new/redeem/scan buttons, the
+  // wordmark dot). Was vivid #5B34E0; the value is the mockup file's
+  // own plum "on" solid (.cur-pill.on background) — deep plum, not purple.
+  violet: "#4A4368",
   link: "#9DB9FF",
 
-  // Brand gradient (mockup --grad: 120deg royal blue -> violet -> deep violet)
-  gradient: ["#2F6BFF", "#5B34E0", "#7A2BD0"] as const,
+  // Surface gradient — DEEP PLUM (owner direction 2026-11-15): the
+  // mockup's plum surface family, blue-plum direction kept but deepened
+  // (#1D1440 venue-hero plum -> #271D47 surface3 -> #2A1650 rewards
+  // plum). Drives the header avatar, active pills/chips, playlist tag,
+  // bottom-nav active dot and the rewards progress fill.
+  gradient: ["#1D1440", "#271D47", "#2A1650"] as const,
+
+  // Brand gradient (mockup --grad: royal blue -> violet -> deep
+  // violet) — BRAND MARK ONLY (the pin emblem in premium.tsx, whose
+  // SVG stops are the same values). Never a surface treatment.
+  brandGradient: ["#2F6BFF", "#5B34E0", "#7A2BD0"] as const,
 
   // Screen background: rich plum with depth — a violet-lit top that
   // settles into the mockup's bg2 and finally the deep bg at the

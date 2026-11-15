@@ -56,6 +56,7 @@ import {
   isShowcaseId,
 } from "../data/showcase";
 import {
+  resolveCampaignImage,
   resolveCardImage,
   categoryForVenueName,
   categoryForText,
@@ -397,7 +398,7 @@ export default function DetailScreen() {
                   </View>
                 )}
                 <ImageBackground
-                  source={resolveEventCardImage(campaignLineup[0]?.photoUrl)}
+                  source={resolveCampaignImage(campaignLineup[0]?.photoUrl)}
                   style={styles.detailBanner}
                   resizeMode="cover"
                 >
@@ -567,7 +568,12 @@ export default function DetailScreen() {
                 </View>
               )}
               <ImageBackground
-                source={resolveEventCardImage(event.photoUrl)}
+                source={resolveEventCardImage(
+                  event.photoUrl,
+                  event.title,
+                  ...(event.vibeTags || []),
+                  ...(event.audienceTags || [])
+                )}
                 style={styles.detailBanner}
                 resizeMode="cover"
               >
@@ -809,7 +815,7 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
 
-  // Detail header image: TEMP placeholder art (or the listing's real photo
+  // Detail header image: mockup placeholder picture (or the listing's real photo
   // when one exists) above the title. No text sits on the image, so the
   // scrim is only a light darkening for a finished look.
   detailBanner: {

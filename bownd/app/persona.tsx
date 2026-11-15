@@ -62,7 +62,7 @@ export default function PersonaBuilderScreen() {
   return (
     <View style={styles.root}>
       <LinearGradient
-        colors={["#6A35FF", "#B46CFF", "#FFD57A"]}
+        colors={["#1D1440", "#4A4368", "#E8C476"]}
         start={{ x: 0.1, y: 0 }}
         end={{ x: 0.9, y: 1 }}
         style={styles.hero}
@@ -108,7 +108,7 @@ export default function PersonaBuilderScreen() {
                   style={[styles.card, active && styles.cardActive]}
                   onPress={() => setPersona((p) => ({ ...p, audience: a.key }))}
                 >
-                  <Ionicons name={a.icon} size={18} color={active ? "#fff" : "#6A35FF"} />
+                  <Ionicons name={a.icon} size={18} color={active ? "#fff" : "#968FB2"} />
                   <Text style={[styles.cardText, active && styles.cardTextActive]}>
                     {a.label}
                   </Text>
@@ -127,7 +127,7 @@ export default function PersonaBuilderScreen() {
                   style={[styles.card, active && styles.cardActive]}
                   onPress={() => setPersona((p) => ({ ...p, vibe: v.key }))}
                 >
-                  <Ionicons name={v.icon} size={18} color={active ? "#fff" : "#6A35FF"} />
+                  <Ionicons name={v.icon} size={18} color={active ? "#fff" : "#968FB2"} />
                   <Text style={[styles.cardText, active && styles.cardTextActive]}>
                     {v.label}
                   </Text>
@@ -202,7 +202,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
-  cardActive: { backgroundColor: "#6A35FF", borderColor: "rgba(0,0,0,0)" },
+  cardActive: { backgroundColor: "#4A4368", borderColor: "rgba(0,0,0,0)" },
   cardText: { fontSize: 13, fontWeight: "900", color: "#1B1B1B" },
   cardTextActive: { color: "#fff" },
 

@@ -48,6 +48,7 @@ import Svg, {
 import { premium, venueTilePalette } from "./theme";
 import {
   categoryForVenueName,
+  resolveCampaignImage,
   resolveCardImage,
   resolveEventCardImage,
   type PlaceholderCategory,
@@ -254,7 +255,7 @@ export function SceneEventCard({
     <View style={[styles.evCard, style]}>
       <TouchableOpacity onPress={onPress} activeOpacity={0.88}>
         <Image
-          source={resolveEventCardImage(photoUrl)}
+          source={resolveEventCardImage(photoUrl, title, venueName, ...(tags ?? []))}
           style={styles.evPhoto}
           resizeMode="cover"
         />
@@ -327,7 +328,7 @@ export function PlaylistRailCard({
   return (
     <TouchableOpacity onPress={onPress} activeOpacity={0.88} style={styles.plCard}>
       <Image
-        source={resolveEventCardImage(coverPhotoUrl)}
+        source={resolveEventCardImage(coverPhotoUrl, title, tag)}
         style={styles.plPhoto}
         resizeMode="cover"
       />
@@ -492,8 +493,8 @@ export function InfoRow({
 // data/campaigns.ts). Theme colors come from the campaign config.
 //
 // Visual pass (2026-11-15): the banner is a designed HERO in the
-// mockup's detail-hero language — photography first (the app's TEMP
-// scene art, the same art every event card carries; a campaign has
+// mockup's detail-hero language — photography first (the mockup's NYE
+// sparkler picture via lib/placeholders.ts; a campaign has
 // no photo of its own), the campaign's gradient laid over it as a
 // tint, a bottom scrim for legibility, and the mockup's hero-badge
 // chip (dark glass, gold rim + gold text) above a Poppins headline.
@@ -525,7 +526,7 @@ export function CampaignBanner({
   return (
     <TouchableOpacity onPress={onPress} activeOpacity={0.9} style={styles.campaignWrap}>
       <ImageBackground
-        source={resolveEventCardImage(undefined)}
+        source={resolveCampaignImage(undefined)}
         style={styles.campaignHero}
         imageStyle={styles.campaignHeroImg}
         resizeMode="cover"

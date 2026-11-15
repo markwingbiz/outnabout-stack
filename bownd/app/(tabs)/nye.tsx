@@ -31,7 +31,7 @@ import {
   campaignEvents,
   getActiveCampaign,
 } from "../../data/campaigns";
-import { resolveEventCardImage } from "../../lib/placeholders";
+import { resolveCampaignImage } from "../../lib/placeholders";
 import { SceneEventCard, hexToRgba, usePremiumFonts } from "../ui/premium";
 import { premium } from "../ui/theme";
 import {
@@ -147,12 +147,12 @@ export default function NyeScreen() {
         )}
 
         {/* Campaign hero — the mockup's NYE treatment is its detail
-            hero: a full-bleed photo (the app's TEMP scene art, tinted
-            with the campaign gradient) with the gold tag chip and the
+            hero: a full-bleed photo (the mockup's NYE sparkler picture,
+            tinted with the campaign gradient) with the gold tag chip and the
             Big Night name overlaid at the bottom over a scrim. */}
         <TouchableOpacity onPress={openCampaign} activeOpacity={0.92} style={styles.heroWrap}>
           <ImageBackground
-            source={resolveEventCardImage(undefined)}
+            source={resolveCampaignImage(undefined)}
             style={styles.hero}
             resizeMode="cover"
           >

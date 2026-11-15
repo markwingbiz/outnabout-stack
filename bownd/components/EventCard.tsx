@@ -16,7 +16,7 @@ export default function EventCard({ event, venue }: Props) {
   return (
     <View style={styles.card}>
       <ImageBackground
-        source={resolveEventCardImage(event?.photoUrl)}
+        source={resolveEventCardImage(event?.photoUrl, title, venueName)}
         style={styles.bg}
         resizeMode="cover"
       >
