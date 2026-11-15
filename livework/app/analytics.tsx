@@ -6,12 +6,19 @@
 // dashboard's verified revenue figure (always $0 until real payments
 // exist — see lib/data.ts; never a sum of tracking rows).
 //
-// Metrics that need data Bownd does not collect yet (listing views,
-// saves, the visibility funnel, ticket money before Stripe, perk
-// claims, scanner demand aggregates, venue-set goals) render as
-// labeled empty states with NO numbers — never samples, never
-// estimates. Demo mode is dashboard-scoped and never feeds this
-// screen: it shows real data or honest empties only.
+// Metrics that need data Bownd does not collect yet (ticket money
+// before Stripe, perk claims, scanner demand aggregates, venue-set
+// goals) render as labeled empty states with NO numbers — never
+// samples, never estimates. Demo mode is dashboard-scoped and never
+// feeds this screen: it shows real data or honest empties only.
+//
+// Listing views, saves and the visibility funnel ARE measured now:
+// Bownd emits first-party signals into `app_events` (bownd/lib/
+// analytics.ts), a nightly rollup aggregates them per venue into
+// `analytics_daily`, and this screen reads both — tenant-scoped, as
+// the signed-in user — so the numbers below are the venue's own.
+// Until a venue's first rolled-up day exists, those rows stay in the
+// honest-empty card instead of showing zeros as if they were data.
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
@@ -27,7 +34,7 @@ import { useFocusEffect, useRouter } from "expo-router";
 import { THEME } from "../lib/theme";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../lib/auth";
-import { getUserTenantIds } from "../lib/tenant";
+import { getUserTenantIds, getUserVenues } from "../lib/tenant";
 import {
   fetchDashboard,
   formatMoney,
@@ -47,6 +54,17 @@ type RedemptionLite = {
   id: string;
   eventId: string | null;
   atMillis: number | null;
+};
+
+// First-party Bownd curiosity, last 30 days: totals from the nightly
+// analytics_daily rollup; per-event views/saves from the raw
+// app_events stream (the rollup is per-venue, not per-event).
+type CuriosityData = {
+  views: number;
+  venueViews: number;
+  saves: number;
+  checkouts: number;
+  perEvent: { eventId: string; views: number; saves: number }[];
 };
 
 function asRecord(v: unknown): Record<string, unknown> | null {
@@ -116,6 +134,7 @@ export default function AnalyticsScreen() {
   const [activity, setActivity] = useState<DashboardData | null>(null);
   const [range, setRange] = useState<RangeKey>("30d");
   const [redemptions, setRedemptions] = useState<RedemptionLite[] | null>(null);
+  const [curiosity, setCuriosity] = useState<CuriosityData | null>(null);
   const [eventTitles, setEventTitles] = useState<Map<string, string>>(new Map());
   const [error, setError] = useState<string | null>(null);
 
@@ -129,6 +148,7 @@ export default function AnalyticsScreen() {
       if (tenantIds.length === 0) {
         setRedemptions([]);
         setEventTitles(new Map());
+        setCuriosity(null);
         return;
       }
       const [eventsRes, redemptionsRes] = await Promise.all([
@@ -165,6 +185,63 @@ export default function AnalyticsScreen() {
           };
         }),
       );
+      // Curiosity (views/saves/funnel): the venue's own Bownd signals,
+      // last 30 days. Totals come from the nightly analytics_daily
+      // rollup; per-event views/saves come from raw app_events (the
+      // rollup is per-venue). RLS scopes both to this user's venues;
+      // the venue filter here is the same scoping, stated explicitly.
+      const venues = await getUserVenues();
+      const venueIds = venues.map((v) => v.id);
+      if (venueIds.length === 0) {
+        setCuriosity(null);
+      } else {
+        const sinceMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
+        const [dailyRes, rawRes] = await Promise.all([
+          supabase
+            .from("analytics_daily")
+            .select("metric_key, metric_value")
+            .in("venue_id", venueIds)
+            .gte("date", new Date(sinceMs).toISOString().slice(0, 10)),
+          supabase
+            .from("app_events")
+            .select("event_name, event_id")
+            .in("venue_id", venueIds)
+            .in("event_name", ["event_view", "event_save"])
+            .gte("ts", new Date(sinceMs).toISOString())
+            .limit(10000),
+        ]);
+        if (dailyRes.error) throw dailyRes.error;
+        if (rawRes.error) throw rawRes.error;
+        const totals: CuriosityData = {
+          views: 0,
+          venueViews: 0,
+          saves: 0,
+          checkouts: 0,
+          perEvent: [],
+        };
+        for (const row of (dailyRes.data ?? []) as Record<string, unknown>[]) {
+          const value =
+            typeof row.metric_value === "number" && Number.isFinite(row.metric_value)
+              ? row.metric_value
+              : 0;
+          if (row.metric_key === "event_view") totals.views += value;
+          else if (row.metric_key === "venue_view") totals.venueViews += value;
+          else if (row.metric_key === "event_save") totals.saves += value;
+          else if (row.metric_key === "checkout_started") totals.checkouts += value;
+        }
+        const perEventMap = new Map<string, { eventId: string; views: number; saves: number }>();
+        for (const row of (rawRes.data ?? []) as Record<string, unknown>[]) {
+          const eventId = asString(row.event_id);
+          if (!eventId) continue;
+          const entry =
+            perEventMap.get(eventId) ?? { eventId, views: 0, saves: 0 };
+          if (row.event_name === "event_view") entry.views += 1;
+          else if (row.event_name === "event_save") entry.saves += 1;
+          perEventMap.set(eventId, entry);
+        }
+        totals.perEvent = [...perEventMap.values()];
+        setCuriosity(totals);
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Could not load your analytics.");
     }
@@ -267,6 +344,29 @@ export default function AnalyticsScreen() {
     });
   }, [dash]);
 
+  // Curiosity paired with door results: events members saved but
+  // haven't redeemed yet. Real rows on both sides only — an event
+  // needs at least 3 saves before it reads as a signal, not noise.
+  const savedNotRedeemed = useMemo(() => {
+    if (!curiosity) return [];
+    const redeemedByEvent = new Map<string, number>();
+    for (const r of redemptions ?? []) {
+      if (r.eventId) {
+        redeemedByEvent.set(r.eventId, (redeemedByEvent.get(r.eventId) ?? 0) + 1);
+      }
+    }
+    return curiosity.perEvent
+      .filter((p) => p.saves >= 3 && (redeemedByEvent.get(p.eventId) ?? 0) === 0)
+      .sort((a, b) => b.saves - a.saves)
+      .slice(0, 3)
+      .map((p) => ({
+        eventId: p.eventId,
+        title: eventTitles.get(p.eventId) ?? "Event not in current list",
+        saves: p.saves,
+        views: p.views,
+      }));
+  }, [curiosity, redemptions, eventTitles]);
+
   // --- States ---------------------------------------------------------------
 
   if (authLoading || (session && dash === null && !error)) {
@@ -327,6 +427,13 @@ export default function AnalyticsScreen() {
   const activityPoints = activity?.activityPoints ?? [];
   const activityTotal = activityPoints.reduce((a, b) => a + b, 0);
   const redemptionTotal = redemptions?.length ?? 0;
+  const hasCuriosity = Boolean(
+    curiosity &&
+      curiosity.views + curiosity.venueViews + curiosity.saves + curiosity.checkouts > 0,
+  );
+  const funnelMax = curiosity
+    ? Math.max(curiosity.views, curiosity.venueViews, curiosity.saves, curiosity.checkouts, 1)
+    : 1;
 
   return (
     <SafeAreaView style={styles.root}>
@@ -526,18 +633,79 @@ export default function AnalyticsScreen() {
           )}
         </View>
 
+        {/* Views, saves & funnel — Bownd's first-party signals for this
+            venue (app_events, rolled up nightly into analytics_daily).
+            Renders only when real rows exist; before that, these rows
+            live in the honest-empty card below. */}
+        {hasCuriosity && curiosity && (
+          <View style={styles.card}>
+            <SectionTitle>Views, saves & funnel</SectionTitle>
+            <BarRow label="Event page views" value={curiosity.views} max={funnelMax} color={GOLD} />
+            <BarRow
+              label="Venue page views"
+              value={curiosity.venueViews}
+              max={funnelMax}
+              color={THEME.purple}
+            />
+            <BarRow label="Saves" value={curiosity.saves} max={funnelMax} color={THEME.blue} />
+            <BarRow
+              label="Checkout starts"
+              value={curiosity.checkouts}
+              max={funnelMax}
+              color={THEME.green}
+            />
+            {curiosity.views > 0 && (
+              <Text style={styles.takeaway}>
+                {Math.round((curiosity.saves / curiosity.views) * 100)}% of event views became
+                saves
+                {curiosity.saves > 0
+                  ? ` · ${Math.round((curiosity.checkouts / curiosity.saves) * 100)}% of saves reached checkout`
+                  : ""}
+                .
+              </Text>
+            )}
+            {savedNotRedeemed.length > 0 && (
+              <>
+                <Text style={styles.subTitle}>Saved, but not through the door yet</Text>
+                {savedNotRedeemed.map((p) => (
+                  <View key={p.eventId} style={styles.presenceRow}>
+                    <Text style={styles.presenceTitle} numberOfLines={1}>
+                      {p.title}
+                    </Text>
+                    <Text style={styles.presenceMeta}>
+                      {p.saves} saves · {p.views} views · no redemptions recorded yet
+                    </Text>
+                  </View>
+                ))}
+                <Text style={styles.takeaway}>
+                  The interest is real — it just hasn't converted. A reminder to the members
+                  who saved these, or a featured slot while interest is warm, is how venues
+                  usually close this gap.
+                </Text>
+              </>
+            )}
+            <Text style={styles.note}>
+              Measured in the Bownd app over the last 30 days; totals roll up nightly.
+            </Text>
+          </View>
+        )}
+
         {/* Honest empty states — measured later, never estimated */}
         <View style={styles.card}>
           <SectionTitle>Not measured yet — on purpose</SectionTitle>
           {[
-            {
-              name: "Listing views & saves",
-              why: "Bownd doesn't measure listing views yet. View and save counts start here when Bownd begins measuring them.",
-            },
-            {
-              name: "Visibility funnel",
-              why: "Views → event page → saves needs that same view tracking. No step of the funnel is estimated.",
-            },
+            ...(hasCuriosity
+              ? []
+              : [
+                  {
+                    name: "Listing views & saves",
+                    why: "Bownd now records listing views and saves in the app. Your numbers appear here once the updated Bownd app is live and a nightly rollup has run — until then this stays empty rather than estimated.",
+                  },
+                  {
+                    name: "Visibility funnel",
+                    why: "Views → saves → checkout starts lights up with that same tracking. No step of the funnel is estimated.",
+                  },
+                ]),
             {
               name: "Ticket sales",
               why: "Ticket money appears here once payments launch — there is no ticketing to chart before then.",

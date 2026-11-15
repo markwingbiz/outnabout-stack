@@ -11,7 +11,7 @@
 // - Experience detail gains "Visit website" (expo-linking) when the
 //   curated entry has one. No buttons are decorative: every pressable
 //   does something real.
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { SafeAreaView, View, Text, StyleSheet, ScrollView, Pressable, Alert, ImageBackground } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Linking from "expo-linking";
@@ -48,6 +48,7 @@ import {
 } from "../lib/store";
 import { useAuth } from "../lib/auth";
 import { maybeAskForPushPermission } from "../lib/push";
+import { track } from "../lib/analytics";
 import {
   findShowcaseEvent,
   findShowcaseVenue,
@@ -205,6 +206,18 @@ export default function DetailScreen() {
   }
 
   function onCampaignTickets(totalCents: number) {
+    // Checkout entry: the member tapped "Get tickets" with a tier and
+    // quantity chosen — record the intent even though sales open with
+    // the payment launch (checkout_started is the funnel's last step).
+    void track("checkout_started", {
+      meta: {
+        campaign_id: campaign?.id ?? id ?? null,
+        campaign_name: campaign?.name ?? null,
+        tier: campaignTier?.name ?? null,
+        qty,
+        total_cents: totalCents,
+      },
+    });
     Alert.alert(
       "Tickets aren't on sale yet",
       `Your total would be ${formatMoney(totalCents)} — the full price, fees included, shown up front like always. Sales open with the campaign's payment launch.`
@@ -238,6 +251,45 @@ export default function DetailScreen() {
     };
   }, [event?.id, pageVenue?.id, experience?.id, pageVenue, user?.uid]);
 
+  // First-party analytics: one view signal per item per mount. The
+  // ref guard keeps re-renders (favorite state, font loads) from
+  // double-counting a single open; navigating to a different item
+  // changes the key and fires again.
+  const trackedViewRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (loading) return;
+    if (event) {
+      const key = `event:${event.id}`;
+      if (trackedViewRef.current === key) return;
+      trackedViewRef.current = key;
+      void track("event_view", {
+        eventId: event.id,
+        venueId: event.venueId,
+        meta: {
+          category: event.category,
+          vibes: event.vibeTags,
+          audience: event.audienceTags,
+          venue_name: venueName,
+          is_demo: isDemo,
+          is_test: event.isTest === true,
+          discovered: event.discovered === true,
+        },
+      });
+    } else if (pageVenue) {
+      const key = `venue:${pageVenue.id}`;
+      if (trackedViewRef.current === key) return;
+      trackedViewRef.current = key;
+      void track("venue_view", {
+        venueId: pageVenue.id,
+        meta: {
+          venue_name: pageVenue.name,
+          is_demo: isDemo,
+          is_test: pageVenue.isTest === true,
+        },
+      });
+    }
+  }, [loading, event, pageVenue, venueName, isDemo]);
+
   async function onToggleFav() {
     // Demo items: bookmark-only Save. Never any purchase/redeem action.
     const item: FavoriteItem | null = pageVenue
@@ -267,6 +319,16 @@ export default function DetailScreen() {
     try {
       const nowFav = await toggleFavorite(user?.uid ?? null, item);
       setFav(nowFav);
+      // First-party analytics: saves are the curiosity signal Livework
+      // pairs with sales. Venue favorites aren't part of the event
+      // taxonomy, so only event items emit save/unsave.
+      if (item.kind === "event") {
+        void track(nowFav ? "event_save" : "event_unsave", {
+          eventId: item.id,
+          venueId: event?.venueId ?? null,
+          meta: { title: item.title, venue_name: venueName },
+        });
+      }
       // Plan §1.2 fallback moment: favoriting an event is the in-context
       // permission ask (fires at most once; never after a refusal).
       if (nowFav && item.kind === "event") {

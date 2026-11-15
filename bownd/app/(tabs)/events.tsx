@@ -10,7 +10,7 @@
 // - Accepts params { q, venue } (from Home search + venue orbs +
 //   Personal favorite venues) with a visible "Venue: X" chip to clear.
 // - Section chevrons collapse/expand their section.
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -36,6 +36,7 @@ import {
   type FavoriteItem,
 } from "../../lib/store";
 import { useAuth } from "../../lib/auth";
+import { track } from "../../lib/analytics";
 import { getShowcaseEvents, getShowcaseVenues } from "../../data/showcase";
 import { categoryForText } from "../../lib/placeholders";
 import { SceneEventCard, VenueTile, usePremiumFonts, venueMetaFor } from "../ui/premium";
@@ -366,6 +367,23 @@ export default function EventsScreen() {
       return da - db;
     });
   }, [persona, personalizedOn, query, timeChip, categoryFilter, effEvents, venueFilter, venueIdFilter, effVenues]);
+
+  // First-party analytics: record settled searches (debounced, so a
+  // row lands per search intent, not per keystroke) with the result
+  // count — zero-result searches are unmet demand and matter as much
+  // as hits. The count reflects the list as filtered on screen.
+  const lastSearchRef = useRef<string | null>(null);
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) return;
+    const key = `${q.toLowerCase()}|${allEvents.length}`;
+    if (lastSearchRef.current === key) return;
+    const t = setTimeout(() => {
+      lastSearchRef.current = key;
+      void track("search", { meta: { query: q, result_count: allEvents.length } });
+    }, 900);
+    return () => clearTimeout(t);
+  }, [query, allEvents.length]);
 
   const headerSubtitle = useMemo(() => {
     const city = "Kansas City";
