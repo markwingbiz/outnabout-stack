@@ -138,12 +138,17 @@ export const premium = {
   // SVG stops are the same values). Never a surface treatment.
   brandGradient: ["#2F6BFF", "#5B34E0", "#7A2BD0"] as const,
 
-  // Screen background: rich plum with depth — a violet-lit top that
-  // settles into the mockup's bg2 and finally the deep bg at the
-  // bottom edge. (The mockup screen itself is flat bg2; the glow is
-  // what keeps the app's full-bleed screens from reading near-black.)
-  screenGradient: ["#21153F", "#0F0A1F", "#0A0616"] as const,
-  screenGradientLocations: [0, 0.42, 1] as const,
+  // Screen background: FLAT mockup bg2, settling to the deep bg only
+  // at the very bottom edge. The mockup's .screen is a flat --bg2
+  // (#0F0A1F) — measured on its rendered phones, the background is
+  // rgb(15,10,31), luminance 12.6, at EVERY height on every screen.
+  // The previous top stop (#21153F) rendered at luminance ~25 across
+  // the top of every app screen, which is why the app read lighter /
+  // more purple than the mockup despite matching token values
+  // (owner follow-up, 2026-11-15: "the deep plum still is not as
+  // dark as the mock up" — judged on rendered pixels, not tokens).
+  screenGradient: ["#0F0A1F", "#0F0A1F", "#0A0616"] as const,
+  screenGradientLocations: [0, 0.55, 1] as const,
 
   // Rewards balance card gradient (mockup .rw-card, 135deg)
   rewardsGradient: ["#130D28", "#2A1650"] as const,

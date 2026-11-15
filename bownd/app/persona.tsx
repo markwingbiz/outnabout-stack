@@ -62,7 +62,11 @@ export default function PersonaBuilderScreen() {
   return (
     <View style={styles.root}>
       <LinearGradient
-        colors={["#1D1440", "#4A4368", "#E8C476"]}
+        // Deep plum family (premium.gradient stops) — the old ramp
+        // flooded the hero with the gold accent (#E8C476 end stop),
+        // which read as a light surface, not plum. Gold stays an
+        // accent (text/pills), never a surface flood. 2026-11-15.
+        colors={["#1D1440", "#271D47", "#2A1650"]}
         start={{ x: 0.1, y: 0 }}
         end={{ x: 0.9, y: 1 }}
         style={styles.hero}

@@ -6,6 +6,13 @@
 // Plum pass (2026-11-15): the blobs were the vivid brand ramp
 // (#5B34E0 / #2F6BFF / #7A2BD0); they are now the mockup's deep plum
 // tones at higher opacity — plum depth, not purple glow.
+// Darkness follow-up (2026-11-15): the mockup's screens are FLAT
+// --bg2 (#0F0A1F, rendered luminance 12.6 at every height) — no glow
+// at all. Mid-plum blobs (#2A1650 / #271D47 at 0.40) composited to
+// luminance ~18-25 over the top of detail/list/vibe screens, the
+// same lift the owner rejected on the tab screens. The blobs are
+// now bg-family values, so the composite stays within ~1 luminance
+// point of the mockup's flat bg2 while keeping a whisper of depth.
 import React from "react";
 import { View, StyleSheet } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
@@ -38,16 +45,16 @@ const styles = StyleSheet.create({
   blob1: {
     top: -220,
     left: -180,
-    backgroundColor: "#2A1650",
+    backgroundColor: "#0F0A1F",
   },
   blob2: {
     top: 120,
     right: -220,
-    backgroundColor: "#271D47",
+    backgroundColor: "#110B22",
   },
   blob3: {
     bottom: -260,
     left: -120,
-    backgroundColor: "#1D1440",
+    backgroundColor: "#0A0616",
   },
 });
