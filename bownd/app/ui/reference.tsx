@@ -100,7 +100,7 @@ export function Pill({
     return (
       <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
         <LinearGradient
-          colors={[...premium.gradient]}
+          colors={[...premium.brandGradient]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 0 }}
           style={[refStyles.pill, refStyles.pillGradient]}
@@ -227,10 +227,11 @@ export function Search({
   );
 }
 
-// HeaderAvatar — the mockup Home header's gradient initial circle.
-// Renders the real account initial when one is known; a neutral
-// person glyph for guests. Lives here so every tab screen's header
-// carries the same element.
+// HeaderAvatar — the mockup Home header's gradient initial circle
+// (mockup .avatar — the vivid brand gradient). Renders the real
+// account initial when one is known; a neutral person glyph for
+// guests. Lives here so every tab screen's header carries the same
+// element.
 export function HeaderAvatar({
   initial,
   onPress,
@@ -241,7 +242,7 @@ export function HeaderAvatar({
   return (
     <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
       <LinearGradient
-        colors={[...premium.gradient]}
+        colors={[...premium.brandGradient]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={refStyles.avatarCircle}
@@ -301,7 +302,7 @@ export function BottomNav({
             </Text>
             {isActive ? (
               <LinearGradient
-                colors={[...premium.gradient]}
+                colors={[...premium.brandGradient]}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
                 style={refStyles.bottomDot}

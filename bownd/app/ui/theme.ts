@@ -89,9 +89,10 @@ export const theme = {
 // #0A0616) and hairlines are champagne-gold tinted.
 //
 // 2026-11-15 (Mark): replace the purple with the mockup's DEEP PLUM.
-// Surface treatments (gradient, violet solid, glows) are plum now;
-// the vivid blue -> violet ramp survives ONLY as the brand mark
-// (the pin emblem) — the mockup itself labels that ramp "brand only".
+// Surface treatments (gradient, violet solid, glows) are plum now.
+// Follow-up the same day ("match the mockup's bright accents"): the
+// vivid ramp also returns on exactly the accent elements the mockup's
+// component CSS paints with it — see brandGradient below.
 export const premium = {
   // Page base (brochure midnight plum-navy)
   bg: "#0A0616",
@@ -129,13 +130,18 @@ export const premium = {
   // Surface gradient — DEEP PLUM (owner direction 2026-11-15): the
   // mockup's plum surface family, blue-plum direction kept but deepened
   // (#1D1440 venue-hero plum -> #271D47 surface3 -> #2A1650 rewards
-  // plum). Drives the header avatar, active pills/chips, playlist tag,
-  // bottom-nav active dot and the rewards progress fill.
+  // plum). Kept for plum surface treatments; the accent elements the
+  // mockup paints with --grad use brandGradient below instead.
   gradient: ["#1D1440", "#271D47", "#2A1650"] as const,
 
   // Brand gradient (mockup --grad: royal blue -> violet -> deep
-  // violet) — BRAND MARK ONLY (the pin emblem in premium.tsx, whose
-  // SVG stops are the same values). Never a surface treatment.
+  // violet). The pin emblem's mark, AND — owner follow-up 2026-11-15
+  // ("Approve, but match the mockup's bright accents") — exactly the
+  // accent elements the mockup's own component CSS paints with
+  // var(--grad): .avatar (header avatar), .fchip.on (active filter
+  // chip), .cta (primary "Get tickets" CTA), .bar i (Rewards progress
+  // fill), .tab.on .tdot (bottom-nav active dot), .tag-grad (playlist
+  // tag pill). Nothing else: surfaces stay plum, backgrounds stay flat.
   brandGradient: ["#2F6BFF", "#5B34E0", "#7A2BD0"] as const,
 
   // Screen background: FLAT mockup bg2, settling to the deep bg only

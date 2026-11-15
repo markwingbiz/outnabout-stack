@@ -342,7 +342,7 @@ export function PlaylistRailCard({
             </View>
           ) : (
             <LinearGradient
-              colors={[...premium.gradient]}
+              colors={[...premium.brandGradient]}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 0 }}
               style={styles.plTag}

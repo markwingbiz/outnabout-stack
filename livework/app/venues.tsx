@@ -141,7 +141,7 @@ export default function VenuesScreen() {
     }
   }
 
-  if (authLoading || venues === null) {
+  if (authLoading || (session && venues === null && !error)) {
     return (
       <SafeAreaView style={styles.root}>
         <ActivityIndicator color={THEME.purple} size="large" style={{ marginTop: 40 }} />

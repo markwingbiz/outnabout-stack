@@ -284,7 +284,7 @@ export default function PublishScreen() {
     }, [session, load]),
   );
 
-  if (authLoading || requests === null) {
+  if (authLoading || (session && requests === null && !error)) {
     return (
       <SafeAreaView style={styles.root}>
         <ActivityIndicator color={THEME.purple} size="large" style={{ marginTop: 40 }} />
