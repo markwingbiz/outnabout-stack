@@ -6,10 +6,12 @@
 // points); nothing in this file invents counts, prices, or balances.
 //
 // Anatomy rules carried from the mockup + Mark's decisions:
-// - Event cards: scene photo crop ABOVE the caption, no text baked
-//   into or overlaid on the photo (badges sit on the caption side,
-//   except small chips/accessory buttons which float on the photo's
-//   top corners like the mockup's heart).
+// - Event cards (mockup .ev-card, verbatim): photo crop (158 tall)
+//   ABOVE a surface caption — tag chip, Poppins title, one meta row
+//   (bold day · time, venue), then a footer row with the price in
+//   Poppins and a "Details ›" link. No text sits on the photo; the
+//   only element over the photo is the favorite-heart accessory on
+//   the Events tab, styled as the mockup's .heart circle.
 // - Venue tiles: small icon tile (icon on solid color + name). A real
 //   venue photoUrl still wins when the venue supplied one.
 // - Gold is the points/campaign/featured accent only.
@@ -20,6 +22,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   Image,
+  ImageBackground,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
@@ -238,6 +241,11 @@ export function SceneEventCard({
   style?: object;
 }) {
   const fonts = usePremiumFonts();
+  // Mockup .ev-meta leads with the day in bold ink, then the time:
+  // formatWhen gives "Tonight • 7:00 PM" / "Dec 31 • 9:00 PM".
+  const whenParts = whenLabel.split(" • ");
+  const whenHead = whenParts[0];
+  const whenTail = whenParts.slice(1).join(" • ");
   return (
     // Root is a plain View: the card pressable and the accessory (e.g.
     // a favorite heart) are SIBLINGS, so tapping the accessory never
@@ -245,39 +253,47 @@ export function SceneEventCard({
     // engineered before this pass.
     <View style={[styles.evCard, style]}>
       <TouchableOpacity onPress={onPress} activeOpacity={0.88}>
-        <View>
-          <Image
-            source={resolveEventCardImage(photoUrl)}
-            style={styles.evPhoto}
-            resizeMode="cover"
-          />
+        <Image
+          source={resolveEventCardImage(photoUrl)}
+          style={styles.evPhoto}
+          resizeMode="cover"
+        />
+        <View style={styles.evCaption}>
           {!!badge && (
             <View style={styles.evBadge}>
               <Text style={[styles.evBadgeText, fonts.bodyExtraBold]}>{badge}</Text>
             </View>
           )}
-        </View>
-        <View style={styles.evCaption}>
-        <Text style={[styles.evWhen, fonts.bodyBold]}>
-          <Text style={{ color: premium.gold }}>★</Text> {whenLabel}
-        </Text>
-        <Text style={[styles.evTitle, fonts.display]} numberOfLines={2}>
-          {title}
-        </Text>
-        <Text style={[styles.evVenue, fonts.bodySemiBold]} numberOfLines={1}>
-          {venueName}
-        </Text>
-        {!!webBadge && <Text style={[styles.evWeb, fonts.bodyExtraBold]}>{webBadge}</Text>}
-        {!!tags && tags.length > 0 && (
-          <View style={styles.evTags}>
-            {tags.slice(0, 4).map((t) => (
-              <View key={t} style={styles.evTag}>
-                <Text style={[styles.evTagText, fonts.bodyBold]}>{t}</Text>
-              </View>
-            ))}
+          <Text style={[styles.evTitle, fonts.displayBold]} numberOfLines={2}>
+            {title}
+          </Text>
+          <View style={styles.evMeta}>
+            <Text style={[styles.evMetaText, fonts.bodySemiBold]}>
+              <Text style={[styles.evMetaBold, fonts.bodyBold]}>{whenHead}</Text>
+              {whenTail ? ` · ${whenTail}` : ""}
+            </Text>
+            <Text style={[styles.evMetaText, fonts.bodySemiBold]} numberOfLines={1}>
+              {venueName}
+            </Text>
           </View>
-        )}
-        {!!priceLabel && <Text style={[styles.evPrice, fonts.bodyExtraBold]}>{priceLabel}</Text>}
+          {!!webBadge && <Text style={[styles.evWeb, fonts.bodyExtraBold]}>{webBadge}</Text>}
+          {!!tags && tags.length > 0 && (
+            <View style={styles.evTags}>
+              {tags.slice(0, 4).map((t) => (
+                <View key={t} style={styles.evTag}>
+                  <Text style={[styles.evTagText, fonts.bodyBold]}>{t}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+          <View style={styles.evFoot}>
+            {!!priceLabel ? (
+              <Text style={[styles.evPrice, fonts.display]}>{priceLabel}</Text>
+            ) : (
+              <View />
+            )}
+            <Text style={[styles.evMore, fonts.bodyExtraBold]}>Details ›</Text>
+          </View>
         </View>
       </TouchableOpacity>
       {!!accessory && <View style={styles.evAccessory}>{accessory}</View>}
@@ -370,13 +386,16 @@ export function venueMetaFor(name: string): string {
   }
 }
 
+// Mockup tiles carry white STROKE icons (music note, building,
+// cocktail glass, clock) — Ionicons' outline variants are the same
+// line language; the filled glyphs read as clipart next to them.
 const VENUE_ICONS: Record<PlaceholderCategory, keyof typeof Ionicons.glyphMap> = {
-  music: "musical-notes",
-  nightlife: "moon",
-  food: "restaurant",
-  family: "people",
-  arts: "color-palette",
-  default: "location",
+  music: "musical-notes-outline",
+  nightlife: "moon-outline",
+  food: "wine-outline",
+  family: "people-outline",
+  arts: "color-palette-outline",
+  default: "location-outline",
 };
 
 export function VenueTile({
@@ -457,7 +476,7 @@ export function InfoRow({
         )}
       </View>
       <View style={{ flex: 1 }}>
-        <Text style={[styles.infoTitle, fonts.displayBold, light && styles.infoTitleLight]}>
+        <Text style={[styles.infoTitle, fonts.bodyExtraBold, light && styles.infoTitleLight]}>
           {title}
         </Text>
         <Text style={[styles.infoBody, fonts.bodySemiBold, light && styles.infoBodyLight]}>
@@ -471,7 +490,22 @@ export function InfoRow({
 // ---------------------------------------------------------------------------
 // CampaignBanner — Home's campaign slot entry (config-driven; see
 // data/campaigns.ts). Theme colors come from the campaign config.
+//
+// Visual pass (2026-11-15): the banner is a designed HERO in the
+// mockup's detail-hero language — photography first (the app's TEMP
+// scene art, the same art every event card carries; a campaign has
+// no photo of its own), the campaign's gradient laid over it as a
+// tint, a bottom scrim for legibility, and the mockup's hero-badge
+// chip (dark glass, gold rim + gold text) above a Poppins headline.
+// A flat gradient rectangle is exactly what the owner rejected.
 // ---------------------------------------------------------------------------
+
+export function hexToRgba(hex: string, alpha: number): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+}
 
 export function CampaignBanner({
   presenter,
@@ -487,23 +521,37 @@ export function CampaignBanner({
   onPress: () => void;
 }) {
   const fonts = usePremiumFonts();
+  const tint = gradient.map((c) => hexToRgba(c, 0.52)) as [string, string, string];
   return (
     <TouchableOpacity onPress={onPress} activeOpacity={0.9} style={styles.campaignWrap}>
-      <LinearGradient
-        colors={[...gradient]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.campaignCard}
+      <ImageBackground
+        source={resolveEventCardImage(undefined)}
+        style={styles.campaignHero}
+        imageStyle={styles.campaignHeroImg}
+        resizeMode="cover"
       >
-        <View style={styles.campaignTag}>
-          <Text style={[styles.campaignTagText, fonts.bodyExtraBold]}>
-            {presenter} · Spotlight
-          </Text>
+        <LinearGradient
+          colors={tint}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={StyleSheet.absoluteFillObject}
+        />
+        <LinearGradient
+          colors={["rgba(10,6,22,0)", "rgba(10,6,22,0.52)", "rgba(10,6,22,0.94)"]}
+          locations={[0.3, 0.68, 1]}
+          style={StyleSheet.absoluteFillObject}
+        />
+        <View style={styles.campaignContent}>
+          <View style={styles.campaignTag}>
+            <Text style={[styles.campaignTagText, fonts.bodyExtraBold]}>
+              {presenter} · Spotlight
+            </Text>
+          </View>
+          <Text style={[styles.campaignName, fonts.display]}>{name}</Text>
+          <Text style={[styles.campaignDates, fonts.bodyBold]}>{datesLabel}</Text>
+          <Text style={[styles.campaignCta, fonts.bodyExtraBold]}>See the night ›</Text>
         </View>
-        <Text style={[styles.campaignName, fonts.display]}>{name}</Text>
-        <Text style={[styles.campaignDates, fonts.bodyBold]}>{datesLabel}</Text>
-        <Text style={[styles.campaignCta, fonts.bodyExtraBold]}>See the night ›</Text>
-      </LinearGradient>
+      </ImageBackground>
     </TouchableOpacity>
   );
 }
@@ -534,38 +582,60 @@ const styles = StyleSheet.create({
     backgroundColor: premium.surface,
     borderWidth: 1,
     borderColor: premium.line,
-    borderRadius: 18,
+    borderRadius: 16,
     overflow: "hidden",
     marginBottom: 13,
   },
-  evPhoto: { width: "100%", height: 150 },
+  evPhoto: { width: "100%", height: 158 },
+  // Mockup .tag .tag-gold — a small rounded-rect chip in the caption,
+  // never a pill floating on the photo.
   evBadge: {
-    position: "absolute",
-    top: 10,
-    left: 10,
-    backgroundColor: "rgba(7,8,15,0.72)",
-    borderWidth: 1,
-    borderColor: premium.goldBorder,
-    borderRadius: 999,
-    paddingHorizontal: 9,
+    alignSelf: "flex-start",
+    backgroundColor: "rgba(232,196,118,0.16)",
+    borderRadius: 6,
+    paddingHorizontal: 8,
     paddingVertical: 4,
+    marginBottom: 8,
   },
-  evBadgeText: { color: premium.gold, fontSize: 11, fontWeight: "900" },
-  evAccessory: { position: "absolute", top: 6, right: 6 },
-  evCaption: { paddingHorizontal: 14, paddingTop: 11, paddingBottom: 13 },
-  evWhen: { color: premium.ink2, fontSize: 12.5, fontWeight: "700" },
-  evTitle: { color: premium.ink, fontSize: 17, fontWeight: "800", lineHeight: 22, marginTop: 5 },
-  evVenue: { color: premium.muted, fontSize: 13, fontWeight: "600", marginTop: 3 },
-  evWeb: { color: "#8ec5ff", fontSize: 11.5, fontWeight: "900", marginTop: 5 },
-  evTags: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 10 },
+  evBadgeText: {
+    color: premium.gold,
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
+  evAccessory: { position: "absolute", top: 8, right: 8 },
+  evCaption: { paddingHorizontal: 15, paddingTop: 13, paddingBottom: 14 },
+  evTitle: { color: premium.ink, fontSize: 16.5, fontWeight: "700", lineHeight: 20 },
+  evMeta: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    columnGap: 14,
+    rowGap: 4,
+    marginTop: 8,
+    alignItems: "center",
+  },
+  evMetaText: { color: premium.ink2, fontSize: 12.5, fontWeight: "600" },
+  evMetaBold: { color: premium.ink, fontWeight: "700" },
+  evWeb: { color: premium.link, fontSize: 11.5, fontWeight: "800", marginTop: 7 },
+  evTags: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginTop: 10 },
   evTag: {
-    backgroundColor: premium.surface3,
-    borderRadius: 16,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    backgroundColor: premium.surface2,
+    borderWidth: 1,
+    borderColor: premium.line2,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
   },
-  evTagText: { color: premium.ink, fontSize: 11.5, fontWeight: "700" },
-  evPrice: { color: premium.ink, fontSize: 14, fontWeight: "800", marginTop: 10 },
+  evTagText: { color: premium.ink2, fontSize: 12, fontWeight: "700" },
+  evFoot: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 12,
+  },
+  evPrice: { color: premium.ink, fontSize: 16, fontWeight: "800" },
+  evMore: { color: premium.link, fontSize: 11.5, fontWeight: "800" },
 
   plCard: {
     width: 218,
@@ -579,13 +649,19 @@ const styles = StyleSheet.create({
   plCaption: { paddingHorizontal: 13, paddingTop: 10, paddingBottom: 13 },
   plTag: {
     alignSelf: "flex-start",
-    borderRadius: 999,
+    borderRadius: 6,
     paddingHorizontal: 8,
-    paddingVertical: 3,
-    marginBottom: 7,
+    paddingVertical: 4,
+    marginBottom: 8,
   },
   plTagGold: { backgroundColor: "rgba(232,196,118,0.16)" },
-  plTagText: { color: "#fff", fontSize: 10.5, fontWeight: "900" },
+  plTagText: {
+    color: "#fff",
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
   plTitle: { color: premium.ink, fontSize: 14.5, fontWeight: "700", lineHeight: 18 },
   plMeta: { color: premium.muted, fontSize: 12, fontWeight: "600", marginTop: 4 },
 
@@ -594,7 +670,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: premium.line,
     borderRadius: 16,
-    padding: 13,
+    paddingHorizontal: 13,
+    paddingVertical: 15,
     width: 158,
   },
   vIcon: {
@@ -626,31 +703,50 @@ const styles = StyleSheet.create({
   },
   infoRowLight: { backgroundColor: "#ffffff", borderColor: "#d5d0df" },
   infoIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
+    width: 36,
+    height: 36,
+    borderRadius: 11,
     backgroundColor: premium.surface3,
     alignItems: "center",
     justifyContent: "center",
   },
   infoIconLight: { backgroundColor: "#ece8f6" },
   infoGlyph: { color: premium.gold, fontSize: 15, fontWeight: "900" },
-  infoTitle: { color: premium.ink, fontSize: 14, fontWeight: "800", lineHeight: 18 },
+  // Mockup .perk: the title is Manrope 800 13.5 (not display type);
+  // the body is 12px muted at 1.5 line height.
+  infoTitle: { color: premium.ink, fontSize: 13.5, fontWeight: "800", lineHeight: 18 },
   infoTitleLight: { color: "#221c2a" },
-  infoBody: { color: premium.ink2, fontSize: 12.5, fontWeight: "600", lineHeight: 17, marginTop: 3 },
+  infoBody: { color: premium.muted, fontSize: 12, fontWeight: "600", lineHeight: 18, marginTop: 2 },
   infoBodyLight: { color: "#514a5a" },
 
-  campaignWrap: { borderRadius: 20, overflow: "hidden", marginBottom: 14 },
-  campaignCard: { padding: 18 },
+  campaignWrap: {
+    borderRadius: 18,
+    overflow: "hidden",
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: premium.line2,
+  },
+  campaignHero: { minHeight: 198, justifyContent: "flex-end" },
+  campaignHeroImg: { borderRadius: 18 },
+  campaignContent: { padding: 16 },
+  // Mockup .hero-badge: dark glass chip, gold rim, gold caps text.
   campaignTag: {
     alignSelf: "flex-start",
-    backgroundColor: "rgba(232,196,118,0.16)",
+    backgroundColor: "rgba(12,8,26,0.55)",
+    borderWidth: 1,
+    borderColor: "rgba(232,196,118,0.45)",
     borderRadius: 999,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
+    paddingHorizontal: 11,
+    paddingVertical: 6,
   },
-  campaignTagText: { color: premium.gold, fontSize: 11, fontWeight: "900" },
-  campaignName: { color: "#fff", fontSize: 24, fontWeight: "800", lineHeight: 29, marginTop: 10 },
-  campaignDates: { color: "rgba(255,255,255,0.85)", fontSize: 13, fontWeight: "700", marginTop: 5 },
-  campaignCta: { color: premium.gold, fontSize: 13.5, fontWeight: "900", marginTop: 12 },
+  campaignTagText: {
+    color: premium.gold,
+    fontSize: 10.5,
+    fontWeight: "800",
+    letterSpacing: 1.2,
+    textTransform: "uppercase",
+  },
+  campaignName: { color: "#fff", fontSize: 25, fontWeight: "800", lineHeight: 30, marginTop: 10 },
+  campaignDates: { color: "rgba(255,255,255,0.88)", fontSize: 12.5, fontWeight: "700", marginTop: 5 },
+  campaignCta: { color: premium.gold, fontSize: 13.5, fontWeight: "800", marginTop: 11 },
 });

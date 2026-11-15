@@ -57,7 +57,7 @@ export default function NotificationSettings() {
   if (!loaded) {
     return (
       <View style={styles.card}>
-        <ActivityIndicator color="#6242bb" />
+        <ActivityIndicator color="#e8c476" />
       </View>
     );
   }
@@ -83,7 +83,7 @@ export default function NotificationSettings() {
           <Ionicons
             name={c.locked ? "lock-closed-outline" : "notifications-outline"}
             size={18}
-            color="#6242bb"
+            color="#e8c476"
           />
           <View style={{ flex: 1 }}>
             <Text style={styles.rowTitle}>{c.label}</Text>
@@ -95,7 +95,8 @@ export default function NotificationSettings() {
             <Switch
               value={prefs[c.key] !== false}
               onValueChange={(v) => void onToggle(c.key, v)}
-              trackColor={{ false: "#cfc9dd", true: "#6242bb" }}
+              trackColor={{ false: "#271D47", true: "#5B34E0" }}
+              thumbColor="#ffffff"
             />
           )}
         </View>
@@ -105,12 +106,13 @@ export default function NotificationSettings() {
 }
 
 const styles = StyleSheet.create({
+  // Premium dark surface (matches the Rewards panel it mounts in).
   card: {
-    backgroundColor: "#ffffff",
+    backgroundColor: "#171129",
     borderRadius: 16,
-    padding: 12,
+    padding: 14,
     borderWidth: 1,
-    borderColor: "#d5d0df",
+    borderColor: "rgba(255,255,255,0.07)",
   },
   enableRow: {
     flexDirection: "row",
@@ -119,15 +121,15 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
     marginBottom: 4,
     borderBottomWidth: 1,
-    borderBottomColor: "#e7e3f0",
+    borderBottomColor: "rgba(255,255,255,0.07)",
   },
-  enableTitle: { fontSize: 14, fontWeight: "900", color: "#221c2a" },
-  enableSub: { marginTop: 3, fontSize: 12, color: "#514a5a", fontWeight: "700", lineHeight: 16 },
+  enableTitle: { fontSize: 13.5, fontWeight: "800", color: "#F5F3FB" },
+  enableSub: { marginTop: 3, fontSize: 12, color: "#968FB2", fontWeight: "600", lineHeight: 16 },
   enableBtn: {
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 14,
-    backgroundColor: "#3654b5",
+    backgroundColor: "#5B34E0",
   },
   enableBtnText: { color: "#fff", fontWeight: "900", fontSize: 12 },
   row: {
@@ -136,10 +138,10 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingVertical: 10,
     borderBottomWidth: 1,
-    borderBottomColor: "#e7e3f0",
+    borderBottomColor: "rgba(255,255,255,0.07)",
   },
   rowLast: { borderBottomWidth: 0 },
-  rowTitle: { fontSize: 14, fontWeight: "900", color: "#221c2a" },
-  rowSub: { marginTop: 2, fontSize: 12, color: "#514a5a", fontWeight: "600", lineHeight: 16 },
-  alwaysOn: { fontSize: 11, fontWeight: "900", color: "#6242bb" },
+  rowTitle: { fontSize: 13.5, fontWeight: "800", color: "#F5F3FB" },
+  rowSub: { marginTop: 2, fontSize: 12, color: "#968FB2", fontWeight: "600", lineHeight: 16 },
+  alwaysOn: { fontSize: 11, fontWeight: "800", color: "#A678F0" },
 });

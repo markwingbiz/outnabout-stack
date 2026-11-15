@@ -92,17 +92,23 @@ export const premium = {
   // Page base (brochure midnight plum-navy)
   bg: "#0A0616",
 
-  // Surfaces (deep plum-navy family)
+  // Screen base (mockup .screen background: --bg2). Tab screens paint
+  // the screenGradient below over this.
+  bg2: "#0F0A1F",
+
+  // Surfaces (mockup --surface / --surface2 / --surface3, verbatim)
   surface: "#171129",
   surface2: "#1E1733",
   surface3: "#271D47",
-  line: "rgba(232,196,118,0.14)",
-  line2: "rgba(232,196,118,0.26)",
+  // Hairlines are the mockup's NEUTRAL white lines (--line .07 /
+  // --line2 .12) — gold is an accent, never the border system.
+  line: "rgba(255,255,255,0.07)",
+  line2: "rgba(255,255,255,0.12)",
 
-  // Text on dark
-  ink: "#f4f5fa",
-  ink2: "#c9c2da",
-  muted: "#968cab",
+  // Text on dark (mockup --ink / --ink2 / --muted, verbatim)
+  ink: "#F5F3FB",
+  ink2: "#C8C3DC",
+  muted: "#968FB2",
 
   // Accents
   gold: "#e8c476",
@@ -111,25 +117,35 @@ export const premium = {
   green: "#3ddc97",
   blue: "#2F6BFF",
   violet: "#5B34E0",
+  link: "#9DB9FF",
 
-  // Brand gradient (brochure pin family: royal blue -> violet -> deep violet)
+  // Brand gradient (mockup --grad: 120deg royal blue -> violet -> deep violet)
   gradient: ["#2F6BFF", "#5B34E0", "#7A2BD0"] as const,
 
-  // Rewards balance card gradient (deep plum -> violet)
-  rewardsGradient: ["#171129", "#2A1B52"] as const,
+  // Screen background: rich plum with depth — a violet-lit top that
+  // settles into the mockup's bg2 and finally the deep bg at the
+  // bottom edge. (The mockup screen itself is flat bg2; the glow is
+  // what keeps the app's full-bleed screens from reading near-black.)
+  screenGradient: ["#21153F", "#0F0A1F", "#0A0616"] as const,
+  screenGradientLocations: [0, 0.42, 1] as const,
+
+  // Rewards balance card gradient (mockup .rw-card, 135deg)
+  rewardsGradient: ["#130D28", "#2A1650"] as const,
 
   radius: 18,
 };
 
 // Venue icon-tile palette (mockup venue tiles): one solid color per
 // placeholder category, white glyph on top. Deterministic per venue so
-// a venue keeps its color across screens. Deepened 2026-11-13 to sit
-// in the plum-navy family (no pastel ends).
+// a venue keeps its color across screens. Colors are the mockup's own
+// tile colors (v11 Venues view): violet #7c3aed, gold #b98a1d, teal
+// #0ea5a4, coral #e05260, blue #2e7cf6, pink #db2777 — saturated, not
+// deepened; the 2026-11-13 "deepened" variants read muddy on screen.
 export const venueTilePalette: Record<string, string> = {
-  music: "#5B34E0",
-  nightlife: "#8E2A6B",
-  food: "#B03A44",
-  family: "#0B7C7A",
+  music: "#7C3AED",
+  nightlife: "#DB2777",
+  food: "#E05260",
+  family: "#0EA5A4",
   arts: "#2F6BFF",
-  default: "#8A6D1F",
+  default: "#B98A1D",
 };

@@ -45,7 +45,9 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
+import Svg, { Polyline, Circle } from "react-native-svg";
 import MultiLine from "../components/MultiLine";
+import { useLiveworkFonts } from "../components/fonts";
 import {
   fetchDashboard,
   formatMoney,
@@ -76,6 +78,7 @@ const PLUM = {
   surface3: "#271D47",
   line: "rgba(232,196,118,0.14)",
   lineSoft: "rgba(255,255,255,0.07)",
+  line2: "rgba(255,255,255,0.12)",
   ink: "#F5F3FB",
   ink2: "#C8C3DC",
   muted: "#968FB2",
@@ -86,6 +89,10 @@ const PLUM = {
   green: "#3DDC97",
   link: "#9DB9FF",
   gradient: ["#2F6BFF", "#5B34E0", "#7A2BD0"] as const,
+  // Venue avatar / event thumb gradient (mockup .lw-venue-ico, 135deg)
+  duoGradient: ["#6D28D9", "#2F6BFF"] as const,
+  // Screen background: plum depth over the mockup's #0d0a1c base.
+  screenGradient: ["#1E1338", "#0D0A1C", "#0A0616"] as const,
   chartLine: "#A678F0",
 };
 
@@ -132,10 +139,11 @@ function Section({
   onAction?: () => void;
   children: React.ReactNode;
 }) {
+  const fonts = useLiveworkFonts();
   return (
     <View style={styles.card}>
       <View style={styles.cardHeader}>
-        <Text style={styles.cardTitle}>{title}</Text>
+        <Text style={[styles.cardTitle, fonts.display]}>{title}</Text>
         {!!action && (
           <Pressable onPress={onAction}>
             <Text style={styles.cardAction}>{action}</Text>
@@ -149,6 +157,7 @@ function Section({
 
 export default function DashboardScreen() {
   const router = useRouter();
+  const fonts = useLiveworkFonts();
   const { width } = useWindowDimensions();
   const { session, loading: authLoading } = useAuth();
   const [range, setRange] = useState<RangeKey>("7d");
@@ -381,7 +390,8 @@ export default function DashboardScreen() {
   return (
     <SafeAreaView style={styles.root}>
       <LinearGradient
-        colors={[PLUM.bg, "#1E1733"]}
+        colors={[...PLUM.screenGradient]}
+        locations={[0, 0.5, 1]}
         style={StyleSheet.absoluteFillObject}
       />
       <ScrollView
@@ -394,7 +404,7 @@ export default function DashboardScreen() {
           <View style={{ flex: 1 }}>
             <View style={styles.wordmarkRow}>
               <View style={styles.liveDot} />
-              <Text style={styles.wordmark}>livework</Text>
+              <Text style={[styles.wordmark, fonts.display]}>livework</Text>
               <View style={styles.forVenuesPill}>
                 <Text style={styles.forVenuesText}>FOR VENUES</Text>
               </View>
@@ -424,7 +434,7 @@ export default function DashboardScreen() {
               end={{ x: 1, y: 0 }}
               style={styles.createBtn}
             >
-              <Text style={styles.createBtnText}>+ Create Event</Text>
+              <Text style={[styles.createBtnText, fonts.display]}>+ Create Event</Text>
             </LinearGradient>
           </Pressable>
           <Text style={styles.createNote}>
@@ -526,7 +536,7 @@ export default function DashboardScreen() {
             {/* Setup — vendor has no membership or no venue yet */}
             {(data?.needsSetup || (data && !data.hasVenue)) && (
               <View style={[styles.card, styles.setupCard]}>
-                <Text style={styles.setupTitle}>Set up your venue</Text>
+                <Text style={[styles.setupTitle, fonts.display]}>Set up your venue</Text>
                 <Text style={styles.setupText}>
                   Your account has no venue yet. Set one up to see your events and revenue.
                 </Text>
@@ -541,16 +551,18 @@ export default function DashboardScreen() {
             {!!data?.hasVenue && (
               <Pressable style={styles.venueCard} onPress={() => router.push("/venues")}>
                 <LinearGradient
-                  colors={[...PLUM.gradient]}
+                  colors={[...PLUM.duoGradient]}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 1 }}
                   style={styles.venueAvatar}
                 >
-                  <Text style={styles.venueInitials}>{initialsOf(venueDisplayName)}</Text>
+                  <Text style={[styles.venueInitials, fonts.display]}>
+                    {initialsOf(venueDisplayName)}
+                  </Text>
                 </LinearGradient>
                 <View style={{ flex: 1, minWidth: 0 }}>
                   <View style={styles.venueNameRow}>
-                    <Text style={styles.venueName} numberOfLines={1}>
+                    <Text style={[styles.venueName, fonts.bodyExtraBold]} numberOfLines={1}>
                       {venueDisplayName}
                     </Text>
                     {venueVerified && (
@@ -574,14 +586,14 @@ export default function DashboardScreen() {
             <View style={styles.statRow}>
               <View style={[styles.statTile, { flex: 1.3 }]}>
                 <Text style={styles.statLabel}>Verified Revenue</Text>
-                <Text style={[styles.statValue, { color: PLUM.gold }]}>
+                <Text style={[styles.statValue, fonts.display, { color: PLUM.gold }]}>
                   {formatMoney(data?.verifiedRevenue ?? 0)}
                 </Text>
                 <Text style={styles.statSmall}>Verified only</Text>
               </View>
               <View style={[styles.statTile, { flex: 0.85 }]}>
                 <Text style={styles.statLabel}>Events Live</Text>
-                <Text style={styles.statValue}>{eventsLive}</Text>
+                <Text style={[styles.statValue, fonts.display]}>{eventsLive}</Text>
                 <Text style={styles.statSmall}>On Bownd</Text>
               </View>
               <Pressable
@@ -589,7 +601,7 @@ export default function DashboardScreen() {
                 onPress={() => router.push("/redemptions")}
               >
                 <Text style={styles.statLabel}>Redemptions</Text>
-                <Text style={styles.statValue}>{redemptionCount ?? "—"}</Text>
+                <Text style={[styles.statValue, fonts.display]}>{redemptionCount ?? "—"}</Text>
                 <Text style={styles.statSmall}>All time</Text>
               </Pressable>
             </View>
@@ -610,11 +622,21 @@ export default function DashboardScreen() {
                 end={{ x: 1, y: 1 }}
                 style={styles.insBanner}
               >
-                <View style={styles.insIcon}>
-                  <Ionicons name="trending-up" size={20} color={PLUM.gold} />
-                </View>
+                {/* The mockup's banner carries a gold sparkline, not
+                    an icon box. */}
+                <Svg width={52} height={30} viewBox="0 0 52 30" style={{ flexShrink: 0 }}>
+                  <Polyline
+                    points="2,24 12,20 22,21 32,14 42,10 50,4"
+                    fill="none"
+                    stroke={PLUM.gold}
+                    strokeWidth={2.4}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <Circle cx={50} cy={4} r={3} fill={PLUM.gold} />
+                </Svg>
                 <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={styles.insTitle}>
+                  <Text style={[styles.insTitle, fonts.displayBold]}>
                     Analytics &amp; Insights — your results, charted
                   </Text>
                   <Text style={styles.insSub}>
@@ -735,7 +757,7 @@ export default function DashboardScreen() {
                         onPress={() => setExpandedId(expanded ? null : e.id)}
                       >
                         <LinearGradient
-                          colors={[...PLUM.gradient]}
+                          colors={[...PLUM.duoGradient]}
                           start={{ x: 0, y: 0 }}
                           end={{ x: 1, y: 1 }}
                           style={styles.evThumb}
@@ -743,7 +765,7 @@ export default function DashboardScreen() {
                           <Ionicons name="musical-notes" size={20} color="#fff" />
                         </LinearGradient>
                         <View style={{ flex: 1, minWidth: 0 }}>
-                          <Text style={styles.evTitle}>{e.title}</Text>
+                          <Text style={[styles.evTitle, fonts.displayBold]}>{e.title}</Text>
                           <Text style={styles.evMeta}>
                             {e.dateLabel}
                             {e.eventType ? ` · ${e.eventType}` : ""}
@@ -889,7 +911,7 @@ export default function DashboardScreen() {
                 this panel is the prominent entry point. */}
             <View style={styles.addEventCard}>
               <View style={styles.addEventHeader}>
-                <Text style={styles.cardTitle}>Add New Event</Text>
+                <Text style={[styles.cardTitle, fonts.display]}>Add New Event</Text>
                 <Pressable onPress={() => router.push("/add-event")}>
                   <Ionicons name="add-circle" size={26} color={PLUM.gold} />
                 </Pressable>
@@ -905,7 +927,7 @@ export default function DashboardScreen() {
                   end={{ x: 1, y: 0 }}
                   style={styles.addCreateBtn}
                 >
-                  <Text style={styles.createBtnText}>Create Event</Text>
+                  <Text style={[styles.createBtnText, fonts.display]}>Create Event</Text>
                 </LinearGradient>
               </Pressable>
               <Text style={styles.addEventNote}>Opens the full event form.</Text>
@@ -914,7 +936,7 @@ export default function DashboardScreen() {
             {/* Get more exposure — featured placement has no billing
                 yet, so Boost is disabled with the reason, never sold. */}
             <View style={[styles.card, styles.boostCard]}>
-              <Text style={styles.boostTitle}>Get more exposure</Text>
+              <Text style={[styles.boostTitle, fonts.display]}>Get more exposure</Text>
               <Text style={styles.boostText}>Boost your events and reach more fans.</Text>
               <Pressable
                 style={[styles.boostBtn, styles.boostBtnDisabled]}
@@ -992,20 +1014,20 @@ const styles = StyleSheet.create({
   lwTop: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
   wordmarkRow: { flexDirection: "row", alignItems: "center", gap: 7 },
   liveDot: { width: 9, height: 9, borderRadius: 999, backgroundColor: PLUM.green },
-  wordmark: { color: PLUM.ink, fontSize: 21, fontWeight: "800", letterSpacing: -0.5 },
+  wordmark: { color: PLUM.ink, fontSize: 26, fontWeight: "800", letterSpacing: -0.8 },
   forVenuesPill: {
     backgroundColor: "rgba(47,107,255,0.16)",
     borderWidth: 1,
     borderColor: "rgba(47,107,255,0.35)",
     borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
   },
-  forVenuesText: { color: PLUM.link, fontSize: 9, fontWeight: "800", letterSpacing: 1 },
-  lwSub: { color: PLUM.muted, fontSize: 12.5, marginTop: 4 },
+  forVenuesText: { color: PLUM.link, fontSize: 10, fontWeight: "800", letterSpacing: 1.4 },
+  lwSub: { color: PLUM.muted, fontSize: 12.5, fontWeight: "700", marginTop: 6 },
   bellBtn: {
-    width: 36,
-    height: 36,
+    width: 38,
+    height: 38,
     borderRadius: 999,
     backgroundColor: PLUM.surface2,
     borderWidth: 1,
@@ -1026,25 +1048,24 @@ const styles = StyleSheet.create({
     padding: 13,
   },
   venueAvatar: {
-    width: 46,
-    height: 46,
+    width: 44,
+    height: 44,
     borderRadius: 13,
     alignItems: "center",
     justifyContent: "center",
   },
-  venueInitials: { color: "#fff", fontWeight: "800", fontSize: 16 },
+  venueInitials: { color: "#fff", fontWeight: "800", fontSize: 14 },
   venueNameRow: { flexDirection: "row", alignItems: "center", gap: 7 },
-  venueName: { color: PLUM.ink, fontWeight: "800", fontSize: 16, flexShrink: 1 },
+  venueName: { color: PLUM.ink, fontWeight: "800", fontSize: 14.5, flexShrink: 1 },
+  // Mockup .lw-verified: a SOLID green pill with dark text.
   verifiedBadge: {
-    backgroundColor: "rgba(61,220,151,0.13)",
-    borderWidth: 1,
-    borderColor: "rgba(61,220,151,0.35)",
+    backgroundColor: PLUM.green,
     borderRadius: 999,
     paddingHorizontal: 7,
-    paddingVertical: 2,
+    paddingVertical: 3,
   },
-  verifiedText: { color: PLUM.green, fontSize: 9.5, fontWeight: "800" },
-  venueSub: { color: PLUM.muted, fontSize: 12, marginTop: 3 },
+  verifiedText: { color: "#07130D", fontSize: 10, fontWeight: "800" },
+  venueSub: { color: PLUM.muted, fontSize: 11.5, fontWeight: "600", marginTop: 3 },
 
   // Stat tiles
   statRow: { flexDirection: "row", gap: 9 },
@@ -1057,13 +1078,13 @@ const styles = StyleSheet.create({
   },
   statLabel: {
     color: PLUM.muted,
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: "800",
-    letterSpacing: 0.8,
+    letterSpacing: 0.7,
     textTransform: "uppercase",
   },
-  statValue: { color: PLUM.ink, fontSize: 21, fontWeight: "800", marginTop: 5 },
-  statSmall: { color: PLUM.muted, fontSize: 10, marginTop: 3 },
+  statValue: { color: PLUM.ink, fontSize: 19, fontWeight: "800", marginTop: 6 },
+  statSmall: { color: PLUM.muted, fontSize: 10.5, fontWeight: "700", marginTop: 4 },
   revenueNote: { color: PLUM.muted, fontSize: 11, marginTop: -6 },
   notTrackedNote: { color: PLUM.faint, fontSize: 11, marginTop: -6 },
 
@@ -1073,24 +1094,25 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 12,
     borderWidth: 1,
-    borderColor: PLUM.goldBorder,
+    borderColor: "rgba(232,196,118,0.42)",
     borderRadius: 16,
-    padding: 14,
-  },
-  insIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: PLUM.goldSoft,
-    alignItems: "center",
-    justifyContent: "center",
+    padding: 13,
   },
   insTitle: { color: PLUM.ink, fontWeight: "800", fontSize: 14.5 },
-  insSub: { color: PLUM.ink2, fontSize: 11.5, lineHeight: 16, marginTop: 2 },
+  insSub: { color: PLUM.ink2, fontSize: 11.5, lineHeight: 16, marginTop: 3 },
 
-  // Create button
-  createBtn: { borderRadius: 14, paddingVertical: 14, alignItems: "center" },
-  createBtnText: { color: "#fff", fontWeight: "800", fontSize: 15.5 },
+  // Create button — mockup .lw-create: radius 15, violet glow shadow.
+  createBtn: {
+    borderRadius: 15,
+    paddingVertical: 15,
+    alignItems: "center",
+    shadowColor: "#5B34E0",
+    shadowOpacity: 0.25,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 6,
+  },
+  createBtnText: { color: "#fff", fontWeight: "800", fontSize: 16 },
   createNote: { color: PLUM.muted, fontSize: 11.5, textAlign: "center", marginTop: 8 },
 
   // Utility rows + picker
@@ -1181,14 +1203,16 @@ const styles = StyleSheet.create({
   rangeChipRow: { flexDirection: "row", gap: 6, flexWrap: "wrap", marginBottom: 10 },
   rangeChip: {
     borderWidth: 1,
-    borderColor: PLUM.lineSoft,
+    borderColor: PLUM.line2,
+    backgroundColor: PLUM.surface2,
     borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingHorizontal: 11,
+    paddingVertical: 6,
   },
-  rangeChipActive: { borderColor: PLUM.goldBorder, backgroundColor: PLUM.goldSoft },
+  // Mockup .lw-term.on: violet ring on surface3.
+  rangeChipActive: { borderColor: "#6D28D9", backgroundColor: PLUM.surface3 },
   rangeChipText: { color: PLUM.muted, fontSize: 11, fontWeight: "700" },
-  rangeChipTextActive: { color: PLUM.gold },
+  rangeChipTextActive: { color: PLUM.ink },
 
   legendRow: { flexDirection: "row", gap: 16, marginBottom: 10 },
   legend: { flexDirection: "row", alignItems: "center", gap: 6 },
@@ -1198,12 +1222,12 @@ const styles = StyleSheet.create({
 
   // Your Events cards
   evCard: {
-    backgroundColor: PLUM.surface2,
+    backgroundColor: PLUM.surface,
     borderWidth: 1,
     borderColor: PLUM.lineSoft,
-    borderRadius: 14,
+    borderRadius: 16,
     padding: 11,
-    marginBottom: 9,
+    marginBottom: 10,
   },
   evMain: { flexDirection: "row", gap: 11, alignItems: "flex-start" },
   evThumb: {
@@ -1213,13 +1237,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  evTitle: { color: PLUM.ink, fontWeight: "800", fontSize: 14.5 },
+  evTitle: { color: PLUM.ink, fontWeight: "700", fontSize: 14 },
   evMeta: { color: PLUM.muted, fontSize: 11.5, marginTop: 2 },
   evPrice: { color: PLUM.ink2, fontSize: 11.5, fontWeight: "700" },
   chipRow: { flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap", marginTop: 7 },
   chip: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1 },
   chipPub: { backgroundColor: "rgba(61,220,151,0.10)", borderColor: "rgba(61,220,151,0.30)" },
-  chipDraft: { backgroundColor: PLUM.surface3, borderColor: "transparent" },
+  chipDraft: { backgroundColor: PLUM.surface3, borderColor: PLUM.line2 },
   chipSpot: { backgroundColor: PLUM.goldSoft, borderColor: PLUM.goldBorder },
   chipText: { fontSize: 10, fontWeight: "800" },
   detailText: { color: PLUM.ink2, fontSize: 12.5, lineHeight: 18, marginTop: 6 },
@@ -1233,7 +1257,7 @@ const styles = StyleSheet.create({
     marginTop: 10,
     paddingTop: 10,
   },
-  pubLabel: { color: PLUM.ink2, fontSize: 12.5, fontWeight: "700", flex: 1 },
+  pubLabel: { color: PLUM.ink2, fontSize: 11.5, fontWeight: "800", flex: 1 },
   pubState: { color: PLUM.muted, fontSize: 11.5, fontWeight: "700" },
   toggle: { width: 38, height: 22, borderRadius: 999, justifyContent: "center" },
   toggleOn: { backgroundColor: PLUM.green },

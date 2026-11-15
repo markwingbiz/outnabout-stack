@@ -41,6 +41,7 @@ import { track } from "../../lib/analytics";
 import { getShowcaseEvents, getShowcaseVenues } from "../../data/showcase";
 import { categoryForText } from "../../lib/placeholders";
 import { SceneEventCard, VenueTile, usePremiumFonts, venueMetaFor } from "../ui/premium";
+import { premium } from "../ui/theme";
 import {
   BottomNav,
   Pill,
@@ -178,15 +179,22 @@ function matchesPersona(e: EventItem, persona: PersonaProfile) {
 
 // Favorite heart. Rendered as a SIBLING of the card Pressable (not
 // nested inside it) so tapping the heart never also opens the detail.
-// Premium pass: it floats on the card photo's top-right corner via
-// SceneEventCard's accessory slot.
+// Visual pass: the mockup's .heart — a 32px circle in surface2 with a
+// hairline border; on-state is the mockup's rose (#ff5d7e) on its
+// tint. It floats on the card photo's top-right corner via
+// SceneEventCard's accessory slot (the mockup sets it in the caption
+// row; the float keeps the sibling-pressable guarantee).
 function FavButton({ isFav, onToggle }: { isFav: boolean; onToggle: () => void }) {
   return (
-    <TouchableOpacity onPress={onToggle} hitSlop={8} style={styles.favBtn}>
+    <TouchableOpacity
+      onPress={onToggle}
+      hitSlop={8}
+      style={[styles.favBtn, isFav && styles.favBtnOn]}
+    >
       <Ionicons
         name={isFav ? "heart" : "heart-outline"}
-        size={19}
-        color={isFav ? "#ff5c8a" : "#fff"}
+        size={16}
+        color={isFav ? "#ff5d7e" : premium.muted}
       />
     </TouchableOpacity>
   );
@@ -404,7 +412,8 @@ export default function EventsScreen() {
   return (
     <View style={refStyles.root}>
       <LinearGradient
-        colors={["#0A0616", "#1E1733"]}
+        colors={[...premium.screenGradient]}
+        locations={[...premium.screenGradientLocations]}
         style={StyleSheet.absoluteFillObject}
       />
       <ScrollView
@@ -601,9 +610,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.08)",
+    backgroundColor: premium.surface2,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
+    borderColor: premium.line2,
     marginBottom: 12,
   },
   venueFilterText: {
@@ -636,7 +645,7 @@ const styles = StyleSheet.create({
   },
   showcaseChip: {
     alignSelf: "flex-start",
-    paddingHorizontal: 12,
+    paddingHorizontal: 11,
     paddingVertical: 6,
     borderRadius: 999,
     backgroundColor: "rgba(232,196,118,0.13)",
@@ -646,13 +655,15 @@ const styles = StyleSheet.create({
   },
   showcaseChipText: {
     color: "#e8c476",
-    fontSize: 12,
-    fontWeight: "900",
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.5,
   },
   emptyText: {
-    color: "rgba(255,255,255,0.72)",
-    fontSize: 14,
-    fontWeight: "800",
+    color: premium.muted,
+    fontSize: 13.5,
+    fontWeight: "600",
+    lineHeight: 20,
     paddingTop: 12,
   },
   tailoredCard: {
@@ -682,9 +693,18 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   favBtn: {
-    backgroundColor: "rgba(7,8,15,0.55)",
+    width: 32,
+    height: 32,
     borderRadius: 999,
-    padding: 7,
+    backgroundColor: premium.surface2,
+    borderWidth: 1,
+    borderColor: premium.line2,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  favBtnOn: {
+    backgroundColor: "rgba(255,93,126,0.12)",
+    borderColor: "rgba(255,93,126,0.5)",
   },
   bigRow: {
     borderRadius: 18,

@@ -340,17 +340,24 @@ export default function PersonalScreen() {
 
   return (
     <View style={refStyles.root}>
+      <LinearGradient
+        colors={[...premium.screenGradient]}
+        locations={[...premium.screenGradientLocations]}
+        style={StyleSheet.absoluteFillObject}
+      />
       <SafeAreaView style={{ flex: 1 }} edges={["top"]}>
         <ScrollView
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={{ paddingBottom: 70 + insets.bottom + 16 }}
         >
-          <StatusBar barStyle="light-content" backgroundColor="#1E1733" />
-          {/* Hero — App.tsx elements + sign in/out under next-tier */}
+          <StatusBar barStyle="light-content" backgroundColor="#0A0616" />
+          {/* Hero — premium pass: the old sunset band is now the deep
+              plum family (no magenta/orange stops), over the shared
+              screen gradient; the panel below is dark throughout. */}
           <LinearGradient
-            colors={["#1E1733", "#43257F", "#7A2BD0", "#0A0616"]}
-            locations={[0, 0.32, 0.72, 1]}
+            colors={["#2A1650", "#1B1035", "#0F0A1F"]}
+            locations={[0, 0.52, 1]}
             style={refStyles.personalHero}
           >
             <View style={refStyles.personalHead}>
@@ -362,7 +369,7 @@ export default function PersonalScreen() {
             <Text style={refStyles.personalSub}>Points · Favorites · Adventures</Text>
             <View style={refStyles.avatarRing}>
               <View style={refStyles.avatar}>
-                <Ionicons name="person" size={68} color="#eeeaf3" />
+                <Ionicons name="person" size={40} color="#eeeaf3" />
               </View>
             </View>
             {hasPointsAccount ? (
@@ -372,7 +379,7 @@ export default function PersonalScreen() {
               </>
             ) : (
               <>
-                <Text style={styles.heroBenefit}>Points are a member benefit</Text>
+                <Text style={[styles.heroBenefit, fonts.display]}>Points are a member benefit</Text>
                 <Text style={refStyles.nextTier}>Free accounts buy · Members earn</Text>
               </>
             )}
@@ -414,7 +421,7 @@ export default function PersonalScreen() {
               <>
                 <TouchableOpacity onPress={() => setPanel("QR")} style={refStyles.qrHeader}>
                   <Text style={refStyles.darkHeading}>QR Codes</Text>
-                  <Ionicons name="chevron-forward" color="#615e69" size={22} />
+                  <Ionicons name="chevron-forward" color={premium.muted} size={22} />
                 </TouchableOpacity>
                 <View style={refStyles.tokenCard}>
                   <View style={refStyles.tokenRow}>
@@ -447,7 +454,7 @@ export default function PersonalScreen() {
                       value={redeemInput}
                       onChangeText={setRedeemInput}
                       placeholder="Paste or type code"
-                      placeholderTextColor="#88848f"
+                      placeholderTextColor="#968FB2"
                       style={refStyles.redeemInput}
                       autoCapitalize="characters"
                     />
@@ -487,7 +494,7 @@ export default function PersonalScreen() {
                         <Text style={styles.showQrBtnText}>Show QR</Text>
                       </TouchableOpacity>
                     </View>
-                    <Text style={styles.balanceValue}>
+                    <Text style={[styles.balanceValue, fonts.display]}>
                       {points.toLocaleString()} <Text style={styles.balanceUnit}>pts</Text>
                     </Text>
                     <Text style={styles.balanceSub}>
@@ -496,10 +503,17 @@ export default function PersonalScreen() {
                     <View style={styles.balanceTrack}>
                       <View
                         style={[
-                          styles.balanceFill,
+                          styles.balanceFillClip,
                           { width: `${Math.max(3, progress * 100)}%` },
                         ]}
-                      />
+                      >
+                        <LinearGradient
+                          colors={[...premium.gradient]}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 0 }}
+                          style={styles.balanceFill}
+                        />
+                      </View>
                     </View>
                     <View style={styles.rewardsMetaRow}>
                       <Text style={styles.balanceMeta}>Current: {tier}</Text>
@@ -524,19 +538,16 @@ export default function PersonalScreen() {
 
                 <Text style={[refStyles.darkHeading, styles.sectionHeading]}>How you earn</Text>
                 <InfoRow
-                  light
                   glyph="1"
                   title="1 pt per $1 on tickets"
                   body="Counted when the payment verifies server-side — never on a tap alone."
                 />
                 <InfoRow
-                  light
                   glyph="50"
                   title="Venue check-in · 50 pts"
                   body="Scan in at a partner venue, once per visit."
                 />
                 <InfoRow
-                  light
                   glyph="25"
                   title="Show up · 25 pts"
                   body="Attendance confirmed at the door scan."
@@ -546,13 +557,11 @@ export default function PersonalScreen() {
                   Member rules, in plain sight
                 </Text>
                 <InfoRow
-                  light
                   icon="heart"
                   title="Points never expire while you're paid"
                   body="Downgrade to Free and the balance freezes — unspendable, never forfeited — with 12 months to re-upgrade before it expires. Points only ever go down by spending them."
                 />
                 <InfoRow
-                  light
                   icon="information-circle"
                   title="Free accounts buy, members earn"
                   body="Anyone can purchase tickets and bundles. Points, member-only events and partner perks are paid-tier benefits."
@@ -560,7 +569,6 @@ export default function PersonalScreen() {
 
                 <Text style={[refStyles.darkHeading, styles.sectionHeading]}>Partner perks</Text>
                 <InfoRow
-                  light
                   icon="gift"
                   title="A standing free perk at every partner"
                   body="Each partner venue defines a free perk for paid members at onboarding. Claim one free perk per partner, per calendar quarter, on a verified member scan at the door."
@@ -696,7 +704,7 @@ export default function PersonalScreen() {
                 {recentAdventures.map((a) => (
                   <View key={a.id} style={styles.rowCard}>
                     <View style={styles.rowIcon}>
-                      <Ionicons name="sparkles" size={18} color="#FFFFFF" />
+                      <Ionicons name="sparkles" size={18} color={premium.gold} />
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.rowTitle} numberOfLines={1}>
@@ -785,16 +793,16 @@ export default function PersonalScreen() {
 
 const styles = StyleSheet.create({
   authBtn: {
-    marginTop: 10,
-    paddingVertical: 7,
+    marginTop: 12,
+    paddingVertical: 8,
     paddingHorizontal: 16,
-    borderRadius: 12,
-    backgroundColor: "rgba(255,255,255,0.18)",
+    borderRadius: 999,
+    backgroundColor: premium.surface2,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.35)",
+    borderColor: premium.line2,
   },
-  authBtnText: { color: "#fff", fontWeight: "700", fontSize: 13 },
-  accountEmail: { fontSize: 13, color: "#514a5a", fontWeight: "800", marginBottom: 12 },
+  authBtnText: { color: premium.ink, fontWeight: "700", fontSize: 13 },
+  accountEmail: { fontSize: 13, color: premium.muted, fontWeight: "800", marginBottom: 12 },
   deleteOpenBtn: {
     alignSelf: "flex-start",
     paddingHorizontal: 14,
@@ -802,20 +810,20 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     borderColor: "#b3261e",
-    backgroundColor: "#ffffff",
+    backgroundColor: "transparent",
   },
-  deleteOpenBtnText: { color: "#b3261e", fontWeight: "900", fontSize: 12 },
-  deleteExplain: { fontSize: 12, color: "#514a5a", lineHeight: 17, marginBottom: 12 },
-  deleteLabel: { fontSize: 12, color: "#221c2a", fontWeight: "800", marginBottom: 8 },
+  deleteOpenBtnText: { color: "#e05260", fontWeight: "900", fontSize: 12 },
+  deleteExplain: { fontSize: 12, color: premium.ink2, lineHeight: 17, marginBottom: 12 },
+  deleteLabel: { fontSize: 12, color: premium.ink, fontWeight: "800", marginBottom: 8 },
   deleteInput: {
     borderWidth: 1,
-    borderColor: "#d5d0df",
+    borderColor: premium.line2,
     borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 14,
-    color: "#221c2a",
-    backgroundColor: "#ffffff",
+    color: premium.ink,
+    backgroundColor: premium.surface2,
     marginBottom: 12,
   },
   deleteConfirmBtn: {
@@ -827,14 +835,21 @@ const styles = StyleSheet.create({
   },
   deleteConfirmBtnText: { color: "#fff", fontWeight: "700" },
   deleteCancelBtn: { alignItems: "center", paddingVertical: 12, marginTop: 4 },
-  deleteCancelBtnText: { color: "#514a5a", fontWeight: "800", fontSize: 13 },
-  memberHeading: { fontSize: 18, fontWeight: "700", color: "#231e29", marginTop: 18, marginBottom: 10 },
+  deleteCancelBtnText: { color: premium.muted, fontWeight: "800", fontSize: 13 },
+  memberHeading: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: premium.ink,
+    fontFamily: "Poppins_700Bold",
+    marginTop: 18,
+    marginBottom: 10,
+  },
   qrPlaceholderText: { fontSize: 12, color: "#514a5a", fontWeight: "700", marginTop: 8 },
   scanBtn: {
     marginTop: 12,
     height: 45,
     borderRadius: 13,
-    backgroundColor: "#3654b5",
+    backgroundColor: premium.violet,
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
@@ -848,13 +863,13 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 12,
   },
-  rewardsPoints: { fontSize: 18, fontWeight: "900", color: "#221c2a" },
-  rewardsHint: { marginTop: 6, fontSize: 12, color: "#514a5a", lineHeight: 16 },
+  rewardsPoints: { fontSize: 17, fontWeight: "800", color: premium.ink },
+  rewardsHint: { marginTop: 6, fontSize: 12, color: premium.muted, lineHeight: 17 },
   showQrBtn: {
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 14,
-    backgroundColor: "#3654b5",
+    backgroundColor: premium.violet,
   },
   showQrBtnText: { color: "#fff", fontWeight: "900", fontSize: 12 },
   progressTrack: {
@@ -873,7 +888,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: "#d5d0df",
+    borderColor: premium.line2,
     marginRight: 12,
   },
   tileBg: { flex: 1, borderRadius: 18 },
@@ -897,24 +912,24 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
-    backgroundColor: "#ffffff",
-    borderRadius: 16,
-    padding: 12,
+    backgroundColor: premium.surface,
+    borderRadius: 14,
+    padding: 13,
     borderWidth: 1,
-    borderColor: "#d5d0df",
-    marginBottom: 10,
+    borderColor: premium.line,
+    marginBottom: 9,
   },
   rowIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
+    width: 36,
+    height: 36,
+    borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#6242bb",
+    backgroundColor: premium.surface3,
   },
-  rowTitle: { fontSize: 14, fontWeight: "900", color: "#221c2a" },
-  rowSub: { marginTop: 3, fontSize: 12, color: "#514a5a", fontWeight: "800" },
-  rowMeta: { marginTop: 6, fontSize: 11, color: "#88848f", fontWeight: "900" },
+  rowTitle: { fontSize: 13.5, fontWeight: "800", color: premium.ink },
+  rowSub: { marginTop: 2, fontSize: 12, color: premium.muted, fontWeight: "600" },
+  rowMeta: { marginTop: 4, fontSize: 11, color: premium.muted, fontWeight: "700" },
   // Premium pass — hero member-benefit framing + dark balance card.
   heroBenefit: {
     color: "white",
@@ -927,7 +942,7 @@ const styles = StyleSheet.create({
   balanceCard: {
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: "rgba(139,92,246,0.40)",
+    borderColor: "rgba(232,196,118,0.38)",
     padding: 18,
     marginBottom: 4,
   },
@@ -944,10 +959,12 @@ const styles = StyleSheet.create({
   balanceTrack: {
     marginTop: 14,
     height: 8,
-    borderRadius: 8,
-    backgroundColor: "rgba(255,255,255,0.14)",
+    borderRadius: 99,
+    backgroundColor: "rgba(255,255,255,0.10)",
     overflow: "hidden",
   },
-  balanceFill: { height: "100%", borderRadius: 8, backgroundColor: premium.gold },
+  // Mockup .bar: the fill is the brand gradient, not a gold block.
+  balanceFillClip: { height: "100%", borderRadius: 99, overflow: "hidden" },
+  balanceFill: { flex: 1 },
   balanceMeta: { fontSize: 12, color: premium.ink2, fontWeight: "700" },
 });

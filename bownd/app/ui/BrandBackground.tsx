@@ -1,15 +1,19 @@
 // app/ui/BrandBackground.tsx
+// Premium pass (2026-11-15): retuned to the brochure plum family —
+// the shared screen gradient plus soft violet/blue depth glows. The
+// old magenta glow blob (#FF3EA5 family) is gone everywhere this
+// background renders (detail, list, vibe).
 import React from "react";
 import { View, StyleSheet } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
-import { colors } from "./theme";
+import { premium } from "./theme";
 
 export function BrandBackground() {
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
       <LinearGradient
-        colors={[colors.bgTop, colors.bgMid, colors.bgBot]}
-        locations={[0, 0.55, 1]}
+        colors={[...premium.screenGradient]}
+        locations={[...premium.screenGradientLocations]}
         style={StyleSheet.absoluteFill}
       />
 
@@ -26,21 +30,21 @@ const styles = StyleSheet.create({
     width: 520,
     height: 520,
     borderRadius: 520,
-    opacity: 0.28,
+    opacity: 0.16,
   },
   blob1: {
     top: -220,
     left: -180,
-    backgroundColor: colors.glowPurple,
+    backgroundColor: "#5B34E0",
   },
   blob2: {
     top: 120,
     right: -220,
-    backgroundColor: colors.glowMagenta,
+    backgroundColor: "#2F6BFF",
   },
   blob3: {
     bottom: -260,
     left: -120,
-    backgroundColor: colors.glowBlue,
+    backgroundColor: "#7A2BD0",
   },
 });

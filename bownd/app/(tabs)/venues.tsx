@@ -21,6 +21,7 @@ import {
   BottomNav,
   HeaderAvatar,
   Search,
+  Section,
   TAB_ROUTES,
   refStyles,
 } from "../ui/reference";
@@ -80,7 +81,8 @@ export default function VenuesScreen() {
   return (
     <View style={refStyles.root}>
       <LinearGradient
-        colors={["#0A0616", "#1E1733"]}
+        colors={[...premium.screenGradient]}
+        locations={[...premium.screenGradientLocations]}
         style={StyleSheet.absoluteFillObject}
       />
       <ScrollView
@@ -129,6 +131,7 @@ export default function VenuesScreen() {
                 isTest={v.isTest}
                 featured={v.featured}
                 onPress={() => openVenue(v.id)}
+                style={styles.gridTile}
               />
             ))}
           </View>
@@ -136,9 +139,9 @@ export default function VenuesScreen() {
 
         {/* Standing partner perk (mockup Venues view footer): product
             copy, true of every Bownd partner venue. */}
-        <Text style={[styles.perkLabel, fonts.displayBold]}>Member perk nearby</Text>
+        <Section title="Member perk nearby" />
         <InfoRow
-          icon="restaurant"
+          icon="wine"
           title="A standing perk at every partner"
           body="Every Bownd partner venue carries a standing free perk for paid members — one claim per partner, per quarter, on a verified scan."
         />
@@ -161,17 +164,13 @@ const styles = StyleSheet.create({
   },
   headHi: { color: premium.muted, fontSize: 12.5, fontWeight: "700" },
   headTitle: { color: "#fff", fontSize: 23, fontWeight: "800", marginTop: 2 },
-  grid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
-  perkLabel: {
-    color: premium.ink,
-    fontSize: 17,
-    fontWeight: "800",
-    marginTop: 20,
-    marginBottom: 11,
-  },
+  // Mockup .v-grid: two equal columns, 11px gap, filling the width —
+  // the tile's fixed rail width is overridden by flex basis here.
+  grid: { flexDirection: "row", flexWrap: "wrap", gap: 11 },
+  gridTile: { flexBasis: "47%", flexGrow: 1 },
   showcaseChip: {
     alignSelf: "flex-start",
-    paddingHorizontal: 12,
+    paddingHorizontal: 11,
     paddingVertical: 6,
     borderRadius: 999,
     backgroundColor: "rgba(232,196,118,0.13)",
@@ -179,12 +178,12 @@ const styles = StyleSheet.create({
     borderColor: "rgba(232,196,118,0.40)",
     marginBottom: 12,
   },
-  showcaseChipText: { color: premium.gold, fontSize: 12, fontWeight: "900" },
+  showcaseChipText: { color: premium.gold, fontSize: 11, fontWeight: "800", letterSpacing: 0.5 },
   emptyText: {
     marginTop: 24,
-    color: "rgba(255,255,255,0.75)",
-    fontSize: 15,
-    fontWeight: "700",
+    color: premium.muted,
+    fontSize: 14,
+    fontWeight: "600",
     textAlign: "center",
   },
 });

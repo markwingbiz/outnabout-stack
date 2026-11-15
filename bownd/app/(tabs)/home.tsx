@@ -49,6 +49,7 @@ import {
   getVenueName,
   refStyles,
 } from "../ui/reference";
+import { premium } from "../ui/theme";
 
 function pickFeatured(events: EventItem[]) {
   // Paid featured placement wins first; then the existing logic.
@@ -255,7 +256,8 @@ export default function Home() {
   return (
     <View style={refStyles.root}>
       <LinearGradient
-        colors={["#0A0616", "#1E1733"]}
+        colors={[...premium.screenGradient]}
+        locations={[...premium.screenGradientLocations]}
         style={StyleSheet.absoluteFillObject}
       />
       <ScrollView
@@ -382,7 +384,7 @@ export default function Home() {
                 icon on solid color + name; a real photoUrl still wins) */}
             {topVenues.length > 0 && (
               <View>
-                <Text style={styles.orbsLabel}>Top Venues</Text>
+                <Section title="Top Venues" />
                 <ScrollView
                   horizontal
                   showsHorizontalScrollIndicator={false}
@@ -460,7 +462,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
     marginBottom: 14,
   },
-  headHi: { color: "#968cab", fontSize: 12.5, fontWeight: "700" },
+  headHi: { color: premium.muted, fontSize: 12.5, fontWeight: "700" },
   headTitle: { color: "#fff", fontSize: 23, fontWeight: "800", marginTop: 2 },
   seeResultsRow: {
     flexDirection: "row",
@@ -481,16 +483,9 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     textAlign: "center",
   },
-  orbsLabel: {
-    color: "#fff",
-    fontSize: 17,
-    fontWeight: "800",
-    marginTop: 20,
-    marginBottom: 11,
-  },
   showcaseChip: {
     alignSelf: "flex-start",
-    paddingHorizontal: 12,
+    paddingHorizontal: 11,
     paddingVertical: 6,
     borderRadius: 999,
     backgroundColor: "rgba(232,196,118,0.13)",
@@ -500,8 +495,9 @@ const styles = StyleSheet.create({
   },
   showcaseChipText: {
     color: "#e8c476",
-    fontSize: 12,
-    fontWeight: "900",
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.5,
   },
   playlistCardWrap: {
     width: 280,

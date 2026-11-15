@@ -127,12 +127,17 @@ export function Section({
   const inner = (
     <>
       <View>
-        <Text style={[refStyles.sectionTitle, fonts.displayBold]}>{title}</Text>
+        <Text style={[refStyles.sectionTitle, fonts.display]}>{title}</Text>
         {subtitle ? (
           <Text style={[refStyles.sectionSub, fonts.bodySemiBold]}>{subtitle}</Text>
         ) : null}
       </View>
-      <Ionicons name="chevron-forward" color={premium.muted} size={17} />
+      {/* Mockup .app-label carries a right-side element only when the
+          header acts (a link / a collapse toggle) — a static section
+          label gets no decorative chevron. */}
+      {onPress ? (
+        <Ionicons name="chevron-forward" color={premium.link} size={16} />
+      ) : null}
     </>
   );
   if (onPress) {
@@ -316,7 +321,7 @@ export const refStyles = StyleSheet.create({
   root: { flex: 1, backgroundColor: INK },
   scroll: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 26 },
   search: {
-    height: 48,
+    height: 46,
     backgroundColor: premium.surface2,
     borderRadius: 14,
     borderWidth: 1,
@@ -327,7 +332,7 @@ export const refStyles = StyleSheet.create({
     marginBottom: 14,
     gap: 9,
   },
-  searchInput: { color: premium.ink, fontSize: 14, flex: 1 },
+  searchInput: { color: premium.ink, fontSize: 13.5, flex: 1 },
   avatarCircle: {
     width: 38,
     height: 38,
@@ -336,8 +341,8 @@ export const refStyles = StyleSheet.create({
     justifyContent: "center",
   },
   avatarInitial: { color: "#fff", fontSize: 15, fontWeight: "800" },
-  pageTitle: { color: "#fff", fontSize: 26, fontWeight: "700", marginBottom: 3 },
-  subtitle: { color: premium.ink2, fontSize: 14, marginBottom: 12 },
+  pageTitle: { color: "#fff", fontSize: 24, fontWeight: "800", marginBottom: 3 },
+  subtitle: { color: premium.muted, fontSize: 12.5, fontWeight: "700", marginBottom: 12 },
   filterWrap: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginBottom: 10 },
   pill: {
     backgroundColor: premium.surface2,
@@ -357,7 +362,7 @@ export const refStyles = StyleSheet.create({
     marginTop: 20,
     marginBottom: 11,
   },
-  sectionTitle: { color: premium.ink, fontSize: 17, fontWeight: "800" },
+  sectionTitle: { color: premium.ink, fontSize: 16.5, fontWeight: "800" },
   sectionSub: { color: premium.muted, fontSize: 12.5, marginTop: 3 },
   tailored: {
     backgroundColor: "#21192f",
@@ -414,47 +419,53 @@ export const refStyles = StyleSheet.create({
   bottomItem: { flex: 1, justifyContent: "flex-start", alignItems: "center", gap: 3 },
   bottomText: { color: premium.muted, fontSize: 10.5, fontWeight: "800" },
   bottomDot: { width: 4, height: 4, borderRadius: 2, marginTop: 1 },
-  personalHero: { height: 365, paddingHorizontal: 20, paddingTop: 22, alignItems: "center" },
+  // Personal/Rewards — premium pass (2026-11-15): the old light
+  // sheet is gone. The mockup's Rewards phone is dark end to end, so
+  // the "panel" is now just padded dark space on the plum screen and
+  // every card inside it is a premium surface. The QR box alone stays
+  // light — a QR code needs the contrast to scan.
+  personalHero: { paddingHorizontal: 18, paddingTop: 20, paddingBottom: 24, alignItems: "center" },
   personalHead: { width: "100%", flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  personalTitle: { color: "white", fontSize: 31, fontWeight: "700" },
-  personalSub: { color: "#f1e8f5", fontSize: 14, alignSelf: "flex-start", marginTop: 11 },
+  personalTitle: { color: "white", fontSize: 30, fontWeight: "800" },
+  personalSub: { color: premium.ink2, fontSize: 13.5, alignSelf: "flex-start", marginTop: 8 },
   avatarRing: {
-    width: 173,
-    height: 173,
-    borderRadius: 90,
-    borderWidth: 13,
-    borderColor: "rgba(210,173,242,.17)",
+    width: 118,
+    height: 118,
+    borderRadius: 60,
+    borderWidth: 9,
+    borderColor: "rgba(232,196,118,0.22)",
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 16,
+    marginTop: 20,
   },
   avatar: {
-    width: 138,
-    height: 138,
-    borderRadius: 75,
-    backgroundColor: "#393246",
+    width: 92,
+    height: 92,
+    borderRadius: 46,
+    backgroundColor: premium.surface3,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 2,
-    borderColor: "rgba(255,255,255,.35)",
+    borderColor: "rgba(255,255,255,0.25)",
   },
-  points: { color: "white", fontSize: 34, fontWeight: "700", marginTop: 8 },
-  nextTier: { color: "#fff", fontSize: 15, marginTop: 3 },
+  points: { color: "white", fontSize: 32, fontWeight: "800", marginTop: 10 },
+  nextTier: { color: premium.ink2, fontSize: 14, marginTop: 3 },
   lightPanel: {
-    marginHorizontal: 5,
-    marginTop: -8,
-    backgroundColor: "#f0edf4",
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    borderBottomLeftRadius: 25,
-    borderBottomRightRadius: 25,
-    padding: 14,
-    minHeight: 390,
+    paddingHorizontal: 16,
+    paddingTop: 2,
+    paddingBottom: 8,
   },
-  panelTabs: { flexDirection: "row", backgroundColor: "#e2dfeb", borderRadius: 22, padding: 3 },
-  panelTab: { flex: 1, paddingVertical: 9, alignItems: "center", borderRadius: 18 },
-  panelTabSelected: { backgroundColor: "#373151" },
-  panelTabText: { color: "#292334", fontSize: 13 },
+  panelTabs: {
+    flexDirection: "row",
+    backgroundColor: premium.surface2,
+    borderWidth: 1,
+    borderColor: premium.line,
+    borderRadius: 999,
+    padding: 4,
+  },
+  panelTab: { flex: 1, paddingVertical: 10, alignItems: "center", borderRadius: 999 },
+  panelTabSelected: { backgroundColor: premium.surface3 },
+  panelTabText: { color: premium.ink2, fontSize: 13, fontWeight: "700" },
   qrHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -462,18 +473,28 @@ export const refStyles = StyleSheet.create({
     paddingVertical: 17,
     paddingHorizontal: 4,
   },
-  darkHeading: { color: "#19151f", fontSize: 20, fontWeight: "700" },
+  darkHeading: {
+    color: premium.ink,
+    fontSize: 19,
+    fontWeight: "700",
+    fontFamily: "Poppins_700Bold",
+  },
   tokenCard: {
-    borderRadius: 19,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: "#d5d0df",
-    padding: 12,
-    backgroundColor: "#f1eef5",
+    borderColor: premium.line,
+    padding: 14,
+    backgroundColor: premium.surface,
   },
   tokenRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  tokenTitle: { color: "#221c2a", fontSize: 16, fontWeight: "700" },
+  tokenTitle: {
+    color: premium.ink,
+    fontSize: 15.5,
+    fontWeight: "700",
+    fontFamily: "Poppins_700Bold",
+  },
   newButton: {
-    backgroundColor: "#6242bb",
+    backgroundColor: premium.violet,
     borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 9,
@@ -481,26 +502,33 @@ export const refStyles = StyleSheet.create({
     gap: 6,
     alignItems: "center",
   },
-  tokenBox: { backgroundColor: "#e4e0ed", borderRadius: 13, marginTop: 12, padding: 12 },
-  tokenText: { color: "#28222d", fontSize: 16, fontWeight: "700" },
+  tokenBox: { backgroundColor: premium.surface2, borderRadius: 12, marginTop: 12, padding: 12 },
+  tokenText: { color: premium.ink, fontSize: 15, fontWeight: "700" },
   qrBox: {
-    backgroundColor: "#e9e6ef",
-    borderRadius: 15,
+    backgroundColor: "#EFEDF5",
+    borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
     marginTop: 10,
-    padding: 12,
+    padding: 16,
   },
-  redeemHeading: { fontSize: 18, fontWeight: "700", color: "#231e29", marginTop: 15, marginBottom: 9 },
+  redeemHeading: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: premium.ink,
+    fontFamily: "Poppins_700Bold",
+    marginTop: 15,
+    marginBottom: 9,
+  },
   redeemRow: {
     flexDirection: "row",
-    backgroundColor: "#e8e5ed",
+    backgroundColor: premium.surface2,
     borderRadius: 13,
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: "#d2ccdc",
+    borderColor: premium.line2,
   },
-  redeemInput: { flex: 1, paddingHorizontal: 10, fontSize: 14, color: "#211b2b" },
-  redeemButton: { backgroundColor: "#3654b5", paddingHorizontal: 15, justifyContent: "center", minHeight: 45 },
-  panelNote: { color: "#514a5a", marginTop: 15, textAlign: "center" },
+  redeemInput: { flex: 1, paddingHorizontal: 12, fontSize: 14, color: premium.ink },
+  redeemButton: { backgroundColor: premium.violet, paddingHorizontal: 15, justifyContent: "center", minHeight: 45 },
+  panelNote: { color: premium.muted, marginTop: 15, textAlign: "center", fontSize: 13, fontWeight: "600" },
 });

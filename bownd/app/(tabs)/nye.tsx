@@ -17,6 +17,7 @@ import {
   ScrollView,
   StatusBar,
   TouchableOpacity,
+  ImageBackground,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
@@ -30,7 +31,8 @@ import {
   campaignEvents,
   getActiveCampaign,
 } from "../../data/campaigns";
-import { CampaignBanner, SceneEventCard, usePremiumFonts } from "../ui/premium";
+import { resolveEventCardImage } from "../../lib/placeholders";
+import { SceneEventCard, hexToRgba, usePremiumFonts } from "../ui/premium";
 import { premium } from "../ui/theme";
 import {
   BottomNav,
@@ -116,7 +118,8 @@ export default function NyeScreen() {
   return (
     <View style={refStyles.root}>
       <LinearGradient
-        colors={["#0A0616", "#1E1733"]}
+        colors={[...premium.screenGradient]}
+        locations={[...premium.screenGradientLocations]}
         style={StyleSheet.absoluteFillObject}
       />
       <ScrollView
@@ -143,17 +146,46 @@ export default function NyeScreen() {
           </View>
         )}
 
-        {/* Campaign hero — the same banner Home's campaign slot uses,
-            carrying the full Big Night name. */}
-        <CampaignBanner
-          presenter={campaign.presenter}
-          name={heroName}
-          datesLabel={campaign.datesLabel}
-          gradient={campaign.gradient}
-          onPress={openCampaign}
-        />
+        {/* Campaign hero — the mockup's NYE treatment is its detail
+            hero: a full-bleed photo (the app's TEMP scene art, tinted
+            with the campaign gradient) with the gold tag chip and the
+            Big Night name overlaid at the bottom over a scrim. */}
+        <TouchableOpacity onPress={openCampaign} activeOpacity={0.92} style={styles.heroWrap}>
+          <ImageBackground
+            source={resolveEventCardImage(undefined)}
+            style={styles.hero}
+            resizeMode="cover"
+          >
+            <LinearGradient
+              colors={campaign.gradient.map((c) => hexToRgba(c, 0.5)) as [string, string, string]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={StyleSheet.absoluteFillObject}
+            />
+            <LinearGradient
+              colors={["rgba(10,6,22,0.18)", "rgba(10,6,22,0.45)", "rgba(15,10,31,0.95)"]}
+              locations={[0, 0.55, 1]}
+              style={StyleSheet.absoluteFillObject}
+            />
+            <View style={styles.heroContent}>
+              <View style={styles.heroTag}>
+                <Text style={[styles.heroTagText, fonts.bodyExtraBold]}>
+                  {campaign.presenter} · Spotlight
+                </Text>
+              </View>
+              <Text style={[styles.heroName, fonts.display]}>{heroName}</Text>
+              <Text style={[styles.heroDates, fonts.bodyBold]}>{campaign.datesLabel}</Text>
+            </View>
+          </ImageBackground>
+        </TouchableOpacity>
         <Text style={[styles.tagline, fonts.bodySemiBold]}>{campaign.tagline}</Text>
         <Text style={[styles.description, fonts.body]}>{campaign.description}</Text>
+        <LinearGradient
+          colors={["rgba(232,196,118,0.65)", "rgba(232,196,118,0)"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+          style={styles.goldline}
+        />
 
         {/* The Big Night lineup — real matched events only. */}
         <Section
@@ -211,16 +243,39 @@ const styles = StyleSheet.create({
   },
   headHi: { color: premium.muted, fontSize: 12.5, fontWeight: "700" },
   headTitle: { color: "#fff", fontSize: 23, fontWeight: "800", marginTop: 2 },
+  // Full-bleed hero: the scroll container pads 16, the mockup's
+  // detail hero bleeds to both edges (margin 0 -18px there).
+  heroWrap: { marginHorizontal: -16, marginBottom: 16 },
+  hero: { height: 232, justifyContent: "flex-end" },
+  heroContent: { paddingHorizontal: 18, paddingBottom: 14 },
+  heroTag: {
+    alignSelf: "flex-start",
+    backgroundColor: "rgba(232,196,118,0.16)",
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginBottom: 8,
+  },
+  heroTagText: {
+    color: premium.gold,
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
+  heroName: { color: "#fff", fontSize: 25, fontWeight: "800", lineHeight: 30 },
+  heroDates: { color: premium.ink2, fontSize: 12.5, fontWeight: "700", marginTop: 4 },
+  goldline: { height: 1, marginTop: 18 },
   tagline: { color: premium.ink, fontSize: 15, fontWeight: "600", lineHeight: 21 },
   description: {
     color: premium.ink2,
     fontSize: 13.5,
-    lineHeight: 20,
+    lineHeight: 22,
     marginTop: 8,
   },
   showcaseChip: {
     alignSelf: "flex-start",
-    paddingHorizontal: 12,
+    paddingHorizontal: 11,
     paddingVertical: 6,
     borderRadius: 999,
     backgroundColor: "rgba(232,196,118,0.13)",
@@ -228,19 +283,19 @@ const styles = StyleSheet.create({
     borderColor: "rgba(232,196,118,0.40)",
     marginBottom: 12,
   },
-  showcaseChipText: { color: premium.gold, fontSize: 12, fontWeight: "900" },
+  showcaseChipText: { color: premium.gold, fontSize: 11, fontWeight: "800", letterSpacing: 0.5 },
   emptyText: {
-    color: "rgba(255,255,255,0.72)",
-    fontSize: 14,
+    color: premium.muted,
+    fontSize: 13.5,
     fontWeight: "600",
     lineHeight: 20,
     paddingTop: 4,
   },
   cta: {
     borderWidth: 1,
-    borderColor: premium.goldBorder,
+    borderColor: "rgba(232,196,118,0.55)",
     borderRadius: 13,
-    paddingVertical: 13,
+    paddingVertical: 12,
     alignItems: "center",
     marginTop: 16,
   },

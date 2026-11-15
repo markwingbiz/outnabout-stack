@@ -373,7 +373,7 @@ export default function DetailScreen() {
   const campTotal = campSubtotal + campFee;
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: premium.bg }}>
       <BrandBackground />
 
       <View style={styles.container}>
@@ -785,34 +785,40 @@ const styles = StyleSheet.create({
     padding: spacing.xl,
   },
 
+  // Mockup .backbtn — a surface pill, not bare text.
   backBtn: {
     alignSelf: "flex-start",
-    paddingVertical: 6,
-    paddingRight: 10,
-    marginBottom: 6,
+    backgroundColor: premium.surface2,
+    borderWidth: 1,
+    borderColor: premium.line2,
+    borderRadius: 999,
+    paddingVertical: 8,
+    paddingLeft: 10,
+    paddingRight: 14,
+    marginBottom: 12,
   },
   backText: {
-    color: theme.text,
-    fontSize: 16,
-    fontWeight: "900",
+    color: premium.ink,
+    fontSize: 13,
+    fontWeight: "800",
   },
 
   h2: {
     color: theme.text,
-    fontSize: 22,
-    fontWeight: "900",
+    fontSize: 24,
+    fontWeight: "800",
   },
 
   // Detail header image: TEMP placeholder art (or the listing's real photo
   // when one exists) above the title. No text sits on the image, so the
   // scrim is only a light darkening for a finished look.
   detailBanner: {
-    height: 180,
-    borderRadius: 14,
+    height: 210,
+    borderRadius: 16,
     overflow: "hidden",
     marginBottom: 14,
     borderWidth: 1,
-    borderColor: premium.line2,
+    borderColor: premium.line,
   },
   detailBannerScrim: {
     flex: 1,
@@ -821,14 +827,14 @@ const styles = StyleSheet.create({
   // Venue page hero when the venue has no photo: the icon-tile
   // treatment at hero size (category color, white glyph).
   venueHeroTile: {
-    height: 180,
-    borderRadius: 14,
+    height: 210,
+    borderRadius: 16,
     overflow: "hidden",
     marginBottom: 14,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: premium.line2,
+    borderColor: premium.line,
   },
 
   demoBadge: {
@@ -848,16 +854,18 @@ const styles = StyleSheet.create({
   },
 
   meta: {
-    color: theme.subtext,
+    color: premium.ink2,
     marginTop: 8,
-    fontWeight: "700",
+    fontWeight: "600",
+    fontSize: 12.5,
   },
 
   sub: {
-    color: theme.subtext,
+    color: premium.ink2,
     marginTop: 8,
-    fontWeight: "700",
-    lineHeight: 20,
+    fontWeight: "500",
+    fontSize: 13.5,
+    lineHeight: 22,
   },
 
   tagRow: {
@@ -869,9 +877,9 @@ const styles = StyleSheet.create({
 
   tag: {
     paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingVertical: 7,
     borderRadius: 999,
-    backgroundColor: premium.surface3,
+    backgroundColor: premium.surface2,
     borderWidth: 1,
     borderColor: premium.line2,
   },
@@ -888,26 +896,30 @@ const styles = StyleSheet.create({
     marginTop: 18,
     flexWrap: "wrap",
   },
+  // Mockup act-row: Save is a surface button (.btn-save), the venue
+  // action is a gold outline (.btn-venue) — gold is never the fill.
   actionBtn: {
-    paddingHorizontal: 16,
-    paddingVertical: 11,
-    borderRadius: 14,
-    backgroundColor: premium.gold,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 13,
+    backgroundColor: premium.surface2,
+    borderWidth: 1,
+    borderColor: premium.line2,
     alignItems: "center",
     justifyContent: "center",
   },
   actionBtnText: {
-    color: "#171129",
-    fontWeight: "900",
+    color: premium.ink,
+    fontWeight: "800",
     fontSize: 14,
   },
   actionBtnGhost: {
     backgroundColor: "transparent",
     borderWidth: 1,
-    borderColor: premium.goldBorder,
+    borderColor: "rgba(232,196,118,0.55)",
   },
   actionBtnGhostText: {
-    color: theme.text,
+    color: premium.gold,
   },
 
   // Campaign page (premium pass) — mockup event-page anatomy on the
@@ -915,12 +927,18 @@ const styles = StyleSheet.create({
   campTag: {
     alignSelf: "flex-start",
     backgroundColor: "rgba(232,196,118,0.16)",
-    borderRadius: 999,
-    paddingHorizontal: 9,
+    borderRadius: 6,
+    paddingHorizontal: 8,
     paddingVertical: 4,
     marginBottom: 10,
   },
-  campTagText: { color: premium.gold, fontSize: 11, fontWeight: "900" },
+  campTagText: {
+    color: premium.gold,
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
   campRowBetween: {
     flexDirection: "row",
     alignItems: "center",
@@ -940,7 +958,8 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     marginBottom: 9,
   },
-  tierRowOn: { borderColor: premium.gold, backgroundColor: premium.surface2 },
+  // Mockup .tier.on: violet selection ring on surface3, not gold.
+  tierRowOn: { borderColor: "#6D28D9", backgroundColor: premium.surface3 },
   tierName: { color: theme.text, fontSize: 14.5, fontWeight: "800" },
   tierBlurb: { color: theme.subtext, fontSize: 12, fontWeight: "600", marginTop: 2 },
   tierPrice: { color: theme.text, fontSize: 15, fontWeight: "900" },

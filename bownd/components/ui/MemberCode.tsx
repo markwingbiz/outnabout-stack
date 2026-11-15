@@ -48,8 +48,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  memberId: { fontSize: 12, fontWeight: "800", color: "#221c2a" },
-  note: { fontSize: 12, color: "#514a5a", fontWeight: "700", textAlign: "center" },
+  memberId: { fontSize: 12, fontWeight: "800", color: "#F5F3FB" },
+  note: { fontSize: 12, color: "#968FB2", fontWeight: "600", textAlign: "center" },
   empty: { paddingVertical: 12, alignItems: "center" },
-  emptyText: { fontSize: 13, color: "#514a5a", fontWeight: "700", textAlign: "center" },
+  emptyText: { fontSize: 13, color: "#968FB2", fontWeight: "600", textAlign: "center" },
 });

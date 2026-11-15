@@ -43,17 +43,19 @@ import {
   type RangeKey,
 } from "../lib/data";
 import MultiLine from "../components/MultiLine";
+import { useLiveworkFonts } from "../components/fonts";
 
 // Premium palette (brochure plum/gold) — local because lib/theme.ts
 // is shared and off-limits for this pass. GOLD was already local.
+// Hairlines are the mockup's neutral white lines, not gold.
 const GOLD = "#E8C476";
 const GOLD_DIM = "rgba(232,196,118,0.16)";
 const GOLD_SOFT = "rgba(232,196,118,0.13)";
 const GOLD_BORDER = "rgba(232,196,118,0.40)";
-const BAR_TRACK = "rgba(255,255,255,0.08)";
 const SURFACE = "#171129";
 const SURFACE2 = "#1E1733";
-const LINE = "rgba(232,196,118,0.14)";
+const SURFACE3 = "#271D47";
+const LINE = "rgba(255,255,255,0.07)";
 const LINE_SOFT = "rgba(255,255,255,0.06)";
 const INK = "#F5F3FB";
 const INK2 = "#C8C3DC";
@@ -117,6 +119,7 @@ function BarRow({
   color: string;
   detail?: string;
 }) {
+  const fonts = useLiveworkFonts();
   const pct = max > 0 ? Math.max(4, Math.round((value / max) * 100)) : 0;
   return (
     <View style={styles.barRow}>
@@ -124,7 +127,7 @@ function BarRow({
         <Text style={styles.barLabel} numberOfLines={1}>
           {label}
         </Text>
-        <Text style={styles.barValue}>
+        <Text style={[styles.barValue, fonts.displayBold]}>
           {value}
           {detail ? `  ·  ${detail}` : ""}
         </Text>
@@ -137,11 +140,13 @@ function BarRow({
 }
 
 function SectionTitle({ children }: { children: string }) {
-  return <Text style={styles.sectionTitle}>{children}</Text>;
+  const fonts = useLiveworkFonts();
+  return <Text style={[styles.sectionTitle, fonts.display]}>{children}</Text>;
 }
 
 export default function AnalyticsScreen() {
   const router = useRouter();
+  const fonts = useLiveworkFonts();
   const { session, loading: authLoading } = useAuth();
   const [dash, setDash] = useState<DashboardData | null>(null);
   const [activity, setActivity] = useState<DashboardData | null>(null);
@@ -471,7 +476,8 @@ export default function AnalyticsScreen() {
   return (
     <SafeAreaView style={styles.root}>
       <LinearGradient
-        colors={["#0A0616", "#1E1733"]}
+        colors={["#1E1338", "#0D0A1C", "#0A0616"]}
+        locations={[0, 0.5, 1]}
         style={StyleSheet.absoluteFillObject}
       />
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
@@ -480,7 +486,7 @@ export default function AnalyticsScreen() {
             <Ionicons name="chevron-back" size={15} color={INK2} />
             <Text style={styles.backText}>Back</Text>
           </Pressable>
-          <Text style={styles.title}>Analytics & Insights</Text>
+          <Text style={[styles.title, fonts.display]}>Analytics & Insights</Text>
           <View style={{ width: 64 }} />
         </View>
 
@@ -514,19 +520,43 @@ export default function AnalyticsScreen() {
                 <>
                   <View style={styles.heroRow}>
                     <View>
-                      <Text style={styles.heroNum}>
+                      <Text style={[styles.heroNum, fonts.display]}>
                         {weeklyTrend[weeklyTrend.length - 1].value}
                       </Text>
                       <Text style={styles.heroCap}>LAST 7 DAYS</Text>
                     </View>
                     {!!heroDelta && (
-                      <View style={styles.heroPill}>
-                        <Text style={styles.heroPillText}>{heroDelta}</Text>
+                      // Mockup .lw-cmp pill: green when the change is
+                      // up, gold when flat/down — never a fake direction.
+                      <View
+                        style={[
+                          styles.heroPill,
+                          heroDelta.startsWith("▲")
+                            ? styles.heroPillUp
+                            : styles.heroPillGold,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.heroPillText,
+                            heroDelta.startsWith("▲")
+                              ? styles.heroPillTextUp
+                              : styles.heroPillTextGold,
+                          ]}
+                        >
+                          {heroDelta}
+                        </Text>
                       </View>
                     )}
                   </View>
                   <MultiLine
-                    series={[{ color: LIGHT_VIOLET, points: weeklyTrend.map((b) => b.value) }]}
+                    series={[
+                      {
+                        color: LIGHT_VIOLET,
+                        points: weeklyTrend.map((b) => b.value),
+                        area: true,
+                      },
+                    ]}
                     width={320}
                     height={110}
                   />
@@ -536,12 +566,12 @@ export default function AnalyticsScreen() {
                   </View>
                 </>
               )}
-              <Text style={styles.subTitle}>All time</Text>
-              <Text style={styles.bigMoney}>{redemptionTotal}</Text>
+              <Text style={[styles.subTitle, fonts.bodyExtraBold]}>All time</Text>
+              <Text style={[styles.bigMoney, fonts.display]}>{redemptionTotal}</Text>
               <Text style={styles.note}>Total redemptions recorded for your venues.</Text>
               {perEvent.rows.length > 0 && (
                 <>
-                  <Text style={styles.subTitle}>By event</Text>
+                  <Text style={[styles.subTitle, fonts.bodyExtraBold]}>By event</Text>
                   {perEvent.rows.map((r) => (
                     <BarRow
                       key={r.label}
@@ -571,7 +601,7 @@ export default function AnalyticsScreen() {
             it ($0.00 until real payments exist). */}
         <View style={styles.card}>
           <SectionTitle>Verified revenue</SectionTitle>
-          <Text style={styles.bigMoney}>{formatMoney(dash.verifiedRevenue)}</Text>
+          <Text style={[styles.bigMoney, fonts.display]}>{formatMoney(dash.verifiedRevenue)}</Text>
           {!!dash.revenueScopeNote && <Text style={styles.note}>{dash.revenueScopeNote}</Text>}
           <Text style={styles.note}>
             Ticket money appears here once payments launch — Livework has no ticketing
@@ -651,7 +681,7 @@ export default function AnalyticsScreen() {
           ) : (
             <>
               <MultiLine
-                series={[{ color: LIGHT_VIOLET, points: activityPoints }]}
+                series={[{ color: LIGHT_VIOLET, points: activityPoints, area: true }]}
                 width={320}
                 height={110}
               />
@@ -729,7 +759,7 @@ export default function AnalyticsScreen() {
             )}
             {savedNotRedeemed.length > 0 && (
               <>
-                <Text style={styles.subTitle}>Saved, but not through the door yet</Text>
+                <Text style={[styles.subTitle, fonts.bodyExtraBold]}>Saved, but not through the door yet</Text>
                 {savedNotRedeemed.map((p) => (
                   <View key={p.eventId} style={styles.presenceRow}>
                     <Text style={styles.presenceTitle} numberOfLines={1}>
@@ -813,25 +843,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 11,
   },
   backText: { color: INK2, fontSize: 12.5, fontWeight: "700" },
-  title: { color: INK, fontSize: 20, fontWeight: "800" },
-  intro: { color: MUTED, fontSize: 13, lineHeight: 19 },
+  title: { color: INK, fontSize: 19, fontWeight: "800" },
+  intro: { color: MUTED, fontSize: 12.5, lineHeight: 20, fontWeight: "600" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, gap: 10 },
   centerTitle: { color: INK, fontSize: 18, fontWeight: "800", textAlign: "center" },
   centerSub: { color: MUTED, fontSize: 13, textAlign: "center", lineHeight: 19 },
   centerBtn: {
     marginTop: 8,
-    backgroundColor: GOLD,
-    borderRadius: 999,
+    backgroundColor: "#5B34E0",
+    borderRadius: 12,
     paddingVertical: 11,
     paddingHorizontal: 22,
   },
-  centerBtnText: { color: "#171129", fontSize: 14, fontWeight: "800" },
+  centerBtnText: { color: "#FFFFFF", fontSize: 14, fontWeight: "800" },
   card: {
     backgroundColor: SURFACE,
     borderColor: LINE,
     borderWidth: 1,
-    borderRadius: 18,
-    padding: 16,
+    borderRadius: 16,
+    padding: 15,
   },
   sectionTitle: { color: INK, fontSize: 15.5, fontWeight: "800", marginBottom: 12 },
   subTitle: {
@@ -851,20 +881,28 @@ const styles = StyleSheet.create({
   heroNum: { color: INK, fontSize: 34, fontWeight: "800" },
   heroCap: { color: MUTED, fontSize: 10, fontWeight: "800", letterSpacing: 1, marginTop: 2 },
   heroPill: {
-    backgroundColor: GOLD_SOFT,
     borderWidth: 1,
-    borderColor: GOLD_BORDER,
     borderRadius: 999,
     paddingHorizontal: 9,
-    paddingVertical: 4,
+    paddingVertical: 5,
     marginTop: 6,
   },
-  heroPillText: { color: GOLD, fontSize: 11, fontWeight: "800" },
+  heroPillUp: {
+    backgroundColor: "rgba(61,220,151,0.12)",
+    borderColor: "rgba(61,220,151,0.30)",
+  },
+  heroPillGold: {
+    backgroundColor: GOLD_SOFT,
+    borderColor: GOLD_BORDER,
+  },
+  heroPillText: { fontSize: 11, fontWeight: "800" },
+  heroPillTextUp: { color: "#3DDC97" },
+  heroPillTextGold: { color: GOLD },
   heroAxis: { flexDirection: "row", justifyContent: "space-between", marginTop: 4 },
   heroAxisText: { color: MUTED, fontSize: 10 },
   note: { color: MUTED, fontSize: 12, lineHeight: 17, marginTop: 6 },
   emptyText: { color: INK, fontSize: 14, fontWeight: "700" },
-  takeaway: { color: INK2, fontSize: 12.5, lineHeight: 18, marginTop: 12 },
+  takeaway: { color: INK2, fontSize: 12.5, lineHeight: 20, marginTop: 12 },
   barRow: { marginBottom: 10 },
   barHead: {
     flexDirection: "row",
@@ -873,35 +911,38 @@ const styles = StyleSheet.create({
     marginBottom: 5,
     gap: 10,
   },
-  barLabel: { color: INK, fontSize: 13, fontWeight: "600", flex: 1 },
-  barValue: { color: MUTED, fontSize: 12, fontWeight: "700" },
+  barLabel: { color: INK2, fontSize: 12.5, fontWeight: "700", flex: 1 },
+  barValue: { color: INK, fontSize: 13, fontWeight: "700" },
   barTrack: {
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: BAR_TRACK,
+    height: 7,
+    borderRadius: 99,
+    backgroundColor: SURFACE3,
     overflow: "hidden",
   },
-  barFill: { height: 8, borderRadius: 4 },
+  barFill: { height: 7, borderRadius: 99 },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 12 },
   chip: {
     borderRadius: 999,
     borderWidth: 1,
     borderColor: LINE,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    backgroundColor: "transparent",
+    paddingVertical: 7,
+    paddingHorizontal: 13,
+    backgroundColor: SURFACE2,
   },
-  chipActive: { backgroundColor: GOLD_DIM, borderColor: GOLD },
+  // Mockup .lw-term.on selection: violet ring on surface3.
+  chipActive: { backgroundColor: SURFACE3, borderColor: "#6D28D9" },
   chipText: { color: MUTED, fontSize: 12, fontWeight: "700" },
-  chipTextActive: { color: GOLD },
+  chipTextActive: { color: INK },
+  // Mockup .lw-act: full-width gold-outline action button.
   actionBtn: {
-    alignSelf: "flex-start",
+    alignSelf: "stretch",
+    alignItems: "center",
     marginTop: 12,
     backgroundColor: "transparent",
     borderWidth: 1,
-    borderColor: GOLD,
-    borderRadius: 999,
-    paddingVertical: 9,
+    borderColor: "rgba(232,196,118,0.55)",
+    borderRadius: 12,
+    paddingVertical: 11,
     paddingHorizontal: 16,
   },
   actionBtnText: { color: GOLD, fontSize: 13, fontWeight: "800" },
