@@ -10,17 +10,24 @@
 // the row, never from client claims at send time.
 //
 // NOTE — Bownd has no Supabase Auth session (members sign in with
-// Firebase), so this module builds its own anon-key client from the same
+// Firebase), so this module calls the push registry's security-definer
+// RPCs directly over PostgREST with the anon key, using the same
 // EXPO_PUBLIC_SUPABASE_* env convention Livework/Livework+ use, and
 // registers with the Firebase uid as account_id. When the env vars are
-// absent the client is null and every call no-ops (same house pattern as
+// absent every call no-ops (same house pattern as
 // livework/lib/supabase.ts) — push simply stays dark until configured.
+//
+// Deliberately NO @supabase/supabase-js import here: this module only
+// ever called three RPCs, and supabase-js drags @supabase/realtime-js
+// (and its Node-only `ws` dependency, which imports the Node `stream`
+// core module) into the Metro bundle — that chain broke Bownd's
+// production bundle on 2026-11-11 ("Unable to resolve module stream").
+// Plain fetch to /rest/v1/rpc/* is the same wire call with none of it.
 import { useEffect, useRef } from "react";
 import { Alert, Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 // ---------- Registry client ----------
 
@@ -29,12 +36,24 @@ const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
 export const pushConfigured = Boolean(supabaseUrl && supabaseAnonKey);
 
-const supabase: SupabaseClient | null =
-  pushConfigured && supabaseUrl && supabaseAnonKey
-    ? createClient(supabaseUrl, supabaseAnonKey, {
-        auth: { persistSession: false, autoRefreshToken: false },
-      })
-    : null;
+/** POSTs one security-definer RPC; resolves true only on a 2xx response. */
+async function callPushRpc(fn: string, args: Record<string, unknown>): Promise<boolean> {
+  if (!pushConfigured || !supabaseUrl || !supabaseAnonKey) return false;
+  try {
+    const resp = await fetch(`${supabaseUrl}/rest/v1/rpc/${fn}`, {
+      method: "POST",
+      headers: {
+        apikey: supabaseAnonKey,
+        Authorization: `Bearer ${supabaseAnonKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(args),
+    });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
 
 // ---------- Constants ----------
 
@@ -171,12 +190,12 @@ async function writeCategoriesToRegistry(
   accountId: string,
   prefs: PushCategoryPrefs,
 ): Promise<void> {
-  if (!supabase) return;
+  if (!pushConfigured) return;
   const deviceId = await getPushDeviceId();
   // The anon key has no direct push_tokens access — category writes go
   // through the set_push_token_categories security-definer RPC, keyed by
   // the (firebase uid, per-install device_id) capability pair.
-  await supabase.rpc("set_push_token_categories", {
+  await callPushRpc("set_push_token_categories", {
     p_firebase_uid: accountId,
     p_device_id: deviceId,
     p_categories_enabled: prefs,
@@ -255,7 +274,7 @@ async function fetchExpoPushToken(): Promise<string | null> {
  * permission is not granted, or no token is available.
  */
 export async function registerPushToken(accountId: string | null): Promise<boolean> {
-  if (!supabase || !accountId) return false;
+  if (!pushConfigured || !accountId) return false;
   const permission = await getPushPermissionState();
   if (permission !== "granted") return false;
   const token = await fetchExpoPushToken();
@@ -266,7 +285,7 @@ export async function registerPushToken(accountId: string | null): Promise<boole
   // RPC — the anon key holds no direct push_tokens grant. The RPC
   // upserts on (account_id, app, device_id), hard-coding app='bownd',
   // scope='customer', and clears disabled_at, same as a raw upsert did.
-  const { error } = await supabase.rpc("register_push_token", {
+  const ok = await callPushRpc("register_push_token", {
     p_firebase_uid: accountId,
     p_device_id: deviceId,
     p_expo_push_token: token,
@@ -276,16 +295,16 @@ export async function registerPushToken(accountId: string | null): Promise<boole
     p_device_timezone: deviceTimezone(),
     p_app_version: Constants.expoConfig?.version ?? null,
   });
-  if (error) return false;
+  if (!ok) return false;
   registrationAccountId = accountId;
   return true;
 }
 
 /** Removes this device's registry row (master notifications switch off). */
 export async function unregisterPushToken(accountId: string | null): Promise<void> {
-  if (!supabase || !accountId) return;
+  if (!pushConfigured || !accountId) return;
   const deviceId = await getPushDeviceId();
-  await supabase.rpc("unregister_push_token", {
+  await callPushRpc("unregister_push_token", {
     p_firebase_uid: accountId,
     p_device_id: deviceId,
   });
