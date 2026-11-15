@@ -5,10 +5,20 @@
 // redirect) and `(auth)`. The (tabs) group and the modal screens
 // (detail, list, vibe, redeem, scan) are auto-registered by Expo Router
 // from their files — they need no explicit Stack.Screen entries.
-import React from "react";
+import React, { useEffect } from "react";
 import { Stack, useRouter } from "expo-router";
+import * as SplashScreen from "expo-splash-screen";
 import { AuthProvider, useAuth } from "../lib/auth";
 import { usePushBootstrap } from "../lib/push";
+
+// Splash minimum display (owner requirement, 2026-11-14): the splash must
+// stay visible for at least 2 full seconds. Hold it at module scope, then
+// hide it from RootLayout once the layout has mounted AND 2000ms have
+// elapsed since JS start (the native splash shows from process start, so
+// on-device visibility is always >= 2s).
+SplashScreen.preventAutoHideAsync().catch(() => {});
+const SPLASH_STARTED_AT = Date.now();
+const SPLASH_MIN_MS = 2000;
 
 // Push notifications bootstrap (push-notifications-plan.md §1.1): wires
 // the foreground handler, Android channels, tap deep-link routing, and
@@ -21,6 +31,14 @@ function PushBootstrap() {
 }
 
 export default function RootLayout() {
+  useEffect(() => {
+    const remaining = Math.max(0, SPLASH_MIN_MS - (Date.now() - SPLASH_STARTED_AT));
+    const timer = setTimeout(() => {
+      SplashScreen.hideAsync().catch(() => {});
+    }, remaining);
+    return () => clearTimeout(timer);
+  }, []);
+
   return (
     <AuthProvider>
       <PushBootstrap />
