@@ -354,12 +354,12 @@ export default function PersonalScreen() {
             style={refStyles.personalHero}
           >
             <View style={refStyles.personalHead}>
-              <Text style={[refStyles.personalTitle, fonts.display]}>Personal</Text>
+              <Text style={[refStyles.personalTitle, fonts.display]}>Rewards</Text>
               <TouchableOpacity onPress={() => router.push("/(tabs)/persona")} hitSlop={8}>
                 <Ionicons name="settings-outline" color="white" size={22} />
               </TouchableOpacity>
             </View>
-            <Text style={refStyles.personalSub}>Rewards · Favorites · Adventures</Text>
+            <Text style={refStyles.personalSub}>Points · Favorites · Adventures</Text>
             <View style={refStyles.avatarRing}>
               <View style={refStyles.avatar}>
                 <Ionicons name="person" size={68} color="#eeeaf3" />
@@ -776,8 +776,8 @@ export default function PersonalScreen() {
           </View>
         </ScrollView>
       </SafeAreaView>
-      <View style={{ backgroundColor: "#171129", paddingBottom: insets.bottom }}>
-        <BottomNav active="Personal" onNavigate={go} />
+      <View style={{ backgroundColor: "#0F0A1F", paddingBottom: insets.bottom }}>
+        <BottomNav active="Rewards" onNavigate={go} />
       </View>
     </View>
   );

@@ -22,6 +22,7 @@ import {
   Linking,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -45,7 +46,6 @@ import {
   Pill,
   Search,
   Section,
-  TopTabs,
   formatWhen,
   getVenueName,
   parseISO,
@@ -403,6 +403,10 @@ export default function EventsScreen() {
 
   return (
     <View style={refStyles.root}>
+      <LinearGradient
+        colors={["#0A0616", "#1E1733"]}
+        style={StyleSheet.absoluteFillObject}
+      />
       <ScrollView
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
@@ -412,8 +416,7 @@ export default function EventsScreen() {
         ]}
       >
         <StatusBar barStyle="light-content" backgroundColor="#0A0616" />
-        <Search value={query} onChange={setQuery} placeholder="Explore events, venues, vibes..." />
-        <TopTabs active="Events" onNavigate={go} />
+        <Search value={query} onChange={setQuery} placeholder="Search events, venues, neighborhoods" />
 
         <Text style={[refStyles.pageTitle, fonts.display]}>Events</Text>
         <Text style={[refStyles.subtitle, fonts.bodySemiBold]}>{headerSubtitle}</Text>
@@ -582,7 +585,7 @@ export default function EventsScreen() {
           ))
         )}
       </ScrollView>
-      <View style={{ backgroundColor: "#171129", paddingBottom: insets.bottom }}>
+      <View style={{ backgroundColor: "#0F0A1F", paddingBottom: insets.bottom }}>
         <BottomNav active="Events" onNavigate={go} />
       </View>
     </View>
@@ -636,13 +639,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: "rgba(245,195,106,0.16)",
+    backgroundColor: "rgba(232,196,118,0.13)",
     borderWidth: 1,
-    borderColor: "rgba(245,195,106,0.45)",
+    borderColor: "rgba(232,196,118,0.40)",
     marginBottom: 10,
   },
   showcaseChipText: {
-    color: "#f5c36a",
+    color: "#e8c476",
     fontSize: 12,
     fontWeight: "900",
   },

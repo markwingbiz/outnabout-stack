@@ -1,11 +1,17 @@
 // app/ui/reference.tsx
 // Shared UI extracted from the reference preview (App.tsx): design tokens,
-// Pill, Section, EventCard, Search, TopTabs, BottomNav, plus the shared
-// formatWhen / venue-name helpers. StyleSheet values are copied exactly
-// from App.tsx. EventCard renders a background image (TEMP Scene photo
-// via lib/placeholders.ts, or the listing's real photoUrl when one exists)
-// under the App.tsx overlay gradient — never a remote image, never
-// presented as a photo. All data comes from the real backend via the screens.
+// Pill, Section, EventCard, Search, BottomNav, plus the shared
+// formatWhen / venue-name helpers. EventCard renders a background image
+// (TEMP Scene photo via lib/placeholders.ts, or the listing's real
+// photoUrl when one exists) under the App.tsx overlay gradient — never
+// a remote image, never presented as a photo. All data comes from the
+// real backend via the screens.
+//
+// Premium skeleton pass (2026-11-15): the bottom nav is the approved
+// mockup's five-item bar (Home, Events, NYE, Venues, Rewards) and the
+// top tab row is GONE — the mockup has no top tabs. Search, Pill and
+// Section are restyled onto the premium tokens in app/ui/theme.ts
+// (deep plum surfaces, champagne-gold hairlines, brand gradient).
 import React from "react";
 import {
   View,
@@ -21,8 +27,10 @@ import { Ionicons } from "@expo/vector-icons";
 
 import type { Venue } from "../../lib/store";
 import { resolveEventCardImage } from "../../lib/placeholders";
+import { premium } from "./theme";
+import { usePremiumFonts } from "./premium";
 
-export type Tab = "Home" | "Events" | "Personal";
+export type Tab = "Home" | "Events" | "NYE" | "Venues" | "Rewards";
 export const PURPLE = "#5B34E0";
 export const INK = "#0A0616";
 export const WIDTH = Dimensions.get("window").width;
@@ -30,7 +38,9 @@ export const WIDTH = Dimensions.get("window").width;
 export const TAB_ROUTES: Record<Tab, string> = {
   Home: "/(tabs)",
   Events: "/(tabs)/events",
-  Personal: "/(tabs)/personal",
+  NYE: "/(tabs)/nye",
+  Venues: "/(tabs)/venues",
+  Rewards: "/(tabs)/personal",
 };
 
 // ---------------------------------------------------------------------------
@@ -81,9 +91,25 @@ export function Pill({
   active?: boolean;
   onPress: () => void;
 }) {
+  const fonts = usePremiumFonts();
+  if (active) {
+    // Mockup .fchip.on — the brand gradient, white text.
+    return (
+      <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
+        <LinearGradient
+          colors={[...premium.gradient]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+          style={[refStyles.pill, refStyles.pillGradient]}
+        >
+          <Text style={[refStyles.pillText, fonts.bodyExtraBold]}>{label}</Text>
+        </LinearGradient>
+      </TouchableOpacity>
+    );
+  }
   return (
-    <TouchableOpacity onPress={onPress} style={[refStyles.pill, active && refStyles.pillActive]}>
-      <Text style={refStyles.pillText}>{label}</Text>
+    <TouchableOpacity onPress={onPress} style={refStyles.pill} activeOpacity={0.85}>
+      <Text style={[refStyles.pillText, fonts.bodyBold]}>{label}</Text>
     </TouchableOpacity>
   );
 }
@@ -97,13 +123,16 @@ export function Section({
   subtitle?: string;
   onPress?: () => void;
 }) {
+  const fonts = usePremiumFonts();
   const inner = (
     <>
       <View>
-        <Text style={refStyles.sectionTitle}>{title}</Text>
-        {subtitle ? <Text style={refStyles.sectionSub}>{subtitle}</Text> : null}
+        <Text style={[refStyles.sectionTitle, fonts.displayBold]}>{title}</Text>
+        {subtitle ? (
+          <Text style={[refStyles.sectionSub, fonts.bodySemiBold]}>{subtitle}</Text>
+        ) : null}
       </View>
-      <Ionicons name="chevron-forward" color="#b7aecb" size={17} />
+      <Ionicons name="chevron-forward" color={premium.muted} size={17} />
     </>
   );
   if (onPress) {
@@ -158,7 +187,7 @@ export function EventCard({
             {badge && !compact ? ` · ${badge}` : ""}
           </Text>
           <Text style={refStyles.eventLabel}>
-            <Text style={{ color: "#f5c36a" }}>★</Text> {label}
+            <Text style={{ color: premium.gold }}>★</Text> {label}
           </Text>
         </LinearGradient>
       </ImageBackground>
@@ -175,42 +204,53 @@ export function Search({
   onChange: (s: string) => void;
   placeholder: string;
 }) {
+  const fonts = usePremiumFonts();
   return (
     <View style={refStyles.search}>
-      <Ionicons name="search-outline" color="#ddd5e9" size={19} />
+      <Ionicons name="search" color={premium.muted} size={17} />
       <TextInput
         placeholder={placeholder}
-        placeholderTextColor="#ddd6e8"
+        placeholderTextColor={premium.muted}
         value={value}
         onChangeText={onChange}
-        style={refStyles.searchInput}
+        style={[refStyles.searchInput, fonts.bodySemiBold]}
       />
     </View>
   );
 }
 
-export function TopTabs({
-  active,
-  onNavigate,
+// HeaderAvatar — the mockup Home header's gradient initial circle.
+// Renders the real account initial when one is known; a neutral
+// person glyph for guests. Lives here so every tab screen's header
+// carries the same element.
+export function HeaderAvatar({
+  initial,
+  onPress,
 }: {
-  active: Tab;
-  onNavigate: (route: string) => void;
+  initial?: string | null;
+  onPress: () => void;
 }) {
   return (
-    <View style={refStyles.topTabs}>
-      {(["Home", "Events", "Personal"] as Tab[]).map((t) => (
-        <TouchableOpacity
-          key={t}
-          onPress={() => onNavigate(TAB_ROUTES[t])}
-          style={[refStyles.topTab, active === t && refStyles.topTabActive]}
-        >
-          <Text style={refStyles.topTabText}>{t}</Text>
-        </TouchableOpacity>
-      ))}
-    </View>
+    <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
+      <LinearGradient
+        colors={[...premium.gradient]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={refStyles.avatarCircle}
+      >
+        {initial ? (
+          <Text style={refStyles.avatarInitial}>{initial}</Text>
+        ) : (
+          <Ionicons name="person" size={17} color="#fff" />
+        )}
+      </LinearGradient>
+    </TouchableOpacity>
   );
 }
 
+// BottomNav — the mockup's five-item tab bar (Home, Events, NYE,
+// Venues, Rewards). Active item is white with a small gradient dot
+// under the label; there is no top tab row anywhere in the app.
 export function BottomNav({
   active,
   onNavigate,
@@ -218,23 +258,52 @@ export function BottomNav({
   active: Tab;
   onNavigate: (route: string) => void;
 }) {
+  const fonts = usePremiumFonts();
   const icons: Record<Tab, keyof typeof Ionicons.glyphMap> = {
     Home: "home-outline",
     Events: "calendar-outline",
-    Personal: "person-outline",
+    NYE: "ticket-outline",
+    Venues: "location-outline",
+    Rewards: "star-outline",
   };
   return (
     <View style={refStyles.bottom}>
-      {(["Home", "Events", "Personal"] as Tab[]).map((t) => (
-        <TouchableOpacity
-          key={t}
-          onPress={() => onNavigate(TAB_ROUTES[t])}
-          style={[refStyles.bottomItem, active === t && refStyles.bottomSelected]}
-        >
-          <Ionicons name={icons[t]} size={22} color={active === t ? "#fff" : "#aaa4b9"} />
-          <Text style={[refStyles.bottomText, active === t && { color: "#fff" }]}>{t}</Text>
-        </TouchableOpacity>
-      ))}
+      {(Object.keys(TAB_ROUTES) as Tab[]).map((t) => {
+        const isActive = active === t;
+        return (
+          <TouchableOpacity
+            key={t}
+            onPress={() => onNavigate(TAB_ROUTES[t])}
+            style={refStyles.bottomItem}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name={icons[t]}
+              size={21}
+              color={isActive ? "#fff" : premium.muted}
+            />
+            <Text
+              style={[
+                refStyles.bottomText,
+                fonts.bodyExtraBold,
+                isActive && { color: "#fff" },
+              ]}
+            >
+              {t}
+            </Text>
+            {isActive ? (
+              <LinearGradient
+                colors={[...premium.gradient]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={refStyles.bottomDot}
+              />
+            ) : (
+              <View style={refStyles.bottomDot} />
+            )}
+          </TouchableOpacity>
+        );
+      })}
     </View>
   );
 }
@@ -245,59 +314,51 @@ export function BottomNav({
 
 export const refStyles = StyleSheet.create({
   root: { flex: 1, backgroundColor: INK },
-  scroll: { paddingHorizontal: 12, paddingTop: 16, paddingBottom: 26 },
+  scroll: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 26 },
   search: {
-    height: 45,
-    backgroundColor: "#201b30",
-    borderRadius: 17,
+    height: 48,
+    backgroundColor: premium.surface2,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: "#30283f",
+    borderColor: premium.line,
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 14,
-    marginBottom: 12,
+    marginBottom: 14,
     gap: 9,
   },
-  searchInput: { color: "white", fontSize: 15, flex: 1 },
-  topTabs: {
-    flexDirection: "row",
-    backgroundColor: "#221c33",
-    borderRadius: 15,
-    padding: 3,
-    marginBottom: 22,
-  },
-  topTab: {
-    flex: 1,
+  searchInput: { color: premium.ink, fontSize: 14, flex: 1 },
+  avatarCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 7,
-    borderRadius: 12,
   },
-  topTabActive: { backgroundColor: "#3b354d", borderWidth: 1, borderColor: "#62596d" },
-  topTabText: { color: "white", fontSize: 14 },
+  avatarInitial: { color: "#fff", fontSize: 15, fontWeight: "800" },
   pageTitle: { color: "#fff", fontSize: 26, fontWeight: "700", marginBottom: 3 },
-  subtitle: { color: "#d4ccdf", fontSize: 14, marginBottom: 12 },
+  subtitle: { color: premium.ink2, fontSize: 14, marginBottom: 12 },
   filterWrap: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginBottom: 10 },
   pill: {
-    backgroundColor: "#30283e",
-    borderRadius: 22,
-    paddingVertical: 9,
+    backgroundColor: premium.surface2,
+    borderRadius: 999,
+    paddingVertical: 8,
     paddingHorizontal: 14,
     borderWidth: 1,
-    borderColor: "#41354e",
+    borderColor: premium.line2,
   },
-  pillActive: { backgroundColor: "#463858", borderColor: "#69577a" },
-  pillText: { color: "white", fontSize: 13 },
+  pillGradient: { borderWidth: 0 },
+  pillText: { color: premium.ink2, fontSize: 12.5, fontWeight: "700" },
   personaRow: { alignItems: "flex-end", marginBottom: 15 },
   section: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginTop: 12,
-    marginBottom: 10,
+    marginTop: 20,
+    marginBottom: 11,
   },
-  sectionTitle: { color: "#fff", fontSize: 21, fontWeight: "700" },
-  sectionSub: { color: "#b9b0c7", fontSize: 13, marginTop: 3 },
+  sectionTitle: { color: premium.ink, fontSize: 17, fontWeight: "800" },
+  sectionSub: { color: premium.muted, fontSize: 12.5, marginTop: 3 },
   tailored: {
     backgroundColor: "#21192f",
     borderWidth: 1,
@@ -317,8 +378,8 @@ export const refStyles = StyleSheet.create({
     overflow: "hidden",
     marginBottom: 11,
     borderWidth: 1,
-    borderColor: "#403448",
-    backgroundColor: "#231b33",
+    borderColor: premium.line,
+    backgroundColor: premium.surface,
   },
   cardOverlay: {
     flex: 1,
@@ -343,16 +404,16 @@ export const refStyles = StyleSheet.create({
   },
   venueName: { color: "white", fontSize: 12, textAlign: "center", marginTop: 7 },
   bottom: {
-    height: 70,
+    height: 64,
     flexDirection: "row",
-    backgroundColor: "#171129",
+    backgroundColor: "#0F0A1F",
     borderTopWidth: 1,
-    borderColor: "#40334f",
-    paddingBottom: 5,
+    borderColor: premium.line,
+    paddingTop: 8,
   },
-  bottomItem: { flex: 1, justifyContent: "center", alignItems: "center", gap: 4 },
-  bottomSelected: { backgroundColor: "#34284c", borderTopLeftRadius: 18, borderTopRightRadius: 18 },
-  bottomText: { color: "#aaa4b9", fontSize: 12 },
+  bottomItem: { flex: 1, justifyContent: "flex-start", alignItems: "center", gap: 3 },
+  bottomText: { color: premium.muted, fontSize: 10.5, fontWeight: "800" },
+  bottomDot: { width: 4, height: 4, borderRadius: 2, marginTop: 1 },
   personalHero: { height: 365, paddingHorizontal: 20, paddingTop: 22, alignItems: "center" },
   personalHead: { width: "100%", flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   personalTitle: { color: "white", fontSize: 31, fontWeight: "700" },

@@ -41,9 +41,10 @@ import {
 } from "../ui/premium";
 import {
   BottomNav,
+  HeaderAvatar,
   Search,
   Section,
-  TopTabs,
+  TAB_ROUTES,
   formatWhen,
   getVenueName,
   refStyles,
@@ -149,11 +150,20 @@ export default function Home() {
   // ends, the next campaign takes the slot with no code change.
   const activeCampaign = useMemo(() => getActiveCampaign(), []);
 
-  // Points pill: REAL balance only, and only when the signed-in
-  // profile actually holds points. Free accounts and guests never see
-  // a fabricated balance here — points are framed as a member benefit
-  // in the Personal hub instead.
+  // Points pill: the mockup header carries the pill as part of its
+  // shape, so it renders with the REAL profile balance — including a
+  // real 0 ("★ 0 pts · $0.00"). The value always comes from the
+  // signed-in profile (guests have no profile, so 0); nothing is
+  // invented, the pill is simply never hidden.
   const pillPoints = profile?.points ?? 0;
+
+  // Header avatar initial: the account's real initial (profile name,
+  // auth name, or email), never a stock letter.
+  const avatarInitial = useMemo(() => {
+    const raw = (profile?.displayName || user?.displayName || user?.email || "").trim();
+    const ch = raw.replace(/^[^A-Za-z0-9]+/, "").charAt(0);
+    return ch ? ch.toUpperCase() : null;
+  }, [profile?.displayName, user?.displayName, user?.email]);
 
   const greeting = useMemo(() => {
     const h = new Date().getHours();
@@ -245,7 +255,7 @@ export default function Home() {
   return (
     <View style={refStyles.root}>
       <LinearGradient
-        colors={["#0A0616", "#1E1733", "#0A0616"]}
+        colors={["#0A0616", "#1E1733"]}
         style={StyleSheet.absoluteFillObject}
       />
       <ScrollView
@@ -257,23 +267,25 @@ export default function Home() {
         ]}
       >
         <StatusBar barStyle="light-content" backgroundColor="#0A0616" />
-        {/* Premium header: greeting + headline + real points pill */}
-        <View style={styles.headBlock}>
-          <Text style={[styles.headHi, fonts.bodyBold]}>{greeting} · Kansas City</Text>
-          <Text style={[styles.headTitle, fonts.display]}>Find what&apos;s happening</Text>
-          {pillPoints > 0 && (
+        {/* Premium header (mockup .app-head): greeting eyebrow +
+            headline + points pill on the left, gradient avatar
+            circle on the right. No top tab row — the mockup has none. */}
+        <View style={styles.headRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.headHi, fonts.bodyBold]}>{greeting} · Kansas City</Text>
+            <Text style={[styles.headTitle, fonts.display]}>Find what&apos;s happening</Text>
             <TouchableOpacity
-              onPress={() => go("/(tabs)/personal")}
+              onPress={() => go(TAB_ROUTES.Rewards)}
               activeOpacity={0.85}
               style={{ marginTop: 9, alignSelf: "flex-start" }}
             >
               <PointsPill points={pillPoints} />
             </TouchableOpacity>
-          )}
+          </View>
+          <HeaderAvatar initial={avatarInitial} onPress={() => go(TAB_ROUTES.Rewards)} />
         </View>
-        <Search value={q} onChange={setQ} placeholder="Explore" />
-        <TopTabs active="Home" onNavigate={go} />
-        <View style={{ height: 22 }} />
+        <Search value={q} onChange={setQ} placeholder="Search events, venues, neighborhoods" />
+        <View style={{ height: 8 }} />
 
         {usingDemo && !loading && (
           <View style={styles.showcaseChip}>
@@ -432,7 +444,7 @@ export default function Home() {
           </>
         )}
       </ScrollView>
-      <View style={{ backgroundColor: "#171129", paddingBottom: insets.bottom }}>
+      <View style={{ backgroundColor: "#0F0A1F", paddingBottom: insets.bottom }}>
         <BottomNav active="Home" onNavigate={go} />
       </View>
     </View>
@@ -440,8 +452,15 @@ export default function Home() {
 }
 
 const styles = StyleSheet.create({
-  headBlock: { marginTop: 2, marginBottom: 14 },
-  headHi: { color: "#8f96b0", fontSize: 12.5, fontWeight: "700" },
+  headRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+    marginTop: 2,
+    marginBottom: 14,
+  },
+  headHi: { color: "#968cab", fontSize: 12.5, fontWeight: "700" },
   headTitle: { color: "#fff", fontSize: 23, fontWeight: "800", marginTop: 2 },
   seeResultsRow: {
     flexDirection: "row",
@@ -464,23 +483,23 @@ const styles = StyleSheet.create({
   },
   orbsLabel: {
     color: "#fff",
-    fontSize: 21,
-    fontWeight: "700",
-    marginTop: 12,
-    marginBottom: 10,
+    fontSize: 17,
+    fontWeight: "800",
+    marginTop: 20,
+    marginBottom: 11,
   },
   showcaseChip: {
     alignSelf: "flex-start",
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: "rgba(245,195,106,0.16)",
+    backgroundColor: "rgba(232,196,118,0.13)",
     borderWidth: 1,
-    borderColor: "rgba(245,195,106,0.45)",
+    borderColor: "rgba(232,196,118,0.40)",
     marginBottom: 10,
   },
   showcaseChipText: {
-    color: "#f5c36a",
+    color: "#e8c476",
     fontSize: 12,
     fontWeight: "900",
   },

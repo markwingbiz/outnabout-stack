@@ -190,9 +190,10 @@ export function PremiumWordmark({
 }
 
 // ---------------------------------------------------------------------------
-// Points pill — the gold header pill from the premium Home. Render only
-// with a real balance from a real points account; never with a
-// fabricated 0 (free accounts see points framed as a member benefit).
+// Points pill — the gold header pill from the premium Home. The value
+// is always the real profile balance; the Home header renders it at
+// 0 too (mockup header shape), where 0 is the true balance of a new
+// or free account — never an invented positive number.
 // ---------------------------------------------------------------------------
 
 export function PointsPill({ points }: { points: number }) {

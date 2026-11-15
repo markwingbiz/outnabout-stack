@@ -30,8 +30,8 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect, useRouter } from "expo-router";
-import { THEME } from "../lib/theme";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../lib/auth";
 import { getUserTenantIds, getUserVenues } from "../lib/tenant";
@@ -44,11 +44,24 @@ import {
 } from "../lib/data";
 import MultiLine from "../components/MultiLine";
 
-// Premium accent (brochure gold) — local because lib/theme.ts is
-// shared and off-limits for this pass.
+// Premium palette (brochure plum/gold) — local because lib/theme.ts
+// is shared and off-limits for this pass. GOLD was already local.
 const GOLD = "#E8C476";
 const GOLD_DIM = "rgba(232,196,118,0.16)";
+const GOLD_SOFT = "rgba(232,196,118,0.13)";
+const GOLD_BORDER = "rgba(232,196,118,0.40)";
 const BAR_TRACK = "rgba(255,255,255,0.08)";
+const SURFACE = "#171129";
+const SURFACE2 = "#1E1733";
+const LINE = "rgba(232,196,118,0.14)";
+const LINE_SOFT = "rgba(255,255,255,0.06)";
+const INK = "#F5F3FB";
+const INK2 = "#C8C3DC";
+const MUTED = "#968FB2";
+const VIOLET = "#7A2BD0";
+const BLUE = "#2F6BFF";
+const GREEN = "#3DDC97";
+const LIGHT_VIOLET = "#A678F0";
 
 type RedemptionLite = {
   id: string;
@@ -87,8 +100,8 @@ function statusBucket(status: string | null): string {
 const STATUS_ORDER = ["Published", "Spotlight", "Draft"];
 const STATUS_COLORS: Record<string, string> = {
   Published: GOLD,
-  Spotlight: THEME.purple,
-  Draft: THEME.blue,
+  Spotlight: VIOLET,
+  Draft: BLUE,
 };
 
 function BarRow({
@@ -313,6 +326,26 @@ export default function AnalyticsScreen() {
     return buckets;
   }, [redemptions]);
 
+  // Hero comparison pill: check-ins in the chart's 8 weeks vs the 8
+  // weeks before them, from the same loaded redemptions. Renders
+  // nothing when the earlier window has no check-ins to compare
+  // against (a percentage off zero would be invented).
+  const heroDelta = useMemo(() => {
+    if (!redemptions || redemptions.length === 0) return null;
+    const now = Date.now();
+    const span = 8 * 7 * 24 * 60 * 60 * 1000;
+    const cur = redemptions.filter(
+      (r) => r.atMillis !== null && r.atMillis >= now - span,
+    ).length;
+    const prior = redemptions.filter(
+      (r) => r.atMillis !== null && r.atMillis >= now - 2 * span && r.atMillis < now - span,
+    ).length;
+    if (prior === 0) return null;
+    const pct = Math.round(((cur - prior) / prior) * 100);
+    if (pct === 0) return "Steady vs the 8 weeks before";
+    return `${pct > 0 ? "▲" : "▼"} ${Math.abs(pct)}% vs the 8 weeks before`;
+  }, [redemptions]);
+
   const perEvent = useMemo(() => {
     if (!redemptions) return { rows: [] as { label: string; value: number }[], unlinked: 0 };
     const counts = new Map<string, number>();
@@ -437,13 +470,18 @@ export default function AnalyticsScreen() {
 
   return (
     <SafeAreaView style={styles.root}>
+      <LinearGradient
+        colors={["#0A0616", "#1E1733"]}
+        style={StyleSheet.absoluteFillObject}
+      />
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
         <View style={styles.header}>
-          <Pressable onPress={() => router.back()} hitSlop={10}>
-            <Ionicons name="chevron-back" size={24} color="#fff" />
+          <Pressable style={styles.backPill} onPress={() => router.back()} hitSlop={10}>
+            <Ionicons name="chevron-back" size={15} color={INK2} />
+            <Text style={styles.backText}>Back</Text>
           </Pressable>
           <Text style={styles.title}>Analytics & Insights</Text>
-          <View style={{ width: 24 }} />
+          <View style={{ width: 64 }} />
         </View>
 
         <Text style={styles.intro}>
@@ -451,6 +489,83 @@ export default function AnalyticsScreen() {
           redemptions in Livework — anything Bownd doesn't measure yet says so instead of
           guessing.
         </Text>
+
+        {/* HERO — Check-ins at the door (the mockup's hero chart):
+            the most recent week's real redemptions first, the 8-week
+            line, and an honest comparison against the 8 weeks before.
+            Same loaded data the redemptions card always used — the
+            weekly series now renders as the hero line instead of
+            bars; totals, by-event rows and the empty state are
+            unchanged. No hero numbers render when there are no
+            redemptions yet. */}
+        <View style={styles.card}>
+          <SectionTitle>Check-ins at the door</SectionTitle>
+          {redemptionTotal === 0 ? (
+            <>
+              <Text style={styles.emptyText}>No redemptions yet.</Text>
+              <Text style={styles.note}>
+                Redemptions appear here once Bownd sync is live. Bownd customers redeem
+                offers in the Bownd app; those redemptions flow back to your venues.
+              </Text>
+            </>
+          ) : (
+            <>
+              {weeklyTrend.length > 0 && (
+                <>
+                  <View style={styles.heroRow}>
+                    <View>
+                      <Text style={styles.heroNum}>
+                        {weeklyTrend[weeklyTrend.length - 1].value}
+                      </Text>
+                      <Text style={styles.heroCap}>LAST 7 DAYS</Text>
+                    </View>
+                    {!!heroDelta && (
+                      <View style={styles.heroPill}>
+                        <Text style={styles.heroPillText}>{heroDelta}</Text>
+                      </View>
+                    )}
+                  </View>
+                  <MultiLine
+                    series={[{ color: LIGHT_VIOLET, points: weeklyTrend.map((b) => b.value) }]}
+                    width={320}
+                    height={110}
+                  />
+                  <View style={styles.heroAxis}>
+                    <Text style={styles.heroAxisText}>8 weeks ago</Text>
+                    <Text style={styles.heroAxisText}>this week</Text>
+                  </View>
+                </>
+              )}
+              <Text style={styles.subTitle}>All time</Text>
+              <Text style={styles.bigMoney}>{redemptionTotal}</Text>
+              <Text style={styles.note}>Total redemptions recorded for your venues.</Text>
+              {perEvent.rows.length > 0 && (
+                <>
+                  <Text style={styles.subTitle}>By event</Text>
+                  {perEvent.rows.map((r) => (
+                    <BarRow
+                      key={r.label}
+                      label={r.label}
+                      value={r.value}
+                      max={Math.max(...perEvent.rows.map((x) => x.value), 1)}
+                      color={VIOLET}
+                    />
+                  ))}
+                </>
+              )}
+              {perEvent.unlinked > 0 && (
+                <Text style={styles.note}>
+                  {perEvent.unlinked} redemption{perEvent.unlinked === 1 ? " isn't" : "s aren't"}{" "}
+                  linked to a specific event yet — they count in your total above, and link
+                  up as the Bownd sync mapping catches up.
+                </Text>
+              )}
+              <Pressable style={styles.actionBtn} onPress={() => router.push("/redemptions")}>
+                <Text style={styles.actionBtnText}>See all redemptions</Text>
+              </Pressable>
+            </>
+          )}
+        </View>
 
         {/* Verified revenue — computed exactly as the dashboard computes
             it ($0.00 until real payments exist). */}
@@ -485,7 +600,7 @@ export default function AnalyticsScreen() {
                   label={r.label}
                   value={r.value}
                   max={statusBars.total}
-                  color={STATUS_COLORS[r.label] ?? THEME.green}
+                  color={STATUS_COLORS[r.label] ?? GREEN}
                   detail={`${Math.round((r.value / statusBars.total) * 100)}% of ${statusBars.total}`}
                 />
               ))}
@@ -536,7 +651,7 @@ export default function AnalyticsScreen() {
           ) : (
             <>
               <MultiLine
-                series={[{ color: GOLD, points: activityPoints }]}
+                series={[{ color: LIGHT_VIOLET, points: activityPoints }]}
                 width={320}
                 height={110}
               />
@@ -551,58 +666,6 @@ export default function AnalyticsScreen() {
           )}
         </View>
 
-        {/* Redemptions */}
-        <View style={styles.card}>
-          <SectionTitle>Redemptions</SectionTitle>
-          {redemptionTotal === 0 ? (
-            <>
-              <Text style={styles.emptyText}>No redemptions yet.</Text>
-              <Text style={styles.note}>
-                Redemptions appear here once Bownd sync is live. Bownd customers redeem
-                offers in the Bownd app; those redemptions flow back to your venues.
-              </Text>
-            </>
-          ) : (
-            <>
-              <Text style={styles.bigMoney}>{redemptionTotal}</Text>
-              <Text style={styles.note}>Total redemptions recorded for your venues.</Text>
-              <Text style={styles.subTitle}>Last 8 weeks</Text>
-              {weeklyTrend.map((b) => (
-                <BarRow
-                  key={b.label}
-                  label={b.label}
-                  value={b.value}
-                  max={Math.max(...weeklyTrend.map((x) => x.value), 1)}
-                  color={GOLD}
-                />
-              ))}
-              {perEvent.rows.length > 0 && (
-                <>
-                  <Text style={styles.subTitle}>By event</Text>
-                  {perEvent.rows.map((r) => (
-                    <BarRow
-                      key={r.label}
-                      label={r.label}
-                      value={r.value}
-                      max={Math.max(...perEvent.rows.map((x) => x.value), 1)}
-                      color={THEME.purple}
-                    />
-                  ))}
-                </>
-              )}
-              {perEvent.unlinked > 0 && (
-                <Text style={styles.note}>
-                  {perEvent.unlinked} redemption{perEvent.unlinked === 1 ? " isn't" : "s aren't"}{" "}
-                  linked to a specific event yet — they count in your total above, and link
-                  up as the Bownd sync mapping catches up.
-                </Text>
-              )}
-              <Pressable style={styles.actionBtn} onPress={() => router.push("/redemptions")}>
-                <Text style={styles.actionBtnText}>See all redemptions</Text>
-              </Pressable>
-            </>
-          )}
-        </View>
 
         {/* Presence — what customers see (spec §6.1, Phase 1) */}
         <View style={styles.card}>
@@ -645,14 +708,14 @@ export default function AnalyticsScreen() {
               label="Venue page views"
               value={curiosity.venueViews}
               max={funnelMax}
-              color={THEME.purple}
+              color={VIOLET}
             />
-            <BarRow label="Saves" value={curiosity.saves} max={funnelMax} color={THEME.blue} />
+            <BarRow label="Saves" value={curiosity.saves} max={funnelMax} color={BLUE} />
             <BarRow
               label="Checkout starts"
               value={curiosity.checkouts}
               max={funnelMax}
-              color={THEME.green}
+              color={GREEN}
             />
             {curiosity.views > 0 && (
               <Text style={styles.takeaway}>
@@ -735,14 +798,26 @@ export default function AnalyticsScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: THEME.bg },
+  root: { flex: 1, backgroundColor: "#0A0616" },
   content: { padding: 16, paddingBottom: 40, gap: 14 },
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  title: { color: THEME.text, fontSize: 20, fontWeight: "800" },
-  intro: { color: THEME.textMuted, fontSize: 13, lineHeight: 19 },
+  backPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+    backgroundColor: SURFACE2,
+    borderWidth: 1,
+    borderColor: LINE,
+    borderRadius: 999,
+    paddingVertical: 6,
+    paddingHorizontal: 11,
+  },
+  backText: { color: INK2, fontSize: 12.5, fontWeight: "700" },
+  title: { color: INK, fontSize: 20, fontWeight: "800" },
+  intro: { color: MUTED, fontSize: 13, lineHeight: 19 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, gap: 10 },
-  centerTitle: { color: THEME.text, fontSize: 18, fontWeight: "800", textAlign: "center" },
-  centerSub: { color: THEME.textMuted, fontSize: 13, textAlign: "center", lineHeight: 19 },
+  centerTitle: { color: INK, fontSize: 18, fontWeight: "800", textAlign: "center" },
+  centerSub: { color: MUTED, fontSize: 13, textAlign: "center", lineHeight: 19 },
   centerBtn: {
     marginTop: 8,
     backgroundColor: GOLD,
@@ -752,24 +827,44 @@ const styles = StyleSheet.create({
   },
   centerBtnText: { color: "#171129", fontSize: 14, fontWeight: "800" },
   card: {
-    backgroundColor: THEME.card,
-    borderColor: THEME.cardBorder,
+    backgroundColor: SURFACE,
+    borderColor: LINE,
     borderWidth: 1,
-    borderRadius: THEME.radius,
+    borderRadius: 18,
     padding: 16,
   },
-  sectionTitle: { color: THEME.text, fontSize: 15, fontWeight: "800", marginBottom: 12 },
+  sectionTitle: { color: INK, fontSize: 15.5, fontWeight: "800", marginBottom: 12 },
   subTitle: {
-    color: THEME.text,
+    color: INK,
     fontSize: 13,
     fontWeight: "700",
     marginTop: 16,
     marginBottom: 8,
   },
   bigMoney: { color: GOLD, fontSize: 30, fontWeight: "800", marginBottom: 6 },
-  note: { color: THEME.textMuted, fontSize: 12, lineHeight: 17, marginTop: 6 },
-  emptyText: { color: THEME.text, fontSize: 14, fontWeight: "700" },
-  takeaway: { color: THEME.textMuted, fontSize: 12.5, lineHeight: 18, marginTop: 12 },
+  heroRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    marginBottom: 6,
+  },
+  heroNum: { color: INK, fontSize: 34, fontWeight: "800" },
+  heroCap: { color: MUTED, fontSize: 10, fontWeight: "800", letterSpacing: 1, marginTop: 2 },
+  heroPill: {
+    backgroundColor: GOLD_SOFT,
+    borderWidth: 1,
+    borderColor: GOLD_BORDER,
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    marginTop: 6,
+  },
+  heroPillText: { color: GOLD, fontSize: 11, fontWeight: "800" },
+  heroAxis: { flexDirection: "row", justifyContent: "space-between", marginTop: 4 },
+  heroAxisText: { color: MUTED, fontSize: 10 },
+  note: { color: MUTED, fontSize: 12, lineHeight: 17, marginTop: 6 },
+  emptyText: { color: INK, fontSize: 14, fontWeight: "700" },
+  takeaway: { color: INK2, fontSize: 12.5, lineHeight: 18, marginTop: 12 },
   barRow: { marginBottom: 10 },
   barHead: {
     flexDirection: "row",
@@ -778,8 +873,8 @@ const styles = StyleSheet.create({
     marginBottom: 5,
     gap: 10,
   },
-  barLabel: { color: THEME.text, fontSize: 13, fontWeight: "600", flex: 1 },
-  barValue: { color: THEME.textMuted, fontSize: 12, fontWeight: "700" },
+  barLabel: { color: INK, fontSize: 13, fontWeight: "600", flex: 1 },
+  barValue: { color: MUTED, fontSize: 12, fontWeight: "700" },
   barTrack: {
     height: 8,
     borderRadius: 4,
@@ -791,28 +886,30 @@ const styles = StyleSheet.create({
   chip: {
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: THEME.cardBorder,
+    borderColor: LINE,
     paddingVertical: 6,
     paddingHorizontal: 12,
     backgroundColor: "transparent",
   },
   chipActive: { backgroundColor: GOLD_DIM, borderColor: GOLD },
-  chipText: { color: THEME.textMuted, fontSize: 12, fontWeight: "700" },
+  chipText: { color: MUTED, fontSize: 12, fontWeight: "700" },
   chipTextActive: { color: GOLD },
   actionBtn: {
     alignSelf: "flex-start",
     marginTop: 12,
-    backgroundColor: GOLD,
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderColor: GOLD,
     borderRadius: 999,
     paddingVertical: 9,
     paddingHorizontal: 16,
   },
-  actionBtnText: { color: "#171129", fontSize: 13, fontWeight: "800" },
+  actionBtnText: { color: GOLD, fontSize: 13, fontWeight: "800" },
   presenceRow: {
     paddingVertical: 9,
     borderBottomWidth: 1,
-    borderBottomColor: THEME.cardBorder,
+    borderBottomColor: LINE_SOFT,
   },
-  presenceTitle: { color: THEME.text, fontSize: 13.5, fontWeight: "700" },
-  presenceMeta: { color: THEME.textMuted, fontSize: 12, marginTop: 3, lineHeight: 16 },
+  presenceTitle: { color: INK, fontSize: 13.5, fontWeight: "700" },
+  presenceMeta: { color: MUTED, fontSize: 12, marginTop: 3, lineHeight: 16 },
 });
