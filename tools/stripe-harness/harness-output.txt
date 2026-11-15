@@ -1,0 +1,58 @@
+
+(a) bad signature is rejected before anything is recorded
+  PASS  HTTP 400
+  PASS  zero webhook rows recorded
+  PASS  zero payments
+  PASS  zero entitlements
+
+(e)+(c)+(b)+(d) Event Launch: session → PI success → duplicate → refund
+  PASS  session delivery HTTP 200
+  PASS  one payments row after session
+  PASS  session row is 'pending' (not verified)
+  PASS  session activates ZERO entitlements
+  PASS  PI delivery HTTP 200
+  PASS  still exactly one payments row
+  PASS  payment status verified
+  PASS  amount_gross_cents = 24900 from payload
+  PASS  source_event_id is the PI event id
+  PASS  payer account + tenant + seller venue stamped
+  PASS  funnel stamped f1
+  PASS  connected account recorded
+  PASS  entitlement pkg_event_launch granted
+  PASS  idempotency key = source_event_id:product_key:account_id
+  PASS  package inclusion granted (1-wk Spotlight, kind=package_inclusion)
+  PASS  inclusion expires ~7 days out
+  PASS  exactly two entitlement rows
+  PASS  redelivery HTTP 200
+  PASS  redelivery marked duplicate
+  PASS  still one payments row
+  PASS  still two entitlements (no double grant)
+  PASS  refund delivery HTTP 200
+  PASS  exactly one refunds row
+  PASS  refund amount 24900
+  PASS  refund status succeeded
+  PASS  entitlement hook emitted flag set
+  PASS  payment now refunded, refunded_total 24900
+  PASS  package entitlement revoked per refund templates
+  PASS  inclusion revoked too
+  PASS  refund redelivery HTTP 200
+  PASS  still exactly one refunds row
+
+(f) Spotlight subscription: paid → failed (7-day grace) → paid
+  PASS  invoice.paid HTTP 200
+  PASS  one payments row
+  PASS  payment verified at 29900 via invoice
+  PASS  one invoices mirror row
+  PASS  invoice total 29900, status paid
+  PASS  subscription entitlement active
+  PASS  entitlement expires at period end
+  PASS  binding resolved PI → invoice → subscription (read-backs happened)
+  PASS  invoice.payment_failed HTTP 200
+  PASS  entitlement in grace (not revoked/expired)
+  PASS  grace_ends_at ≈ +7 days (DECIDED 2026-10-22)
+  PASS  second invoice.paid HTTP 200
+  PASS  entitlement active again
+  PASS  still one invoices row (mirror updated)
+  PASS  still one entitlement row
+
+ALL CHECKS PASSED
