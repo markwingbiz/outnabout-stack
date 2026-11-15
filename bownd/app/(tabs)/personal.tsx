@@ -599,7 +599,7 @@ export default function PersonalScreen() {
                         {persona.vibe.charAt(0).toUpperCase() + persona.vibe.slice(1)}
                       </Text>
                       <Text style={styles.rewardsHint}>
-                        Your persona shapes the Tailored For You picks in Events.
+                        Your persona shapes your Events list.
                       </Text>
                     </View>
                     <TouchableOpacity

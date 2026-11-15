@@ -1,7 +1,11 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export type PersonaProfile = {
-  audience: "singles" | "couples" | "parents";
+  // "all" = All Persona (owner model 2026-11-15): every chooser has
+  // an All that means NO narrowing, and the Alls are the defaults.
+  // A persona is picked only on the persona screen (reached from
+  // Personal); it shapes ONLY the Events page.
+  audience: "all" | "singles" | "couples" | "parents";
   vibe: "spicy" | "fun" | "relaxed" | "adventurous" | "sporty";
 };
 
@@ -9,13 +13,18 @@ const KEY = "BOWND_PERSONA_V1";
 const LEGACY_KEY = "OUTNABOUT_PERSONA_V1";
 
 export const DEFAULT_PERSONA: PersonaProfile = {
-  audience: "singles",
+  audience: "all",
   vibe: "fun",
 };
 
 function normalizePersona(p: any): PersonaProfile {
+  // Valid saved values (all/singles/couples/parents) pass through —
+  // an existing user's pick is never rewritten. Anything unknown
+  // falls back to "all" (All Persona, no narrowing), the default.
   const audience: PersonaProfile["audience"] =
-    p?.audience === "couples" || p?.audience === "parents" ? p.audience : "singles";
+    p?.audience === "singles" || p?.audience === "couples" || p?.audience === "parents"
+      ? p.audience
+      : "all";
 
   let vibe: PersonaProfile["vibe"] = p?.vibe;
 

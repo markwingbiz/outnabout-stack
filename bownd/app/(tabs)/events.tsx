@@ -19,6 +19,7 @@ import {
   StatusBar,
   TouchableOpacity,
   Alert,
+  Image,
   Linking,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
@@ -27,6 +28,13 @@ import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { loadPersona, type PersonaProfile, DEFAULT_PERSONA } from "../../lib/personaStore";
+import { loadBehavior, recordBehavior, type BehaviorAction } from "../../lib/behavior";
+import {
+  loadViewPrefs,
+  passesViewPrefs,
+  DEFAULT_VIEW_PREFS,
+  type ViewPrefs,
+} from "../../lib/viewPrefs";
 import {
   fetchEvents,
   fetchVenues,
@@ -39,12 +47,11 @@ import {
 import { useAuth } from "../../lib/auth";
 import { track } from "../../lib/analytics";
 import { getShowcaseEvents, getShowcaseVenues } from "../../data/showcase";
-import { categoryForText } from "../../lib/placeholders";
-import { SceneEventCard, VenueTile, usePremiumFonts, venueMetaFor } from "../ui/premium";
+import { categoryForText, resolveEventCardImage } from "../../lib/placeholders";
+import { VenueTile, usePremiumFonts, venueMetaFor } from "../ui/premium";
 import { premium } from "../ui/theme";
 import {
   BottomNav,
-  Pill,
   Search,
   Section,
   formatWhen,
@@ -55,21 +62,47 @@ import {
 
 type TimeChip = "tonight" | "tomorrow" | "weekend" | "week" | "all";
 
-// Category chips (premium pass, from the approved mockup): All, Music,
-// Nightlife, Food & Drink, Holiday, Family. An event's category comes
-// from the app's own keyword categorization of its title + tags, with
-// holiday detected first (NYE/Christmas titles often categorize as
-// nightlife/music otherwise). Events outside these buckets (arts,
-// default) appear under "All".
+// Categories (premium pass, from the approved mockup): All Events,
+// Music, Nightlife, Food & Drink, Holiday, Family. Owner revision 2026-11-15:
+// the categories LEAD the header as the segmented bar, so the button
+// rows unclog — this table now feeds the bar instead of a pill row.
+// An event's category comes from the app's own keyword categorization
+// of its title + tags, with holiday detected first (NYE/Christmas
+// titles often categorize as nightlife/music otherwise). Events
+// outside these buckets (arts, default) appear under "All".
 type CategoryChip = "all" | "music" | "nightlife" | "food" | "holiday" | "family";
 
-const CATEGORY_CHIPS: Array<{ key: CategoryChip; label: string }> = [
+// barFlex = each segment's flex weight in the segmented bar,
+// sized from the labels' measured widths (Manrope ExtraBold at
+// 12.5px + segment padding + headroom) so every label renders in
+// full at the standard 390px width: equal segments ellipsized the
+// long labels, and a length formula understates "Food & Drink"
+// (wide glyphs: capitals + "&"). The six labels are a fixed set,
+// so their weights are fixed with them.
+const CATEGORY_CHIPS: Array<{ key: CategoryChip; label: string; barFlex: number }> = [
+  // The all-categories segment is labeled "All Events" (owner
+  // update 2026-11-15); its state key stays "all" — it is the
+  // starting default and means "no category filter".
+  { key: "all", label: "All Events", barFlex: 70 },
+  { key: "music", label: "Music", barFlex: 41 },
+  { key: "nightlife", label: "Nightlife", barFlex: 62 },
+  { key: "food", label: "Food & Drink", barFlex: 89 },
+  { key: "holiday", label: "Holiday", barFlex: 51 },
+  { key: "family", label: "Family", barFlex: 45 },
+];
+
+// Time filter options. Owner revision 2026-11-15: time slimmed down
+// to ONE quiet row of plain text tabs under the category bar (in the
+// first Events pass it was the segmented bar; the categories took
+// that slot to unclog the button choices). Same TimeChip values,
+// same order, same filter logic — time and category still combine
+// (AND) exactly as before.
+const TIME_SEGMENTS: Array<{ key: TimeChip; label: string }> = [
+  { key: "tonight", label: "Tonight" },
+  { key: "tomorrow", label: "Tomorrow" },
+  { key: "weekend", label: "Weekend" },
+  { key: "week", label: "This Week" },
   { key: "all", label: "All" },
-  { key: "music", label: "Music" },
-  { key: "nightlife", label: "Nightlife" },
-  { key: "food", label: "Food & Drink" },
-  { key: "holiday", label: "Holiday" },
-  { key: "family", label: "Family" },
 ];
 
 function eventCategoryKey(e: EventItem): string {
@@ -168,6 +201,9 @@ function matchesSearch(e: EventItem, venueName: string, q: string) {
 }
 
 function matchesPersona(e: EventItem, persona: PersonaProfile) {
+  // All Persona (audience "all") = no narrowing: everything matches
+  // (owner model 2026-11-15 — every chooser's All is an All).
+  if (persona?.audience === "all") return true;
   const pAudience = persona?.audience ? [persona.audience.toLowerCase()] : [];
   const pVibes = persona?.vibe ? [persona.vibe.toLowerCase()] : [];
   const eAudience = (e.audienceTags || []).map((s) => s.toLowerCase());
@@ -182,7 +218,7 @@ function matchesPersona(e: EventItem, persona: PersonaProfile) {
 // Visual pass: the mockup's .heart — a 32px circle in surface2 with a
 // hairline border; on-state is the mockup's rose (#ff5d7e) on its
 // tint. It floats on the card photo's top-right corner via
-// SceneEventCard's accessory slot (the mockup sets it in the caption
+// EventStripCard's accessory slot (the mockup sets it in the caption
 // row; the float keeps the sibling-pressable guarantee).
 function FavButton({ isFav, onToggle }: { isFav: boolean; onToggle: () => void }) {
   return (
@@ -200,6 +236,117 @@ function FavButton({ isFav, onToggle }: { isFav: boolean; onToggle: () => void }
   );
 }
 
+// ---------------------------------------------------------------------------
+// EventStripCard — the Events page's own event card (owner picks
+// 2026-11-15, options mockup B + picture-fit lab). SceneEventCard in
+// ui/premium.tsx is SHARED with Home and stays untouched; this local
+// variant changes exactly the two things the owner picked for Events:
+//  - the photo is a CINEMATIC WIDE STRIP (full card width, short wide
+//    crop — the lab's "Cinematic wide" spec: about a third shorter
+//    than the standard 158 crop, strongest center crop), and
+//  - the footer becomes the mockup B button row: a gold-outline
+//    "Get tickets" button (mockup .btn-gold: transparent, champagne
+//    gold text, 1.5px gold border) + a ghost "Details" button.
+// Caption content (badge, title, meta, web badge, tags, price tier)
+// matches SceneEventCard. The whole card is one pressable — the two
+// "buttons" are its visual treatment, so tap behavior is identical
+// to before; the favorite heart stays a sibling accessory so it
+// never triggers the card press. Discovered (link-out) events keep
+// their honesty: the gold button reads "View at source ↗", never
+// "Get tickets" — Bownd does not sell them.
+// ---------------------------------------------------------------------------
+function EventStripCard({
+  title,
+  venueName,
+  whenLabel,
+  priceLabel,
+  badge,
+  webBadge,
+  photoUrl,
+  tags,
+  discovered,
+  onPress,
+  accessory,
+  style,
+  photoHeight = 110,
+}: {
+  title: string;
+  venueName: string;
+  whenLabel: string;
+  priceLabel?: string;
+  badge?: string;
+  webBadge?: string;
+  photoUrl?: string;
+  tags?: string[];
+  discovered?: boolean;
+  onPress: () => void;
+  /** Floating control on the photo's top-right (e.g. favorite heart). */
+  accessory?: React.ReactNode;
+  style?: object;
+  /** Strip height: 110 full-width cards, 96 in the 280-wide rail. */
+  photoHeight?: number;
+}) {
+  const fonts = usePremiumFonts();
+  const whenParts = whenLabel.split(" • ");
+  const whenHead = whenParts[0];
+  const whenTail = whenParts.slice(1).join(" • ");
+  return (
+    <View style={[styles.stripCard, style]}>
+      <TouchableOpacity onPress={onPress} activeOpacity={0.88}>
+        <Image
+          source={resolveEventCardImage(photoUrl, title, venueName, ...(tags ?? []))}
+          style={[styles.stripPhoto, { height: photoHeight }]}
+          resizeMode="cover"
+        />
+        <View style={styles.stripCaption}>
+          {!!badge && (
+            <View style={styles.stripBadge}>
+              <Text style={[styles.stripBadgeText, fonts.bodyExtraBold]}>{badge}</Text>
+            </View>
+          )}
+          <Text style={[styles.stripTitle, fonts.displayBold]} numberOfLines={2}>
+            {title}
+          </Text>
+          <View style={styles.stripMeta}>
+            <Text style={[styles.stripMetaText, fonts.bodySemiBold]}>
+              <Text style={[styles.stripMetaBold, fonts.bodyBold]}>{whenHead}</Text>
+              {whenTail ? ` · ${whenTail}` : ""}
+            </Text>
+            <Text style={[styles.stripMetaText, fonts.bodySemiBold]} numberOfLines={1}>
+              {venueName}
+            </Text>
+          </View>
+          {!!webBadge && <Text style={[styles.stripWeb, fonts.bodyExtraBold]}>{webBadge}</Text>}
+          {!!tags && tags.length > 0 && (
+            <View style={styles.stripTags}>
+              {tags.slice(0, 4).map((t) => (
+                <View key={t} style={styles.stripTag}>
+                  <Text style={[styles.stripTagText, fonts.bodyBold]}>{t}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+          <View style={styles.stripBtnRow}>
+            <View style={styles.stripBtnGold}>
+              <Text style={[styles.stripBtnGoldText, fonts.bodyExtraBold]} numberOfLines={1}>
+                {discovered
+                  ? "View at source ↗"
+                  : priceLabel
+                    ? `Get tickets · ${priceLabel}`
+                    : "Get tickets"}
+              </Text>
+            </View>
+            <View style={styles.stripBtnGhost}>
+              <Text style={[styles.stripBtnGhostText, fonts.bodyExtraBold]}>Details</Text>
+            </View>
+          </View>
+        </View>
+      </TouchableOpacity>
+      {!!accessory && <View style={styles.stripAccessory}>{accessory}</View>}
+    </View>
+  );
+}
+
 export default function EventsScreen() {
   const router = useRouter();
   const fonts = usePremiumFonts();
@@ -213,7 +360,15 @@ export default function EventsScreen() {
   const [persona, setPersona] = useState<PersonaProfile>(DEFAULT_PERSONA);
   const [timeChip, setTimeChip] = useState<TimeChip>("tonight");
   const [categoryFilter, setCategoryFilter] = useState<CategoryChip>("all");
-  const [personalizedOn, setPersonalizedOn] = useState<boolean>(false);
+
+  // On-device behavior (views + saves) — the Tailored signal
+  // (owner model 2026-11-15). Loaded on focus like persona, so a
+  // detail view or a save from moments ago counts immediately.
+  const [behavior, setBehavior] = useState<BehaviorAction[]>([]);
+
+  // View controls (hide drug/sports/spicy, family-only) — set on
+  // the persona screen, enforced on this page only.
+  const [viewPrefs, setViewPrefs] = useState<ViewPrefs>(DEFAULT_VIEW_PREFS);
 
   // Collapsible sections (chevrons toggle these)
   const [tailoredOpen, setTailoredOpen] = useState(true);
@@ -239,6 +394,16 @@ export default function EventsScreen() {
       getFavorites(user?.uid ?? null)
         .then((favs) => {
           if (alive) setFavKeys(new Set(favs.map((f) => `${f.kind}:${f.id}`)));
+        })
+        .catch(() => {});
+      loadBehavior()
+        .then((rows) => {
+          if (alive) setBehavior(rows);
+        })
+        .catch(() => {});
+      loadViewPrefs()
+        .then((p) => {
+          if (alive) setViewPrefs(p);
         })
         .catch(() => {});
       return () => {
@@ -334,6 +499,17 @@ export default function EventsScreen() {
         else next.delete(`event:${item.id}`);
         return next;
       });
+      // Behavior signal for Tailored (owner model 2026-11-15):
+      // a save is the strongest on-device interest signal. Only
+      // saves record — an unsave is not a behavior kind.
+      if (nowFav) {
+        void recordBehavior({
+          kind: "save",
+          eventId: item.id,
+          venueId: item.venueId,
+          category: eventCategoryKey(item),
+        });
+      }
     } catch {
       Alert.alert("Could not save favorite", "Try again.");
     }
@@ -341,40 +517,99 @@ export default function EventsScreen() {
 
   // Spotlight + Tailored are curated placement rails: discovered
   // (link-out-only) events are excluded from both. They appear ONLY in
-  // the All Events list below.
+  // the All Events list below. BOTH rails also pass the view
+  // controls (owner model 2026-11-15): a family-only user must not
+  // meet spicy in Spotlight either — the control must not lie.
   const spotlight = useMemo(() => {
     return effEvents
       .filter((e) => !e.discovered)
       .filter((e) => e.category === "spotlight")
       .filter((e) => inTimeWindow(e, "week"))
+      .filter((e) => passesViewPrefs(e, viewPrefs))
       .slice(0, 10);
-  }, [effEvents]);
+  }, [effEvents, viewPrefs]);
 
+  // Tailored For You (owner model 2026-11-15): REPEATS and
+  // SUGGESTIONS from what this person views and saves on this
+  // device — behavior, never the picked persona (persona shapes
+  // only the All Events list below). Pool rules unchanged:
+  // non-discovered, inside the week window, view-controls enforced.
+  //   REPEATS:     upcoming events at venues the user has viewed
+  //                or saved, strongest venue first.
+  //   SUGGESTIONS: the rest of the pool, in the categories the
+  //                behavior favors (most frequent first).
+  // Saves weigh double — saving is a stronger signal than a view.
+  // Zero behavior → the fallback: the pool soonest-first (a new
+  // user's rail is simply what's on this week). Past events can
+  // never enter the pool (the week window drops them), so an
+  // already-viewed event is only ever resurfaced while upcoming.
   const tailored = useMemo(() => {
-    return effEvents
+    const pool = effEvents
       .filter((e) => !e.discovered)
       .filter((e) => inTimeWindow(e, "week"))
-      .filter((e) => matchesPersona(e, persona))
-      .slice(0, 10);
-  }, [persona, effEvents]);
+      .filter((e) => passesViewPrefs(e, viewPrefs));
+    const byStart = (a: EventItem, b: EventItem) => {
+      const da = parseISO(a.startISO)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+      const db = parseISO(b.startISO)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+      return da - db;
+    };
+    if (behavior.length === 0) {
+      return [...pool].sort(byStart).slice(0, 10);
+    }
+    const venueWeight = new Map<string, number>();
+    const categoryWeight = new Map<string, number>();
+    for (const action of behavior) {
+      const w = action.kind === "save" ? 2 : 1;
+      if (action.venueId) {
+        venueWeight.set(action.venueId, (venueWeight.get(action.venueId) ?? 0) + w);
+      }
+      if (action.category) {
+        categoryWeight.set(action.category, (categoryWeight.get(action.category) ?? 0) + w);
+      }
+    }
+    const repeats = pool
+      .filter((e) => (venueWeight.get(e.venueId) ?? 0) > 0)
+      .sort(
+        (a, b) =>
+          (venueWeight.get(b.venueId) ?? 0) - (venueWeight.get(a.venueId) ?? 0) ||
+          byStart(a, b),
+      );
+    const repeatIds = new Set(repeats.map((e) => e.id));
+    const suggestions = pool
+      .filter((e) => !repeatIds.has(e.id))
+      .sort(
+        (a, b) =>
+          (categoryWeight.get(eventCategoryKey(b)) ?? 0) -
+            (categoryWeight.get(eventCategoryKey(a)) ?? 0) || byStart(a, b),
+      );
+    return [...repeats, ...suggestions].slice(0, 10);
+  }, [effEvents, behavior, viewPrefs]);
 
   const topVenues = useMemo(() => {
     return effVenues.slice(0, 10);
   }, [effVenues]);
 
+  // All Events: time + search + venue + category filters combine
+  // (AND), sorted by start. Owner model 2026-11-15: the persona
+  // picked in Personal AUTO-APPLIES here — no toggle, no on-page
+  // control (matchesPersona returns true for All Persona, so the
+  // default narrows nothing) — and the view controls gate the
+  // list too. Persona touches ONLY this page, and within it only
+  // this list: Tailored is behavior, Spotlight is paid curation.
   const allEvents = useMemo(() => {
     const base = effEvents
       .filter((e) => inTimeWindow(e, timeChip))
       .filter((e) => matchesSearch(e, getVenueName(e.venueId, effVenues), query))
       .filter((e) => matchesVenueFilter(e, venueIdFilter, venueFilter, effVenues))
-      .filter((e) => categoryFilter === "all" || eventCategoryKey(e) === categoryFilter);
-    const personaFiltered = personalizedOn ? base.filter((e) => matchesPersona(e, persona)) : base;
-    return [...personaFiltered].sort((a, b) => {
+      .filter((e) => categoryFilter === "all" || eventCategoryKey(e) === categoryFilter)
+      .filter((e) => matchesPersona(e, persona))
+      .filter((e) => passesViewPrefs(e, viewPrefs));
+    return [...base].sort((a, b) => {
       const da = parseISO(a.startISO)?.getTime() ?? Number.MAX_SAFE_INTEGER;
       const db = parseISO(b.startISO)?.getTime() ?? Number.MAX_SAFE_INTEGER;
       return da - db;
     });
-  }, [persona, personalizedOn, query, timeChip, categoryFilter, effEvents, venueFilter, venueIdFilter, effVenues]);
+  }, [query, timeChip, categoryFilter, effEvents, venueFilter, venueIdFilter, effVenues, persona, viewPrefs]);
 
   // First-party analytics: record settled searches (debounced, so a
   // row lands per search intent, not per keystroke) with the result
@@ -405,9 +640,11 @@ export default function EventsScreen() {
             : timeChip === "tomorrow"
               ? "Tomorrow"
               : "Tonight";
-    const mode = personalizedOn ? "Personalized" : "All events";
-    return `${timeLabel} · ${city} · ${mode}`;
-  }, [personalizedOn, timeChip]);
+    // No mode segment: the Personalized/All events toggle is gone
+    // (owner model 2026-11-15 — persona is picked in Personal,
+    // never on this page), so the subtitle is just time · city.
+    return `${timeLabel} · ${city}`;
+  }, [timeChip]);
 
   return (
     <View style={refStyles.root}>
@@ -436,35 +673,74 @@ export default function EventsScreen() {
           </View>
         )}
 
-        {/* ONE filter row: time chips + All */}
-        <View style={refStyles.filterWrap}>
-          <Pill label="Tonight" active={timeChip === "tonight"} onPress={() => setTimeChip("tonight")} />
-          <Pill label="Tomorrow" active={timeChip === "tomorrow"} onPress={() => setTimeChip("tomorrow")} />
-          <Pill label="Weekend" active={timeChip === "weekend"} onPress={() => setTimeChip("weekend")} />
-          <Pill label="This Week" active={timeChip === "week"} onPress={() => setTimeChip("week")} />
-          <Pill label="All" active={timeChip === "all"} onPress={() => setTimeChip("all")} />
+        {/* Category filter: ONE segmented bar (mockup B .seg) —
+            joined segments, selected = white with dark-plum text.
+            Owner revision 2026-11-15: the CATEGORIES lead the bar
+            (absorbing the old category pill row) so the button
+            choices unclog. Same CategoryChip state + logic as the
+            pill row it replaces; single-select, as before. Segment
+            widths are weighted per label (barFlex in
+            CATEGORY_CHIPS, from measured label widths): six real
+            category labels cannot fit equal segments at a legible
+            size, and adjustsFontSizeToFit does not run on
+            Android/web, so equal segments ellipsized the long
+            labels in the first v2 renders. */}
+        <View style={styles.segBar}>
+          {CATEGORY_CHIPS.map((c) => {
+            const on = categoryFilter === c.key;
+            return (
+              <TouchableOpacity
+                key={c.key}
+                style={[styles.segBtn, { flex: c.barFlex }, on && styles.segBtnOn]}
+                onPress={() => setCategoryFilter(c.key)}
+                activeOpacity={0.85}
+              >
+                <Text
+                  style={[styles.segText, fonts.bodyExtraBold, on && styles.segTextOn]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.6}
+                >
+                  {c.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
 
-        {/* Personalized | All + Change persona (right-aligned) */}
-        <View style={[refStyles.filterWrap, { alignItems: "center" }]}>
-          <Pill label="Personalized" active={personalizedOn} onPress={() => setPersonalizedOn(true)} />
-          <Pill label="All" active={!personalizedOn} onPress={() => setPersonalizedOn(false)} />
-          <View style={{ marginLeft: "auto" }}>
-            <Pill label="Change persona" onPress={() => router.push("/(tabs)/persona")} />
-          </View>
+        {/* Time filter: ONE slim row of plain text tabs directly
+            under the bar (owner revision 2026-11-15) — no boxes, no
+            pills; unselected = muted, selected = gold text with a
+            small gold dot. Same TimeChip state, options, and logic
+            as before; combines with the category bar (AND) exactly
+            as the old stacked rows did. */}
+        <View style={styles.timeRow}>
+          {TIME_SEGMENTS.map((s) => {
+            const on = timeChip === s.key;
+            return (
+              <TouchableOpacity
+                key={s.key}
+                style={styles.timeTab}
+                onPress={() => setTimeChip(s.key)}
+                activeOpacity={0.7}
+              >
+                <Text
+                  style={[styles.timeTabText, fonts.bodySemiBold, on && styles.timeTabTextOn]}
+                  numberOfLines={1}
+                >
+                  {s.label}
+                </Text>
+                <View style={[styles.timeDot, on && styles.timeDotOn]} />
+              </TouchableOpacity>
+            );
+          })}
         </View>
 
-        {/* Category chips (premium pass) — filter the All Events list */}
-        <View style={refStyles.filterWrap}>
-          {CATEGORY_CHIPS.map((c) => (
-            <Pill
-              key={c.key}
-              label={c.label}
-              active={categoryFilter === c.key}
-              onPress={() => setCategoryFilter(c.key)}
-            />
-          ))}
-        </View>
+        {/* No persona row: the Personalized/All pills and the
+            Change persona pill are removed entirely (owner model
+            2026-11-15 — persona is picked only in Personal and
+            applies to this page automatically; tailoring comes
+            from what people view and buy, not a picked persona). */}
 
         {/* Venue filter chip */}
         {!!(venueFilter || venueIdFilter) && (
@@ -486,16 +762,24 @@ export default function EventsScreen() {
           </View>
         )}
 
-        {/* Tailored For You — horizontal rail (ignores search/timeChip) */}
+        {/* Tailored For You — horizontal moving menu (owner
+            revision 2026-11-15): a sideways-scrolling rail of the
+            280-wide strip cards, snapping card-to-card (280 card +
+            12 gap). Ignores search/timeChip, as before. */}
         <Section
           title="Tailored For You"
-          subtitle="Based on your persona"
+          subtitle="From your views and saves"
           onPress={() => setTailoredOpen((v) => !v)}
         />
         {tailoredOpen && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            snapToInterval={292}
+            decelerationRate="fast"
+          >
             {tailored.map((item) => (
-              <SceneEventCard
+              <EventStripCard
                 key={item.id}
                 title={item.title}
                 venueName={getVenueName(item.venueId, effVenues)}
@@ -506,6 +790,7 @@ export default function EventsScreen() {
                 tags={uniq([...(item.vibeTags || []), ...(item.audienceTags || [])]).slice(0, 3)}
                 onPress={() => openEvent(item.id)}
                 style={styles.tailoredCard}
+                photoHeight={96}
               />
             ))}
           </ScrollView>
@@ -519,7 +804,7 @@ export default function EventsScreen() {
         />
         {spotlightOpen &&
           spotlight.map((item) => (
-            <SceneEventCard
+            <EventStripCard
               key={item.id}
               title={item.title}
               venueName={getVenueName(item.venueId, effVenues)}
@@ -569,7 +854,7 @@ export default function EventsScreen() {
           </Text>
         ) : (
           allEvents.map((item) => (
-            <SceneEventCard
+            <EventStripCard
               key={item.id}
               title={item.title}
               venueName={getVenueName(item.venueId, effVenues)}
@@ -583,6 +868,7 @@ export default function EventsScreen() {
               priceLabel={item.priceLabel || undefined}
               photoUrl={item.photoUrl}
               tags={uniq([...(item.vibeTags || []), ...(item.audienceTags || [])]).slice(0, 4)}
+              discovered={!!item.discovered}
               onPress={() => (item.discovered ? openExternal(item) : openEvent(item.id))}
               accessory={
                 <FavButton
@@ -602,6 +888,132 @@ export default function EventsScreen() {
 }
 
 const styles = StyleSheet.create({
+  // Segmented bar (mockup B .seg): joined bar on the card surface
+  // with a hairline border, radius 12, segments 40 tall; selected
+  // segment is white with dark-plum text (mockup verbatim). Since
+  // the 2026-11-15 rework it carries the six CATEGORIES, so the
+  // segment text runs slightly smaller and shrinks to fit
+  // ("Food & Drink" is the long label).
+  segBar: {
+    flexDirection: "row",
+    backgroundColor: premium.surface,
+    borderWidth: 1,
+    borderColor: premium.line2,
+    borderRadius: 12,
+    overflow: "hidden",
+    marginBottom: 10,
+  },
+  segBtn: {
+    // No flex here: each segment's flex is set inline from the
+    // chip's barFlex weight (see CATEGORY_CHIPS).
+    minHeight: 40,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 2,
+  },
+  segBtnOn: { backgroundColor: "#FFFFFF" },
+  segText: { color: premium.muted, fontSize: 12.5, fontWeight: "800" },
+  segTextOn: { color: "#17102B" },
+  // Slim time row (owner revision 2026-11-15): plain text tabs
+  // spread across the width directly under the category bar — no
+  // boxes, no pills. Unselected = muted; selected = gold text with
+  // a small gold dot under it (the dot slot is kept, transparent,
+  // when unselected so the tabs never jump).
+  timeRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingHorizontal: 4,
+    marginBottom: 10,
+  },
+  timeTab: { alignItems: "center", paddingVertical: 2 },
+  timeTabText: { color: premium.muted, fontSize: 12.5, fontWeight: "600" },
+  timeTabTextOn: { color: premium.gold },
+  timeDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    marginTop: 4,
+    backgroundColor: "transparent",
+  },
+  timeDotOn: { backgroundColor: premium.gold },
+  // EventStripCard — mirrors SceneEventCard's card + caption values;
+  // only the photo (cinematic strip) and the footer (mockup B button
+  // row) differ.
+  stripCard: {
+    backgroundColor: premium.surface,
+    borderWidth: 1,
+    borderColor: premium.line,
+    borderRadius: 16,
+    overflow: "hidden",
+    marginBottom: 13,
+  },
+  stripPhoto: { width: "100%" },
+  stripAccessory: { position: "absolute", top: 8, right: 8 },
+  stripCaption: { paddingHorizontal: 15, paddingTop: 13, paddingBottom: 14 },
+  stripBadge: {
+    alignSelf: "flex-start",
+    backgroundColor: "rgba(232,196,118,0.16)",
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginBottom: 8,
+  },
+  stripBadgeText: {
+    color: premium.gold,
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
+  stripTitle: { color: premium.ink, fontSize: 16.5, fontWeight: "700", lineHeight: 20 },
+  stripMeta: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    columnGap: 14,
+    rowGap: 4,
+    marginTop: 8,
+    alignItems: "center",
+  },
+  stripMetaText: { color: premium.ink2, fontSize: 12.5, fontWeight: "600" },
+  stripMetaBold: { color: premium.ink, fontWeight: "700" },
+  stripWeb: { color: premium.link, fontSize: 11.5, fontWeight: "800", marginTop: 7 },
+  stripTags: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginTop: 10 },
+  stripTag: {
+    backgroundColor: premium.surface2,
+    borderWidth: 1,
+    borderColor: premium.line2,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  stripTagText: { color: premium.ink2, fontSize: 12, fontWeight: "700" },
+  // Mockup B .btnrow + .btn-gold + .btn-ghost (app tokens): gold
+  // outline CTA flexes, ghost Details sits beside it; both 44 tall,
+  // pill radius.
+  stripBtnRow: { flexDirection: "row", gap: 8, marginTop: 12 },
+  stripBtnGold: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    borderColor: premium.gold,
+    backgroundColor: "transparent",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+  },
+  stripBtnGoldText: { color: premium.gold, fontSize: 13.5, fontWeight: "800" },
+  stripBtnGhost: {
+    minHeight: 44,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: premium.line2,
+    backgroundColor: premium.surface2,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 18,
+  },
+  stripBtnGhostText: { color: premium.ink, fontSize: 13.5, fontWeight: "800" },
   venueFilterRow: {
     flexDirection: "row",
     alignItems: "center",

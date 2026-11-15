@@ -12,10 +12,16 @@ import {
 } from "../../components/ui/SpaceUI";
 
 import { savePersona, DEFAULT_PERSONA } from "../../lib/personaStore";
+import {
+  loadViewPrefs,
+  saveViewPrefs,
+  DEFAULT_VIEW_PREFS,
+  type ViewPrefs,
+} from "../../lib/viewPrefs";
 import { useAuth } from "../../lib/auth";
 import { syncPersona } from "../../lib/store";
 
-type Audience = "singles" | "couples" | "parents";
+type Audience = "all" | "singles" | "couples" | "parents";
 type Vibe = "fun" | "relaxed" | "adventurous" | "spicy" | "sporty";
 
 export default function Persona() {
@@ -26,6 +32,9 @@ export default function Persona() {
 
   const audienceOptions = useMemo(
     () => [
+      // All Persona first (owner model 2026-11-15): the All that
+      // means no narrowing — and the starting default for everyone.
+      { id: "all" as const, label: "All Persona" },
       { id: "singles" as const, label: "Singles" },
       { id: "couples" as const, label: "Couples" },
       { id: "parents" as const, label: "Parents" },
@@ -57,8 +66,40 @@ export default function Persona() {
 
   /* ---------------- STATE ---------------- */
 
-  const [audience, setAudience] = useState<Audience>("singles");
+  const [audience, setAudience] = useState<Audience>("all");
   const [vibe, setVibe] = useState<Vibe>("fun");
+
+  /* ---------------- VIEW CONTROLS ---------------- */
+  // Owner model 2026-11-15: "users can control their view" — hide
+  // drug-related / sports-related / spicy, or family-friendly-only.
+  // Edited here (the settings surface reached from Personal) and
+  // enforced on the Events page. Loaded on mount, saved with the
+  // persona on Continue — this screen's existing save contract.
+  const [viewPrefs, setViewPrefs] = useState<ViewPrefs>(DEFAULT_VIEW_PREFS);
+
+  useEffect(() => {
+    let alive = true;
+    loadViewPrefs()
+      .then((p) => {
+        if (alive) setViewPrefs(p);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const viewOptions: Array<{
+    key: keyof ViewPrefs;
+    label: string;
+    hint: string;
+    icon: string;
+  }> = [
+    { key: "hideDrugs", label: "Hide drug-related", hint: "No 420 / cannabis listings", icon: "🚫" },
+    { key: "hideSports", label: "Hide sports-related", hint: "No games, watch parties, or sporty nights", icon: "🏟️" },
+    { key: "hideSpicy", label: "Hide spicy", hint: "No spicy-vibe listings", icon: "🌶️" },
+    { key: "familyOnly", label: "Family-friendly only", hint: "Only family-friendly listings show", icon: "👨‍👩‍👧" },
+  ];
 
   /* ---------------- AUTO-FIX INVALID COMBOS ---------------- */
 
@@ -72,7 +113,9 @@ export default function Persona() {
     audience === "parents" ? vibeOptionsParents : vibeOptionsDefault;
 
   const audienceLabel =
-    audience === "singles"
+    audience === "all"
+      ? "All Persona"
+      : audience === "singles"
       ? "Singles"
       : audience === "couples"
       ? "Couples"
@@ -91,6 +134,11 @@ export default function Persona() {
 
     try {
       await savePersona(personaPayload);
+    } catch {}
+
+    // View controls save alongside the persona (same Continue).
+    try {
+      await saveViewPrefs(viewPrefs);
     } catch {}
 
     // Mirror to the signed-in user's Firestore profile (local copy stays).
@@ -133,14 +181,20 @@ export default function Persona() {
           Choose who this experience is for
         </Text>
 
-        <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 12 }}>
           {audienceOptions.map((a) => {
             const active = audience === a.id;
             return (
               <Pressable
                 key={a.id}
                 onPress={() => setAudience(a.id)}
-                style={({ pressed }) => [{ opacity: pressed ? 0.94 : 1, flex: 1 }]}
+                // Four options now (All Persona joined the three):
+                // a 2×2 wrap keeps every label on one line at the
+                // row's 13px — four-across squeezed "All Persona"
+                // into a two-line pill.
+                style={({ pressed }) => [
+                  { opacity: pressed ? 0.94 : 1, flexGrow: 1, flexBasis: "46%" },
+                ]}
               >
                 <Glass
                   style={{
@@ -200,6 +254,65 @@ export default function Persona() {
             </Glass>
           </Pressable>
         ))}
+      </View>
+
+      {/* Your view — content controls (owner model 2026-11-15).
+          Same Glass language as the vibe rows above: a row per
+          control, highlighted while on. Enforced on Events. */}
+      <View style={{ marginTop: 22 }}>
+        <Text style={{ color: THEME.text, fontSize: 18, fontWeight: "800" }}>
+          Your view
+        </Text>
+        <Text style={{ color: THEME.textDim, marginTop: 6 }}>
+          Control what shows up in Events
+        </Text>
+      </View>
+      <View style={{ marginTop: 12, gap: 12 }}>
+        {viewOptions.map((o) => {
+          const on = viewPrefs[o.key];
+          return (
+            <Pressable
+              key={o.key}
+              onPress={() => setViewPrefs((p) => ({ ...p, [o.key]: !p[o.key] }))}
+              style={({ pressed }) => [{ opacity: pressed ? 0.94 : 1 }]}
+            >
+              <Glass
+                style={{
+                  paddingVertical: 14,
+                  paddingHorizontal: 18,
+                  borderRadius: 18,
+                  borderColor: on ? THEME.stroke : THEME.strokeDim,
+                  backgroundColor: on
+                    ? "rgba(181,109,255,0.18)"
+                    : "rgba(255,255,255,0.10)",
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                }}
+              >
+                <View style={{ flex: 1, paddingRight: 12 }}>
+                  <Text style={{ color: THEME.text, fontSize: 16, fontWeight: "700" }}>
+                    {o.label}
+                  </Text>
+                  <Text style={{ color: THEME.textDim, fontSize: 12, marginTop: 3 }}>
+                    {o.hint}
+                  </Text>
+                </View>
+                <Text style={{ color: THEME.text, fontSize: 18 }}>{o.icon}</Text>
+                <Text
+                  style={{
+                    color: on ? THEME.text : THEME.textDim,
+                    fontSize: 13,
+                    fontWeight: "900",
+                    marginLeft: 12,
+                  }}
+                >
+                  {on ? "ON" : "OFF"}
+                </Text>
+              </Glass>
+            </Pressable>
+          );
+        })}
       </View>
 
       {/* Bottom Actions */}

@@ -49,6 +49,7 @@ import {
 import { useAuth } from "../lib/auth";
 import { maybeAskForPushPermission } from "../lib/push";
 import { track } from "../lib/analytics";
+import { recordBehavior } from "../lib/behavior";
 import {
   findShowcaseEvent,
   findShowcaseVenue,
@@ -276,6 +277,24 @@ export default function DetailScreen() {
           discovered: event.discovered === true,
         },
       });
+      // On-device behavior for Tailored (owner model 2026-11-15):
+      // the local twin of the analytics view above — same open,
+      // recorded beside it. Category is the taxonomy key (holiday
+      // first, then categoryForText — the same recipe as
+      // events.tsx's eventCategoryKey), NOT event.category, which
+      // is a placement field ("spotlight").
+      void recordBehavior({
+        kind: "view",
+        eventId: event.id,
+        venueId: event.venueId,
+        category: /(holiday|nye|new year|christmas|xmas)/.test(
+          [event.title, ...(event.vibeTags || []), ...(event.audienceTags || [])]
+            .join(" ")
+            .toLowerCase(),
+        )
+          ? "holiday"
+          : categoryForText(event.title, ...(event.vibeTags || []), ...(event.audienceTags || [])),
+      });
     } else if (pageVenue) {
       const key = `venue:${pageVenue.id}`;
       if (trackedViewRef.current === key) return;
@@ -287,6 +306,15 @@ export default function DetailScreen() {
           is_demo: isDemo,
           is_test: pageVenue.isTest === true,
         },
+      });
+      // Behavior twin (see event branch): a venue open marks the
+      // venue as viewed, which is what Tailored's REPEATS rank by.
+      // No event/category belongs to a bare venue open.
+      void recordBehavior({
+        kind: "view",
+        eventId: "",
+        venueId: pageVenue.id,
+        category: "",
       });
     }
   }, [loading, event, pageVenue, venueName, isDemo]);
