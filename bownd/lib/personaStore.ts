@@ -4,7 +4,9 @@ export type PersonaProfile = {
   // "all" = All Persona (owner model 2026-11-15): every chooser has
   // an All that means NO narrowing, and the Alls are the defaults.
   // A persona is picked only on the persona screen (reached from
-  // Personal); it shapes ONLY the Events page.
+  // Personal). It shapes ONLY Tailored For You on the Events page
+  // (owner refinement 2026-11-15 20:00): All Events, Spotlight,
+  // Home, and NYE are universal — identical for every viewer.
   audience: "all" | "singles" | "couples" | "parents";
   vibe: "spicy" | "fun" | "relaxed" | "adventurous" | "sporty";
 };
@@ -64,4 +66,31 @@ export async function savePersona(p: PersonaProfile) {
   } catch {
     // silent fail in dev
   }
+}
+
+/** The slice of an event persona matching is allowed to see. */
+export type PersonaMatchableEvent = {
+  vibeTags?: string[] | null;
+  audienceTags?: string[] | null;
+};
+
+/**
+ * Persona matching (the vc10 logic, moved here from events.tsx so
+ * the rule lives with the persona store): an event matches when
+ * its audienceTags cover the persona audience AND its vibeTags
+ * cover the persona vibe. All Persona (audience "all") matches
+ * everything — no narrowing. Used ONLY by Tailored For You
+ * (owner refinement, Mark 2026-11-15 20:00): a specific picked
+ * persona restricts Tailored's candidates to matches; All Events
+ * and Spotlight never consult this.
+ */
+export function matchesPersona(e: PersonaMatchableEvent, persona: PersonaProfile): boolean {
+  if (persona?.audience === "all") return true;
+  const pAudience = persona?.audience ? [persona.audience.toLowerCase()] : [];
+  const pVibes = persona?.vibe ? [persona.vibe.toLowerCase()] : [];
+  const eAudience = (e.audienceTags || []).map((s) => s.toLowerCase());
+  const eVibes = (e.vibeTags || []).map((s) => s.toLowerCase());
+  const audienceOK = pAudience.length === 0 ? true : pAudience.some((a) => eAudience.includes(a));
+  const vibeOK = pVibes.length === 0 ? true : pVibes.some((v) => eVibes.includes(v));
+  return audienceOK && vibeOK;
 }

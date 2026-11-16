@@ -96,9 +96,13 @@ export default function WhatsCloseScreen() {
   }, [user?.email]);
 
   const usingDemo = events.length === 0 && venues.length === 0;
-  // Discovered (web-sourced, link-out-only) events never appear here —
-  // they live only in the Events tab's All Events list.
-  const effEvents = usingDemo ? getShowcaseEvents() : events.filter((e) => !e.discovered);
+  // Same catalog rule as Home (owner ruling, Mark 2026-11-15):
+  // the full live list, discovered (web-sourced) events included —
+  // excluding them starved this screen's event side whenever the
+  // catalog is discovered-only. Nearby display still requires
+  // venue coordinates, so a discovered listing appears here once
+  // its venue exists as a venue doc.
+  const effEvents = usingDemo ? getShowcaseEvents() : events;
   const effVenues = usingDemo ? getShowcaseVenues() : venues;
 
   const center = userLoc ?? KC_FALLBACK;

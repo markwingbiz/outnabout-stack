@@ -5,11 +5,13 @@
 //
 // The prefs live on-device in AsyncStorage and are edited on the
 // persona screen (the settings surface reached from Personal).
-// Enforcement happens on the EVENTS page only: Tailored, Spotlight,
-// and All Events all pass through passesViewPrefs, so a control
-// never lies (a family-only user does not meet spicy in Spotlight
-// either). Home does not enforce these yet — Home is frozen by the
-// owner; extending enforcement there is a flagged follow-up.
+// Enforcement scope (owner refinement, Mark 2026-11-15 19:52 +
+// 20:00): passesViewPrefs gates ONLY Tailored For You — the one
+// per-person rail. All Events and Spotlight are universal
+// surfaces (identical for every viewer), and Home/NYE never
+// enforced these. The limits do their job in Tailored: a
+// family-only user's Tailored rail holds no spicy/sports/drug
+// content, while the universal lists stay complete for everyone.
 //
 // Classification runs over the event's own title + vibeTags +
 // audienceTags, reusing the app's categorization machinery

@@ -24,11 +24,16 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { fetchEvents, fetchVenues, type EventItem, type Venue } from "../../lib/store";
 import { useAuth } from "../../lib/auth";
 import {
+  PLAYLISTS,
   getShowcaseEvents,
   getShowcaseVenues,
   resolvePlaylists,
+  type Playlist,
   type ResolvedPlaylist,
+  type ResolvedPlaylistItem,
 } from "../../data/showcase";
+import { categoryForText } from "../../lib/placeholders";
+import { catalogFingerprint, fillRail } from "../../lib/randomFill";
 import { getActiveCampaign } from "../../data/campaigns";
 import {
   CampaignBanner,
@@ -72,6 +77,68 @@ function matchesHomeSearch(e: EventItem, venueName: string, q: string) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Random fill (owner ruling, Mark 2026-11-15 20:17): "The home
+// menu should be randomized to have it full until we begin to
+// fill it up. Nothing should be empty if no data random fill
+// within category parameters" — "Nothing should be empty ever."
+//
+// Home's event sections fill UP TO these display counts: the
+// section's rule-based picks lead in rule order, then random
+// in-parameter picks complete the rail (lib/randomFill.ts).
+// Picks beyond a count are never trimmed. Fill operates on the
+// real catalog only — the wholesale showcase fallback stays
+// exactly as authored — and never while searching (search
+// results are never padded with non-matches).
+const HOME_SPOTLIGHT_TARGET = 3;
+const HOME_PLAYLIST_TARGET = 6;
+
+function startMs(e: EventItem): number {
+  const t = new Date(e.startISO).getTime();
+  return Number.isNaN(t) ? Number.MAX_SAFE_INTEGER : t;
+}
+
+// The app's standard week window (the span the Events rails
+// use): from an hour ago through seven days out.
+function inWeekWindow(e: EventItem, now: Date): boolean {
+  const t = startMs(e);
+  const n = now.getTime();
+  return t >= n - 3600_000 && t <= n + 7 * 86400_000;
+}
+
+// The app's own keyword classifier (the same one the Events
+// category bar uses, via placeholders.ts): an event's category
+// from its title + tags.
+function classifierCategory(e: EventItem) {
+  return categoryForText(e.title, ...(e.vibeTags || []), ...(e.audienceTags || []));
+}
+
+// Fill tiers for one Home playlist, in widening order. Tier 1
+// is the playlist's own match predicate — resolvePlaylists
+// already exhausts it into the picks, so it normally adds
+// nothing; it is listed so the parameter order is explicit.
+// Tier 2 is the section's category within the week window:
+// the classifier category for Date Night / Family Fun; for
+// Tonight in KC — a time section — the window itself widens
+// from today to the week. Tier 3, where a section declares
+// one, is the rest of the week window: the last resort before
+// a rail may stay short, per "nothing should be empty ever."
+function playlistFillTiers(def: Playlist, catalog: EventItem[], now: Date): EventItem[][] {
+  const week = catalog.filter((e) => inWeekWindow(e, now));
+  const tier1 = catalog.filter((e) => def.match(e, ""));
+  if (def.id === "tonight-in-kc") {
+    return [tier1, week];
+  }
+  if (def.id === "date-night") {
+    const cats = new Set(["nightlife", "food", "music"]);
+    return [tier1, week.filter((e) => cats.has(classifierCategory(e))), week];
+  }
+  if (def.id === "family-fun") {
+    return [tier1, week.filter((e) => classifierCategory(e) === "family"), week];
+  }
+  return [tier1, week];
+}
+
 
 export default function Home() {
   const router = useRouter();
@@ -108,11 +175,14 @@ export default function Home() {
 
   // Wholesale showcase fallback: demo only when the real catalog is
   // completely empty. Never mixed with real data.
-  // Discovered (web-sourced, link-out-only) events are excluded from
-  // EVERYTHING on Home — spotlight, playlists, featured, search: they
-  // live only in the Events tab's All Events list (see events.tsx).
+  // Home's catalog is the full live event list, discovered
+  // (web-sourced) events included (owner ruling, Mark 2026-11-15:
+  // "the app should never be empty" — with a discovered-only
+  // catalog, excluding them starved every Home rail). Discovered
+  // events still render as link-out listings, never as Bownd
+  // inventory.
   const usingDemo = events.length === 0 && venues.length === 0;
-  const effEvents = usingDemo ? getShowcaseEvents() : events.filter((e) => !e.discovered);
+  const effEvents = usingDemo ? getShowcaseEvents() : events;
   const effVenues = usingDemo ? getShowcaseVenues() : venues;
 
   const visibleEvents = useMemo(
@@ -139,11 +209,99 @@ export default function Home() {
     [effEvents, effVenues]
   );
 
+  // Random fill (owner ruling, Mark 2026-11-15 20:17 — see the
+  // helpers above): on the real catalog, Home's event sections
+  // are topped up to their display counts so no rail renders
+  // short — or missing entirely, the way resolvePlaylists drops
+  // a zero-match playlist — while the catalog has events to
+  // offer. Sections fill in render order (Spotlight heroes,
+  // then Tonight in KC, Date Night, Family Fun) sharing one
+  // `used` set, so an event repeats across sections only when
+  // the catalog forces it. Until real programming (venue-
+  // submitted / featured content) fills these sections through
+  // the rule-based picks, the random fill stands in; the picks
+  // always lead and are never displaced.
+  const filledHome = useMemo(() => {
+    if (usingDemo || qNorm) return null;
+    const now = new Date();
+    const seedKey = catalogFingerprint(effEvents);
+    // Every section's rule picks are reserved in `used` up
+    // front: a section's random fill may borrow an event
+    // another section picked (or already shows) only when the
+    // catalog leaves it no unused event at all.
+    const used = new Set<string>();
+    const spotPicks = effEvents.filter((e) => e.category === "spotlight");
+    for (const e of spotPicks) used.add(e.id);
+    for (const pl of playlists) {
+      for (const item of pl.items) {
+        if (item.kind === "event") used.add(item.event.id);
+      }
+    }
+
+    const spotlight = fillRail(
+      spotPicks,
+      [
+        effEvents.filter((e) => e.category === "spotlight"),
+        effEvents.filter((e) => inWeekWindow(e, now)),
+      ],
+      HOME_SPOTLIGHT_TARGET,
+      `home-spotlight|${seedKey}`,
+      used,
+    );
+
+    const resolvedById = new Map(playlists.map((p) => [p.id, p]));
+    const filledPlaylists: ResolvedPlaylist[] = [];
+    for (const def of PLAYLISTS) {
+      const baseItems = resolvedById.get(def.id)?.items ?? [];
+      const venueCount = baseItems.filter((i) => i.kind === "venue").length;
+      const eventPicks = baseItems
+        .filter((i): i is Extract<ResolvedPlaylistItem, { kind: "event" }> => i.kind === "event")
+        .map((i) => i.event);
+      const filledEvents = fillRail(
+        eventPicks,
+        playlistFillTiers(def, effEvents, now),
+        Math.max(0, HOME_PLAYLIST_TARGET - venueCount),
+        `home-playlist-${def.id}|${seedKey}`,
+        used,
+      );
+      const pickIds = new Set(eventPicks.map((e) => e.id));
+      const items: ResolvedPlaylistItem[] = [
+        ...baseItems,
+        ...filledEvents
+          .filter((e) => !pickIds.has(e.id))
+          .map((event) => ({ kind: "event", event }) as ResolvedPlaylistItem),
+      ];
+      // A playlist only renders once it has items — with a
+      // non-empty catalog the fill guarantees that; with a
+      // genuinely empty one the section stays absent rather
+      // than rendering a fabricated rail.
+      if (items.length > 0) {
+        filledPlaylists.push({
+          id: def.id,
+          title: def.title,
+          subtitle: def.subtitle,
+          featured: def.featured === true,
+          items,
+        });
+      }
+    }
+    // Any resolved playlist without a PLAYLISTS def keeps its
+    // rule-based items untouched (none exist today —
+    // resolvePlaylists only resolves PLAYLISTS defs).
+    for (const pl of playlists) {
+      if (!PLAYLISTS.some((d) => d.id === pl.id)) filledPlaylists.push(pl);
+    }
+    return { spotlight, playlists: filledPlaylists };
+  }, [usingDemo, qNorm, effEvents, playlists]);
+
+  const shownPlaylists = filledHome?.playlists ?? playlists;
+  const shownSpotlight = filledHome?.spotlight ?? spotlightEvents;
+
   // Featured Playlists rail (premium pass): only playlists carrying
   // the optional `featured` flag (default false) render here.
   const featuredPlaylists = useMemo(
-    () => playlists.filter((p) => p.featured === true),
-    [playlists]
+    () => shownPlaylists.filter((p) => p.featured === true),
+    [shownPlaylists]
   );
 
   // Campaign slot (premium pass): the active campaign from
@@ -179,15 +337,15 @@ export default function Home() {
   // different order; any future playlist not in this order renders after
   // Family Fun, before Featured.
   const playlistById = useMemo(
-    () => new Map(playlists.map((p) => [p.id, p])),
-    [playlists]
+    () => new Map(shownPlaylists.map((p) => [p.id, p])),
+    [shownPlaylists]
   );
   const otherPlaylists = useMemo(
     () =>
-      playlists.filter(
+      shownPlaylists.filter(
         (p) => p.id !== "tonight-in-kc" && p.id !== "date-night" && p.id !== "family-fun"
       ),
-    [playlists]
+    [shownPlaylists]
   );
 
   function renderPlaylist(pl: ResolvedPlaylist | undefined) {
@@ -328,7 +486,7 @@ export default function Home() {
           <>
             {/* Showcase — spotlight hero cards (vertical list), first section.
                 Premium anatomy: scene photo crop above the caption. */}
-            {spotlightEvents.map((item) => (
+            {shownSpotlight.map((item) => (
               <SceneEventCard
                 key={item.id}
                 title={item.title}

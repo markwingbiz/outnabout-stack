@@ -27,7 +27,12 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { loadPersona, type PersonaProfile, DEFAULT_PERSONA } from "../../lib/personaStore";
+import {
+  loadPersona,
+  matchesPersona,
+  type PersonaProfile,
+  DEFAULT_PERSONA,
+} from "../../lib/personaStore";
 import { loadBehavior, recordBehavior, type BehaviorAction } from "../../lib/behavior";
 import {
   loadViewPrefs,
@@ -44,6 +49,7 @@ import {
   type Venue,
   type FavoriteItem,
 } from "../../lib/store";
+import { catalogFingerprint, fillRail } from "../../lib/randomFill";
 import { useAuth } from "../../lib/auth";
 import { track } from "../../lib/analytics";
 import { getShowcaseEvents, getShowcaseVenues } from "../../data/showcase";
@@ -200,19 +206,6 @@ function matchesSearch(e: EventItem, venueName: string, q: string) {
   );
 }
 
-function matchesPersona(e: EventItem, persona: PersonaProfile) {
-  // All Persona (audience "all") = no narrowing: everything matches
-  // (owner model 2026-11-15 — every chooser's All is an All).
-  if (persona?.audience === "all") return true;
-  const pAudience = persona?.audience ? [persona.audience.toLowerCase()] : [];
-  const pVibes = persona?.vibe ? [persona.vibe.toLowerCase()] : [];
-  const eAudience = (e.audienceTags || []).map((s) => s.toLowerCase());
-  const eVibes = (e.vibeTags || []).map((s) => s.toLowerCase());
-  const audienceOK = pAudience.length === 0 ? true : pAudience.some((a) => eAudience.includes(a));
-  const vibeOK = pVibes.length === 0 ? true : pVibes.some((v) => eVibes.includes(v));
-  return audienceOK && vibeOK;
-}
-
 // Favorite heart. Rendered as a SIBLING of the card Pressable (not
 // nested inside it) so tapping the heart never also opens the detail.
 // Visual pass: the mockup's .heart — a 32px circle in surface2 with a
@@ -357,17 +350,22 @@ export default function EventsScreen() {
   const [query, setQuery] = useState("");
   const [venueFilter, setVenueFilter] = useState<string | null>(null);
   const [venueIdFilter, setVenueIdFilter] = useState<string | null>(null);
+  // The picked persona — read ONLY by the Tailored rail (owner
+  // refinement 2026-11-15 20:00). All Events and Spotlight never
+  // consult it.
   const [persona, setPersona] = useState<PersonaProfile>(DEFAULT_PERSONA);
   const [timeChip, setTimeChip] = useState<TimeChip>("tonight");
   const [categoryFilter, setCategoryFilter] = useState<CategoryChip>("all");
 
   // On-device behavior (views + saves) — the Tailored signal
-  // (owner model 2026-11-15). Loaded on focus like persona, so a
-  // detail view or a save from moments ago counts immediately.
+  // (owner model 2026-11-15). Loaded on focus, so a detail view
+  // or a save from moments ago counts immediately.
   const [behavior, setBehavior] = useState<BehaviorAction[]>([]);
 
-  // View controls (hide drug/sports/spicy, family-only) — set on
-  // the persona screen, enforced on this page only.
+  // View controls (hide drug/sports/spicy, family-only) — set in
+  // Personal; enforced ONLY in the Tailored rail below (owner
+  // model 2026-11-15 19:52: All Events and Spotlight are
+  // universal surfaces, identical for every viewer).
   const [viewPrefs, setViewPrefs] = useState<ViewPrefs>(DEFAULT_VIEW_PREFS);
 
   // Collapsible sections (chevrons toggle these)
@@ -378,9 +376,10 @@ export default function EventsScreen() {
   // Favorites (Set of `kind:id`)
   const [favKeys, setFavKeys] = useState<Set<string>>(new Set());
 
-  // Persona + favorites refresh whenever the screen gains focus
-  // (persona may have changed on the picker; favorites may have
-  // changed on Detail / Personal).
+  // Persona + favorites + behavior + view prefs refresh whenever
+  // the screen gains focus (the persona pick may have changed in
+  // Personal; favorites may have changed on Detail / Personal;
+  // persona, behavior, and prefs all feed the Tailored rail).
   useFocusEffect(
     useCallback(() => {
       let alive = true;
@@ -515,25 +514,53 @@ export default function EventsScreen() {
     }
   }
 
-  // Spotlight + Tailored are curated placement rails: discovered
-  // (link-out-only) events are excluded from both. They appear ONLY in
-  // the All Events list below. BOTH rails also pass the view
-  // controls (owner model 2026-11-15): a family-only user must not
-  // meet spicy in Spotlight either — the control must not lie.
+  // Spotlight + Tailored draw from the FULL live catalog,
+  // discovered events included (owner rulings 2026-11-15: "the
+  // app should never be empty"; Tailored is "filled like a guest
+  // until the things bought or viewed fill it up"). Curation is
+  // by each rail's pick criteria, persona, view limits, and
+  // behavior — never by source. Discovered events keep their
+  // source attribution + link-out behavior on the cards; they
+  // are shown, never sold as Bownd inventory. Spotlight is a
+  // UNIVERSAL surface (owner model 2026-11-15 19:52): identical
+  // for every viewer, so no view-pref filtering here — view
+  // prefs narrow ONLY the Tailored rail, the one per-person
+  // surface on this page.
+  // Random fill (owner ruling 2026-11-15 20:17: "nothing should
+  // be empty ever"): the rail tops up to its display count of
+  // 10 — the rule-based picks lead, then random picks first
+  // from the rail's own parameters (spotlight category + week
+  // window) beyond the picks, then from the rest of the week
+  // window (lib/randomFill.ts). Stable per catalog; on the
+  // showcase fallback the authored picks render as-is.
   const spotlight = useMemo(() => {
-    return effEvents
-      .filter((e) => !e.discovered)
+    const picks = effEvents
       .filter((e) => e.category === "spotlight")
       .filter((e) => inTimeWindow(e, "week"))
-      .filter((e) => passesViewPrefs(e, viewPrefs))
       .slice(0, 10);
-  }, [effEvents, viewPrefs]);
+    if (usingDemo) return picks;
+    const inWeek = effEvents.filter((e) => inTimeWindow(e, "week"));
+    return fillRail(
+      picks,
+      [inWeek.filter((e) => e.category === "spotlight"), inWeek],
+      10,
+      `events-spotlight|${catalogFingerprint(effEvents)}`,
+    );
+  }, [effEvents, usingDemo]);
 
-  // Tailored For You (owner model 2026-11-15): REPEATS and
-  // SUGGESTIONS from what this person views and saves on this
-  // device — behavior, never the picked persona (persona shapes
-  // only the All Events list below). Pool rules unchanged:
-  // non-discovered, inside the week window, view-controls enforced.
+  // Tailored For You (owner model 2026-11-15, refined 20:00,
+  // fill policy 20:03): the ONE per-person rail.
+  //   ELIGIBLE POOL: the catalog through the persona restriction
+  //   (specific persona = matches only; All Persona = none) and
+  //   the view limits (they do their job here and only here).
+  //   FILL: behavior picks FIRST (repeats at viewed/saved venues,
+  //   then favored categories), and guest fill — the remaining
+  //   eligible events in the catalog's standard upcoming/date
+  //   order — completes the rail to its max of 10. Cold start
+  //   (no behavior) is therefore pure guest fill under the rules:
+  //   "filled like a guest until the things bought or viewed
+  //   fill it up." Purchases join the behavior signals with the
+  //   later account layer; views/saves are the signals today.
   //   REPEATS:     upcoming events at venues the user has viewed
   //                or saved, strongest venue first.
   //   SUGGESTIONS: the rest of the pool, in the categories the
@@ -545,16 +572,25 @@ export default function EventsScreen() {
   // already-viewed event is only ever resurfaced while upcoming.
   const tailored = useMemo(() => {
     const pool = effEvents
-      .filter((e) => !e.discovered)
       .filter((e) => inTimeWindow(e, "week"))
       .filter((e) => passesViewPrefs(e, viewPrefs));
+    // Persona-strict candidates (owner refinement, Mark
+    // 2026-11-15 20:00): "all persona events should be events
+    // that match persona only." A specific persona narrows the
+    // pool to matchesPersona events; behavior below then orders
+    // within them. Empty match set → fall back to the full pool:
+    // the rail never renders empty while the catalog has events
+    // (the owner's never-empty rule).
+    const personaMatches =
+      persona.audience !== "all" ? pool.filter((e) => matchesPersona(e, persona)) : pool;
+    const candPool = personaMatches.length > 0 ? personaMatches : pool;
     const byStart = (a: EventItem, b: EventItem) => {
       const da = parseISO(a.startISO)?.getTime() ?? Number.MAX_SAFE_INTEGER;
       const db = parseISO(b.startISO)?.getTime() ?? Number.MAX_SAFE_INTEGER;
       return da - db;
     };
     if (behavior.length === 0) {
-      return [...pool].sort(byStart).slice(0, 10);
+      return [...candPool].sort(byStart).slice(0, 10);
     }
     const venueWeight = new Map<string, number>();
     const categoryWeight = new Map<string, number>();
@@ -567,7 +603,7 @@ export default function EventsScreen() {
         categoryWeight.set(action.category, (categoryWeight.get(action.category) ?? 0) + w);
       }
     }
-    const repeats = pool
+    const repeats = candPool
       .filter((e) => (venueWeight.get(e.venueId) ?? 0) > 0)
       .sort(
         (a, b) =>
@@ -575,7 +611,7 @@ export default function EventsScreen() {
           byStart(a, b),
       );
     const repeatIds = new Set(repeats.map((e) => e.id));
-    const suggestions = pool
+    const suggestions = candPool
       .filter((e) => !repeatIds.has(e.id))
       .sort(
         (a, b) =>
@@ -583,33 +619,33 @@ export default function EventsScreen() {
             (categoryWeight.get(eventCategoryKey(a)) ?? 0) || byStart(a, b),
       );
     return [...repeats, ...suggestions].slice(0, 10);
-  }, [effEvents, behavior, viewPrefs]);
+  }, [effEvents, behavior, viewPrefs, persona]);
 
   const topVenues = useMemo(() => {
     return effVenues.slice(0, 10);
   }, [effVenues]);
 
   // All Events: time + search + venue + category filters combine
-  // (AND), sorted by start. Owner model 2026-11-15: the persona
-  // picked in Personal AUTO-APPLIES here — no toggle, no on-page
-  // control (matchesPersona returns true for All Persona, so the
-  // default narrows nothing) — and the view controls gate the
-  // list too. Persona touches ONLY this page, and within it only
-  // this list: Tailored is behavior, Spotlight is paid curation.
+  // (AND), sorted by start. Those four are on-page browsing
+  // controls, the same for everyone. Owner model 2026-11-15
+  // 19:52: this list is a UNIVERSAL surface — identical for every
+  // viewer, signed in or not. The persona pick and the view
+  // controls NO LONGER filter it (persona is personal info in
+  // Personal; view prefs narrow only the Tailored rail). A
+  // signed-in user with no behavioral data sees exactly the
+  // guest list.
   const allEvents = useMemo(() => {
     const base = effEvents
       .filter((e) => inTimeWindow(e, timeChip))
       .filter((e) => matchesSearch(e, getVenueName(e.venueId, effVenues), query))
       .filter((e) => matchesVenueFilter(e, venueIdFilter, venueFilter, effVenues))
-      .filter((e) => categoryFilter === "all" || eventCategoryKey(e) === categoryFilter)
-      .filter((e) => matchesPersona(e, persona))
-      .filter((e) => passesViewPrefs(e, viewPrefs));
+      .filter((e) => categoryFilter === "all" || eventCategoryKey(e) === categoryFilter);
     return [...base].sort((a, b) => {
       const da = parseISO(a.startISO)?.getTime() ?? Number.MAX_SAFE_INTEGER;
       const db = parseISO(b.startISO)?.getTime() ?? Number.MAX_SAFE_INTEGER;
       return da - db;
     });
-  }, [query, timeChip, categoryFilter, effEvents, venueFilter, venueIdFilter, effVenues, persona, viewPrefs]);
+  }, [query, timeChip, categoryFilter, effEvents, venueFilter, venueIdFilter, effVenues]);
 
   // First-party analytics: record settled searches (debounced, so a
   // row lands per search intent, not per keystroke) with the result
@@ -738,9 +774,9 @@ export default function EventsScreen() {
 
         {/* No persona row: the Personalized/All pills and the
             Change persona pill are removed entirely (owner model
-            2026-11-15 — persona is picked only in Personal and
-            applies to this page automatically; tailoring comes
-            from what people view and buy, not a picked persona). */}
+            2026-11-15 — persona is picked only in Personal, as
+            personal info; on this page it reaches ONLY the
+            Tailored rail, never the universal lists). */}
 
         {/* Venue filter chip */}
         {!!(venueFilter || venueIdFilter) && (
@@ -788,6 +824,7 @@ export default function EventsScreen() {
                 priceLabel={item.priceLabel || undefined}
                 photoUrl={item.photoUrl}
                 tags={uniq([...(item.vibeTags || []), ...(item.audienceTags || [])]).slice(0, 3)}
+                discovered={!!item.discovered}
                 onPress={() => openEvent(item.id)}
                 style={styles.tailoredCard}
                 photoHeight={96}
@@ -812,6 +849,7 @@ export default function EventsScreen() {
               badge={item.isTest ? "Test" : "Spotlight"}
               priceLabel={item.priceLabel || undefined}
               photoUrl={item.photoUrl}
+              discovered={!!item.discovered}
               onPress={() => openEvent(item.id)}
             />
           ))}

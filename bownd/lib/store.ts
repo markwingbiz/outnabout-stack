@@ -49,20 +49,22 @@ export function tierFor(points: number): Tier {
 }
 
 // ---------------------------------------------------------------------------
-// Operator-only test data
+// Catalog access — every account gets the guest public catalog
 // ---------------------------------------------------------------------------
 
 /**
- * The operator's Bownd sign-in email. Test items (isTest) are visible
- * ONLY to this account — everyone else never receives them from
- * fetchEvents/fetchVenues. The Firestore rules now enforce the same
- * boundary server-side (bownd/firestore.rules: public read requires a
- * non-test doc, venues also `verified`; test docs are operator-only).
- * Rules are not filters, though: a list query is allowed only when
- * its where() constraints prove every returned doc passes, so the
- * non-operator fetches below query with isTest == false (venues also
- * verified == true) and this client-side filter remains as a second
- * layer. The rules deploy and this query change must ship together.
+ * Owner ruling (Mark, 2026-11-15): the consumer app shows the live
+ * public catalog "like a guest profile" for EVERY account — the
+ * operator included — and personalization develops on top of it.
+ * Test items (isTest) never enter the consumer feed for anyone;
+ * they are visible only in Livework+. fetchEvents/fetchVenues
+ * therefore run the same filtered public query for every viewer
+ * (published == true AND isTest == false; venues also
+ * verified == true — the constraints the Firestore rules require
+ * a list query to prove) and keep the client-side isTest filter
+ * as a second layer. OPERATOR_EMAIL / isOperatorEmail remain
+ * exported for other operator-identity uses; the catalog fetch
+ * no longer branches on them.
  */
 export const OPERATOR_EMAIL = "mr.marshall3@yahoo.com";
 
@@ -226,23 +228,25 @@ function toVenue(id: string, data: any): Venue {
 export async function fetchEvents(viewerEmail?: string | null): Promise<EventItem[]> {
   if (!db) return [];
   try {
-    // Non-operator queries must carry the published == true AND
-    // isTest == false constraints so the Firestore rules can prove
-    // the list is public-only (rules are not filters — a list query
-    // missing either constraint is denied).
+    // Every viewer — operator included — gets the same public
+    // catalog (owner ruling, Mark 2026-11-15). The query must carry
+    // the published == true AND isTest == false constraints so the
+    // Firestore rules can prove the list is public-only (rules are
+    // not filters — a list query missing either constraint is
+    // denied). viewerEmail is accepted for call-site compatibility
+    // and no longer changes what is fetched.
+    void viewerEmail;
     const snap = await getDocs(
-      isOperatorEmail(viewerEmail)
-        ? collection(db, "events")
-        : query(
-            collection(db, "events"),
-            where("published", "==", true),
-            where("isTest", "==", false),
-          ),
+      query(
+        collection(db, "events"),
+        where("published", "==", true),
+        where("isTest", "==", false),
+      ),
     );
     if (snap.empty) return [];
     const rows = snap.docs.map((d) => toEventItem(d.id, d.data()));
-    // Operator-only test data: non-operators never receive test items.
-    return isOperatorEmail(viewerEmail) ? rows : rows.filter((r) => !r.isTest);
+    // Second layer: test items never reach any consumer feed.
+    return rows.filter((r) => !r.isTest);
   } catch {
     return [];
   }
@@ -251,23 +255,25 @@ export async function fetchEvents(viewerEmail?: string | null): Promise<EventIte
 export async function fetchVenues(viewerEmail?: string | null): Promise<Venue[]> {
   if (!db) return [];
   try {
-    // Same rules-proof constraints as fetchEvents (published == true
-    // AND isTest == false), plus verified == true: a public venue is
-    // a published, non-test, verified doc (see bownd/firestore.rules
-    // isPublicVenue).
+    // Same rule as fetchEvents (owner ruling, Mark 2026-11-15):
+    // every viewer gets the public catalog. Same rules-proof
+    // constraints (published == true AND isTest == false), plus
+    // verified == true: a public venue is a published, non-test,
+    // verified doc (see bownd/firestore.rules isPublicVenue).
+    // viewerEmail no longer changes what is fetched.
+    void viewerEmail;
     const snap = await getDocs(
-      isOperatorEmail(viewerEmail)
-        ? collection(db, "venues")
-        : query(
-            collection(db, "venues"),
-            where("published", "==", true),
-            where("isTest", "==", false),
-            where("verified", "==", true),
-          ),
+      query(
+        collection(db, "venues"),
+        where("published", "==", true),
+        where("isTest", "==", false),
+        where("verified", "==", true),
+      ),
     );
     if (snap.empty) return [];
     const rows = snap.docs.map((d) => toVenue(d.id, d.data()));
-    return isOperatorEmail(viewerEmail) ? rows : rows.filter((r) => !r.isTest);
+    // Second layer: test items never reach any consumer feed.
+    return rows.filter((r) => !r.isTest);
   } catch {
     return [];
   }
