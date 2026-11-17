@@ -1,10 +1,17 @@
 // app/ui/reference.tsx
 // Shared UI extracted from the reference preview (App.tsx): design tokens,
-// Pill, Section, EventCard, Search, TopTabs, BottomNav, plus the shared
-// formatWhen / venue-name helpers. StyleSheet values are copied exactly
-// from App.tsx. EventCard renders a LinearGradient background (App.tsx's
-// overlay gradient colors) — never a remote image, never presented as a
-// photo. All data comes from the real backend via the screens.
+// Pill, Section, EventCard, Search, BottomNav, plus the shared
+// formatWhen / venue-name helpers. EventCard renders a background image
+// (the mockup placeholder picture via lib/placeholders.ts, or the listing's real
+// photoUrl when one exists) under the App.tsx overlay gradient — never
+// a remote image, never presented as a photo. All data comes from the
+// real backend via the screens.
+//
+// Premium skeleton pass (2026-11-15): the bottom nav is the approved
+// mockup's five-item bar (Home, Events, NYE, Venues, Rewards) and the
+// top tab row is GONE — the mockup has no top tabs. Search, Pill and
+// Section are restyled onto the premium tokens in app/ui/theme.ts
+// (deep plum surfaces, champagne-gold hairlines, brand gradient).
 import React from "react";
 import {
   View,
@@ -13,21 +20,30 @@ import {
   TouchableOpacity,
   StyleSheet,
   Dimensions,
+  ImageBackground,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 
 import type { Venue } from "../../lib/store";
+import { resolveEventCardImage } from "../../lib/placeholders";
+import { premium } from "./theme";
+import { usePremiumFonts } from "./premium";
 
-export type Tab = "Home" | "Events" | "Personal";
-export const PURPLE = "#7861d9";
-export const INK = "#0e0b19";
+export type Tab = "Home" | "Events" | "NYE" | "Venues" | "Rewards";
+// Deep plum solid (premium.violet) — was vivid brand violet #5B34E0
+// before the owner's 2026-11-15 plum direction. Currently unreferenced;
+// kept in step with the token so nothing reaches for the old purple.
+export const PURPLE = "#4A4368";
+export const INK = "#0A0616";
 export const WIDTH = Dimensions.get("window").width;
 
 export const TAB_ROUTES: Record<Tab, string> = {
   Home: "/(tabs)",
   Events: "/(tabs)/events",
-  Personal: "/(tabs)/personal",
+  NYE: "/(tabs)/nye",
+  Venues: "/(tabs)/venues",
+  Rewards: "/(tabs)/personal",
 };
 
 // ---------------------------------------------------------------------------
@@ -78,9 +94,25 @@ export function Pill({
   active?: boolean;
   onPress: () => void;
 }) {
+  const fonts = usePremiumFonts();
+  if (active) {
+    // Mockup .fchip.on — the brand gradient, white text.
+    return (
+      <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
+        <LinearGradient
+          colors={[...premium.brandGradient]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+          style={[refStyles.pill, refStyles.pillGradient]}
+        >
+          <Text style={[refStyles.pillText, fonts.bodyExtraBold]}>{label}</Text>
+        </LinearGradient>
+      </TouchableOpacity>
+    );
+  }
   return (
-    <TouchableOpacity onPress={onPress} style={[refStyles.pill, active && refStyles.pillActive]}>
-      <Text style={refStyles.pillText}>{label}</Text>
+    <TouchableOpacity onPress={onPress} style={refStyles.pill} activeOpacity={0.85}>
+      <Text style={[refStyles.pillText, fonts.bodyBold]}>{label}</Text>
     </TouchableOpacity>
   );
 }
@@ -94,13 +126,21 @@ export function Section({
   subtitle?: string;
   onPress?: () => void;
 }) {
+  const fonts = usePremiumFonts();
   const inner = (
     <>
       <View>
-        <Text style={refStyles.sectionTitle}>{title}</Text>
-        {subtitle ? <Text style={refStyles.sectionSub}>{subtitle}</Text> : null}
+        <Text style={[refStyles.sectionTitle, fonts.display]}>{title}</Text>
+        {subtitle ? (
+          <Text style={[refStyles.sectionSub, fonts.bodySemiBold]}>{subtitle}</Text>
+        ) : null}
       </View>
-      <Ionicons name="chevron-forward" color="#b7aecb" size={17} />
+      {/* Mockup .app-label carries a right-side element only when the
+          header acts (a link / a collapse toggle) — a static section
+          label gets no decorative chevron. */}
+      {onPress ? (
+        <Ionicons name="chevron-forward" color={premium.link} size={16} />
+      ) : null}
     </>
   );
   if (onPress) {
@@ -120,6 +160,7 @@ export function EventCard({
   badge,
   compact = false,
   onPress,
+  photoUrl,
 }: {
   title: string;
   venueName: string;
@@ -127,6 +168,8 @@ export function EventCard({
   badge?: string;
   compact?: boolean;
   onPress: () => void;
+  /** Real photo URL when the listing has one; the mockup placeholder picture otherwise. */
+  photoUrl?: string;
 }) {
   return (
     <TouchableOpacity
@@ -134,22 +177,28 @@ export function EventCard({
       activeOpacity={0.86}
       style={[refStyles.eventCard, { height: compact ? 156 : 177 }]}
     >
-      <LinearGradient
-        colors={["rgba(10,7,23,.1)", "rgba(11,8,25,.55)", "rgba(9,6,21,.94)"]}
-        locations={[0, 0.44, 1]}
-        style={refStyles.cardOverlay}
+      <ImageBackground
+        source={resolveEventCardImage(photoUrl, title, venueName)}
+        style={refStyles.cardImage}
+        resizeMode="cover"
       >
-        <Text style={[refStyles.eventTitle, compact && { fontSize: 19 }]} numberOfLines={3}>
-          {title}
-        </Text>
-        <Text style={refStyles.eventVenue}>
-          {venueName}
-          {badge && !compact ? ` · ${badge}` : ""}
-        </Text>
-        <Text style={refStyles.eventLabel}>
-          <Text style={{ color: "#f5c36a" }}>★</Text> {label}
-        </Text>
-      </LinearGradient>
+        <LinearGradient
+          colors={["rgba(10,7,23,.1)", "rgba(11,8,25,.55)", "rgba(9,6,21,.94)"]}
+          locations={[0, 0.44, 1]}
+          style={refStyles.cardOverlay}
+        >
+          <Text style={[refStyles.eventTitle, compact && { fontSize: 19 }]} numberOfLines={3}>
+            {title}
+          </Text>
+          <Text style={refStyles.eventVenue}>
+            {venueName}
+            {badge && !compact ? ` · ${badge}` : ""}
+          </Text>
+          <Text style={refStyles.eventLabel}>
+            <Text style={{ color: premium.gold }}>★</Text> {label}
+          </Text>
+        </LinearGradient>
+      </ImageBackground>
     </TouchableOpacity>
   );
 }
@@ -163,42 +212,54 @@ export function Search({
   onChange: (s: string) => void;
   placeholder: string;
 }) {
+  const fonts = usePremiumFonts();
   return (
     <View style={refStyles.search}>
-      <Ionicons name="search-outline" color="#ddd5e9" size={19} />
+      <Ionicons name="search" color={premium.muted} size={17} />
       <TextInput
         placeholder={placeholder}
-        placeholderTextColor="#ddd6e8"
+        placeholderTextColor={premium.muted}
         value={value}
         onChangeText={onChange}
-        style={refStyles.searchInput}
+        style={[refStyles.searchInput, fonts.bodySemiBold]}
       />
     </View>
   );
 }
 
-export function TopTabs({
-  active,
-  onNavigate,
+// HeaderAvatar — the mockup Home header's gradient initial circle
+// (mockup .avatar — the vivid brand gradient). Renders the real
+// account initial when one is known; a neutral person glyph for
+// guests. Lives here so every tab screen's header carries the same
+// element.
+export function HeaderAvatar({
+  initial,
+  onPress,
 }: {
-  active: Tab;
-  onNavigate: (route: string) => void;
+  initial?: string | null;
+  onPress: () => void;
 }) {
   return (
-    <View style={refStyles.topTabs}>
-      {(["Home", "Events", "Personal"] as Tab[]).map((t) => (
-        <TouchableOpacity
-          key={t}
-          onPress={() => onNavigate(TAB_ROUTES[t])}
-          style={[refStyles.topTab, active === t && refStyles.topTabActive]}
-        >
-          <Text style={refStyles.topTabText}>{t}</Text>
-        </TouchableOpacity>
-      ))}
-    </View>
+    <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
+      <LinearGradient
+        colors={[...premium.brandGradient]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={refStyles.avatarCircle}
+      >
+        {initial ? (
+          <Text style={refStyles.avatarInitial}>{initial}</Text>
+        ) : (
+          <Ionicons name="person" size={17} color="#fff" />
+        )}
+      </LinearGradient>
+    </TouchableOpacity>
   );
 }
 
+// BottomNav — the mockup's five-item tab bar (Home, Events, NYE,
+// Venues, Rewards). Active item is white with a small gradient dot
+// under the label; there is no top tab row anywhere in the app.
 export function BottomNav({
   active,
   onNavigate,
@@ -206,23 +267,52 @@ export function BottomNav({
   active: Tab;
   onNavigate: (route: string) => void;
 }) {
+  const fonts = usePremiumFonts();
   const icons: Record<Tab, keyof typeof Ionicons.glyphMap> = {
     Home: "home-outline",
     Events: "calendar-outline",
-    Personal: "person-outline",
+    NYE: "ticket-outline",
+    Venues: "location-outline",
+    Rewards: "star-outline",
   };
   return (
     <View style={refStyles.bottom}>
-      {(["Home", "Events", "Personal"] as Tab[]).map((t) => (
-        <TouchableOpacity
-          key={t}
-          onPress={() => onNavigate(TAB_ROUTES[t])}
-          style={[refStyles.bottomItem, active === t && refStyles.bottomSelected]}
-        >
-          <Ionicons name={icons[t]} size={22} color={active === t ? "#fff" : "#aaa4b9"} />
-          <Text style={[refStyles.bottomText, active === t && { color: "#fff" }]}>{t}</Text>
-        </TouchableOpacity>
-      ))}
+      {(Object.keys(TAB_ROUTES) as Tab[]).map((t) => {
+        const isActive = active === t;
+        return (
+          <TouchableOpacity
+            key={t}
+            onPress={() => onNavigate(TAB_ROUTES[t])}
+            style={refStyles.bottomItem}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name={icons[t]}
+              size={21}
+              color={isActive ? "#fff" : premium.muted}
+            />
+            <Text
+              style={[
+                refStyles.bottomText,
+                fonts.bodyExtraBold,
+                isActive && { color: "#fff" },
+              ]}
+            >
+              {t}
+            </Text>
+            {isActive ? (
+              <LinearGradient
+                colors={[...premium.brandGradient]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={refStyles.bottomDot}
+              />
+            ) : (
+              <View style={refStyles.bottomDot} />
+            )}
+          </TouchableOpacity>
+        );
+      })}
     </View>
   );
 }
@@ -233,59 +323,51 @@ export function BottomNav({
 
 export const refStyles = StyleSheet.create({
   root: { flex: 1, backgroundColor: INK },
-  scroll: { paddingHorizontal: 12, paddingTop: 16, paddingBottom: 26 },
+  scroll: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 26 },
   search: {
-    height: 45,
-    backgroundColor: "#201b30",
-    borderRadius: 17,
+    height: 46,
+    backgroundColor: premium.surface2,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: "#30283f",
+    borderColor: premium.line,
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 14,
-    marginBottom: 12,
+    marginBottom: 14,
     gap: 9,
   },
-  searchInput: { color: "white", fontSize: 15, flex: 1 },
-  topTabs: {
-    flexDirection: "row",
-    backgroundColor: "#221c33",
-    borderRadius: 15,
-    padding: 3,
-    marginBottom: 22,
-  },
-  topTab: {
-    flex: 1,
+  searchInput: { color: premium.ink, fontSize: 13.5, flex: 1 },
+  avatarCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 7,
-    borderRadius: 12,
   },
-  topTabActive: { backgroundColor: "#3b354d", borderWidth: 1, borderColor: "#62596d" },
-  topTabText: { color: "white", fontSize: 14 },
-  pageTitle: { color: "#fff", fontSize: 26, fontWeight: "700", marginBottom: 3 },
-  subtitle: { color: "#d4ccdf", fontSize: 14, marginBottom: 12 },
+  avatarInitial: { color: "#fff", fontSize: 15, fontWeight: "800" },
+  pageTitle: { color: "#fff", fontSize: 24, fontWeight: "800", marginBottom: 3 },
+  subtitle: { color: premium.muted, fontSize: 12.5, fontWeight: "700", marginBottom: 12 },
   filterWrap: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginBottom: 10 },
   pill: {
-    backgroundColor: "#30283e",
-    borderRadius: 22,
-    paddingVertical: 9,
+    backgroundColor: premium.surface2,
+    borderRadius: 999,
+    paddingVertical: 8,
     paddingHorizontal: 14,
     borderWidth: 1,
-    borderColor: "#41354e",
+    borderColor: premium.line2,
   },
-  pillActive: { backgroundColor: "#463858", borderColor: "#69577a" },
-  pillText: { color: "white", fontSize: 13 },
+  pillGradient: { borderWidth: 0 },
+  pillText: { color: premium.ink2, fontSize: 12.5, fontWeight: "700" },
   personaRow: { alignItems: "flex-end", marginBottom: 15 },
   section: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginTop: 12,
-    marginBottom: 10,
+    marginTop: 20,
+    marginBottom: 11,
   },
-  sectionTitle: { color: "#fff", fontSize: 21, fontWeight: "700" },
-  sectionSub: { color: "#b9b0c7", fontSize: 13, marginTop: 3 },
+  sectionTitle: { color: premium.ink, fontSize: 16.5, fontWeight: "800" },
+  sectionSub: { color: premium.muted, fontSize: 12.5, marginTop: 3 },
   tailored: {
     backgroundColor: "#21192f",
     borderWidth: 1,
@@ -305,8 +387,8 @@ export const refStyles = StyleSheet.create({
     overflow: "hidden",
     marginBottom: 11,
     borderWidth: 1,
-    borderColor: "#403448",
-    backgroundColor: "#231b33",
+    borderColor: premium.line,
+    backgroundColor: premium.surface,
   },
   cardOverlay: {
     flex: 1,
@@ -315,6 +397,7 @@ export const refStyles = StyleSheet.create({
     paddingBottom: 17,
     paddingTop: 12,
   },
+  cardImage: { flex: 1 },
   eventTitle: { color: "white", fontSize: 23, fontWeight: "700", lineHeight: 27, maxWidth: "95%" },
   eventVenue: { color: "#f0eaf4", fontSize: 14, marginTop: 5 },
   eventLabel: { color: "#e7e0eb", fontSize: 14, marginTop: 8 },
@@ -330,57 +413,63 @@ export const refStyles = StyleSheet.create({
   },
   venueName: { color: "white", fontSize: 12, textAlign: "center", marginTop: 7 },
   bottom: {
-    height: 70,
+    height: 64,
     flexDirection: "row",
-    backgroundColor: "#161120",
+    backgroundColor: "#0F0A1F",
     borderTopWidth: 1,
-    borderColor: "#40334f",
-    paddingBottom: 5,
+    borderColor: premium.line,
+    paddingTop: 8,
   },
-  bottomItem: { flex: 1, justifyContent: "center", alignItems: "center", gap: 4 },
-  bottomSelected: { backgroundColor: "#34284c", borderTopLeftRadius: 18, borderTopRightRadius: 18 },
-  bottomText: { color: "#aaa4b9", fontSize: 12 },
-  personalHero: { height: 365, paddingHorizontal: 20, paddingTop: 22, alignItems: "center" },
+  bottomItem: { flex: 1, justifyContent: "flex-start", alignItems: "center", gap: 3 },
+  bottomText: { color: premium.muted, fontSize: 10.5, fontWeight: "800" },
+  bottomDot: { width: 4, height: 4, borderRadius: 2, marginTop: 1 },
+  // Personal/Rewards — premium pass (2026-11-15): the old light
+  // sheet is gone. The mockup's Rewards phone is dark end to end, so
+  // the "panel" is now just padded dark space on the plum screen and
+  // every card inside it is a premium surface. The QR box alone stays
+  // light — a QR code needs the contrast to scan.
+  personalHero: { paddingHorizontal: 18, paddingTop: 20, paddingBottom: 24, alignItems: "center" },
   personalHead: { width: "100%", flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  personalTitle: { color: "white", fontSize: 31, fontWeight: "700" },
-  personalSub: { color: "#f1e8f5", fontSize: 14, alignSelf: "flex-start", marginTop: 11 },
+  personalTitle: { color: "white", fontSize: 30, fontWeight: "800" },
+  personalSub: { color: premium.ink2, fontSize: 13.5, alignSelf: "flex-start", marginTop: 8 },
   avatarRing: {
-    width: 173,
-    height: 173,
-    borderRadius: 90,
-    borderWidth: 13,
-    borderColor: "rgba(210,173,242,.17)",
+    width: 118,
+    height: 118,
+    borderRadius: 60,
+    borderWidth: 9,
+    borderColor: "rgba(232,196,118,0.22)",
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 16,
+    marginTop: 20,
   },
   avatar: {
-    width: 138,
-    height: 138,
-    borderRadius: 75,
-    backgroundColor: "#393246",
+    width: 92,
+    height: 92,
+    borderRadius: 46,
+    backgroundColor: premium.surface3,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 2,
-    borderColor: "rgba(255,255,255,.35)",
+    borderColor: "rgba(255,255,255,0.25)",
   },
-  points: { color: "white", fontSize: 34, fontWeight: "700", marginTop: 8 },
-  nextTier: { color: "#fff", fontSize: 15, marginTop: 3 },
+  points: { color: "white", fontSize: 32, fontWeight: "800", marginTop: 10 },
+  nextTier: { color: premium.ink2, fontSize: 14, marginTop: 3 },
   lightPanel: {
-    marginHorizontal: 5,
-    marginTop: -8,
-    backgroundColor: "#f0edf4",
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    borderBottomLeftRadius: 25,
-    borderBottomRightRadius: 25,
-    padding: 14,
-    minHeight: 390,
+    paddingHorizontal: 16,
+    paddingTop: 2,
+    paddingBottom: 8,
   },
-  panelTabs: { flexDirection: "row", backgroundColor: "#e2dfeb", borderRadius: 22, padding: 3 },
-  panelTab: { flex: 1, paddingVertical: 9, alignItems: "center", borderRadius: 18 },
-  panelTabSelected: { backgroundColor: "#373151" },
-  panelTabText: { color: "#292334", fontSize: 13 },
+  panelTabs: {
+    flexDirection: "row",
+    backgroundColor: premium.surface2,
+    borderWidth: 1,
+    borderColor: premium.line,
+    borderRadius: 999,
+    padding: 4,
+  },
+  panelTab: { flex: 1, paddingVertical: 10, alignItems: "center", borderRadius: 999 },
+  panelTabSelected: { backgroundColor: premium.surface3 },
+  panelTabText: { color: premium.ink2, fontSize: 13, fontWeight: "700" },
   qrHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -388,18 +477,28 @@ export const refStyles = StyleSheet.create({
     paddingVertical: 17,
     paddingHorizontal: 4,
   },
-  darkHeading: { color: "#19151f", fontSize: 20, fontWeight: "700" },
+  darkHeading: {
+    color: premium.ink,
+    fontSize: 19,
+    fontWeight: "700",
+    fontFamily: "Poppins_700Bold",
+  },
   tokenCard: {
-    borderRadius: 19,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: "#d5d0df",
-    padding: 12,
-    backgroundColor: "#f1eef5",
+    borderColor: premium.line,
+    padding: 14,
+    backgroundColor: premium.surface,
   },
   tokenRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  tokenTitle: { color: "#221c2a", fontSize: 16, fontWeight: "700" },
+  tokenTitle: {
+    color: premium.ink,
+    fontSize: 15.5,
+    fontWeight: "700",
+    fontFamily: "Poppins_700Bold",
+  },
   newButton: {
-    backgroundColor: "#6242bb",
+    backgroundColor: premium.violet,
     borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 9,
@@ -407,26 +506,33 @@ export const refStyles = StyleSheet.create({
     gap: 6,
     alignItems: "center",
   },
-  tokenBox: { backgroundColor: "#e4e0ed", borderRadius: 13, marginTop: 12, padding: 12 },
-  tokenText: { color: "#28222d", fontSize: 16, fontWeight: "700" },
+  tokenBox: { backgroundColor: premium.surface2, borderRadius: 12, marginTop: 12, padding: 12 },
+  tokenText: { color: premium.ink, fontSize: 15, fontWeight: "700" },
   qrBox: {
-    backgroundColor: "#e9e6ef",
-    borderRadius: 15,
+    backgroundColor: "#EFEDF5",
+    borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
     marginTop: 10,
-    padding: 12,
+    padding: 16,
   },
-  redeemHeading: { fontSize: 18, fontWeight: "700", color: "#231e29", marginTop: 15, marginBottom: 9 },
+  redeemHeading: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: premium.ink,
+    fontFamily: "Poppins_700Bold",
+    marginTop: 15,
+    marginBottom: 9,
+  },
   redeemRow: {
     flexDirection: "row",
-    backgroundColor: "#e8e5ed",
+    backgroundColor: premium.surface2,
     borderRadius: 13,
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: "#d2ccdc",
+    borderColor: premium.line2,
   },
-  redeemInput: { flex: 1, paddingHorizontal: 10, fontSize: 14, color: "#211b2b" },
-  redeemButton: { backgroundColor: "#3654b5", paddingHorizontal: 15, justifyContent: "center", minHeight: 45 },
-  panelNote: { color: "#514a5a", marginTop: 15, textAlign: "center" },
+  redeemInput: { flex: 1, paddingHorizontal: 12, fontSize: 14, color: premium.ink },
+  redeemButton: { backgroundColor: premium.violet, paddingHorizontal: 15, justifyContent: "center", minHeight: 45 },
+  panelNote: { color: premium.muted, marginTop: 15, textAlign: "center", fontSize: 13, fontWeight: "600" },
 });

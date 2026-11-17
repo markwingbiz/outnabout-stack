@@ -8,6 +8,14 @@ export type FunnelSummary = {
   id: string;
   name: string;
   status: string;
+  /** Parent funnel id for sub-rows (config.parent_funnel), else null. */
+  parentFunnelId: string | null;
+  /**
+   * True for legacy rows (metadata.registry_note set by the 2026-10-21
+   * Monfun remap): kept in the database for history, NOT a funnel —
+   * never list it as one and never count its money rows.
+   */
+  isLegacy: boolean;
 };
 
 export type RevenueSummary = {
@@ -26,14 +34,23 @@ export async function fetchFunnels(): Promise<{ funnels: FunnelSummary[]; error:
   try {
     const { data, error } = await supabase
       .from("funnels")
-      .select("id, name, status")
+      .select("id, name, status, config, metadata")
       .order("created_at", { ascending: true });
     if (error) throw new Error(error.message);
-    const funnels = ((data ?? []) as Record<string, unknown>[]).map((f) => ({
-      id: String(f.id ?? ""),
-      name: String(f.name ?? "Unnamed funnel"),
-      status: String(f.status ?? "draft"),
-    }));
+    const funnels = ((data ?? []) as Record<string, unknown>[]).map((f) => {
+      const cfg = (f.config ?? null) as Record<string, unknown> | null;
+      const meta = (f.metadata ?? null) as Record<string, unknown> | null;
+      return {
+        id: String(f.id ?? ""),
+        name: String(f.name ?? "Unnamed funnel"),
+        status: String(f.status ?? "draft"),
+        parentFunnelId:
+          cfg && typeof cfg.parent_funnel === "string" ? cfg.parent_funnel : null,
+        isLegacy: Boolean(
+          meta && typeof meta.registry_note === "string" && meta.registry_note.length > 0,
+        ),
+      };
+    });
     return { funnels, error: null };
   } catch (e) {
     return { funnels: [], error: e instanceof Error ? e.message : "Could not load funnels." };
@@ -138,4 +155,84 @@ export async function fetchMoneyFunnels(): Promise<{
   } catch (e) {
     return { rows: [], error: e instanceof Error ? e.message : "Could not load money funnels." };
   }
+}
+
+// ---------- Canonical funnel structure (2026-10-21 Monfun remap) ----------
+// The database holds 12 funnels rows but only 8 canonical funnels:
+// sub-rows hang off a canonical funnel via config.parent_funnel, and one
+// legacy row (KC Content Money Funnel) carries metadata.registry_note and
+// is not a funnel at all. Money is 1:1 per funnel family: a canonical
+// funnel's money family is every money_funnels row whose funnel_id is the
+// funnel itself or one of its sub-rows, and the canonical money row is
+// the one carrying the monthly target (metadata.revenue_target_cents) —
+// e.g. Social Content + SEO's target lives on its SEO sub-row's backfill
+// mirror, not on the short_form_content alternate. Only the canonical
+// rows feed totals, so a dollar is never counted twice and the legacy
+// row never counts at all.
+
+/** Monthly target (cents) from a money row's metadata, or null. */
+export function moneySummaryTargetCents(row: MoneyFunnelSummary): number | null {
+  const v = row.metadata?.revenue_target_cents;
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+export type CanonicalFunnelView = {
+  funnel: FunnelSummary;
+  subFunnels: FunnelSummary[];
+  /** Every money row in the family (canonical funnel + its sub-rows). */
+  moneyRows: MoneyFunnelSummary[];
+  /** The family's canonical money row (the target-carrying row wins). */
+  money: MoneyFunnelSummary | null;
+  targetCents: number | null;
+  /** Verified revenue (cents) from the canonical money row only. */
+  verifiedCents: number;
+};
+
+export function resolveCanonicalFunnels(
+  funnels: FunnelSummary[],
+  moneyRows: MoneyFunnelSummary[],
+): CanonicalFunnelView[] {
+  const live = funnels.filter((f) => !f.isLegacy);
+  const liveIds = new Set(live.map((f) => f.id));
+  const subsByParent = new Map<string, FunnelSummary[]>();
+  const canonical: FunnelSummary[] = [];
+  for (const f of live) {
+    if (f.parentFunnelId && f.parentFunnelId !== f.id && liveIds.has(f.parentFunnelId)) {
+      const list = subsByParent.get(f.parentFunnelId) ?? [];
+      list.push(f);
+      subsByParent.set(f.parentFunnelId, list);
+    } else {
+      canonical.push(f);
+    }
+  }
+  return canonical.map((funnel) => {
+    const subFunnels = subsByParent.get(funnel.id) ?? [];
+    const familyIds = new Set([funnel.id, ...subFunnels.map((s) => s.id)]);
+    const family = moneyRows.filter(
+      (r) => r.funnel_id !== null && familyIds.has(r.funnel_id),
+    );
+    const money =
+      family.find((r) => moneySummaryTargetCents(r) !== null) ??
+      family.find((r) => (r.key ?? "").startsWith("backfill_")) ??
+      family[0] ??
+      null;
+    return {
+      funnel,
+      subFunnels,
+      moneyRows: family,
+      money,
+      targetCents: money ? moneySummaryTargetCents(money) : null,
+      verifiedCents: money?.verified_revenue_cents ?? 0,
+    };
+  });
+}
+
+/** The canonical money rows only — one per canonical funnel — for totals. */
+export function canonicalMoneySummaries(
+  funnels: FunnelSummary[],
+  moneyRows: MoneyFunnelSummary[],
+): MoneyFunnelSummary[] {
+  return resolveCanonicalFunnels(funnels, moneyRows)
+    .map((v) => v.money)
+    .filter((m): m is MoneyFunnelSummary => m !== null);
 }

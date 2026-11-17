@@ -1,0 +1,95 @@
+diff --git a/livework/app/edit-event.tsx b/livework/app/edit-event.tsx
+index c02bc96..9ea2297 100644
+--- a/livework/app/edit-event.tsx
++++ b/livework/app/edit-event.tsx
+@@ -28,6 +28,7 @@ import { Ionicons } from "@expo/vector-icons";
+ import { useLocalSearchParams, useRouter } from "expo-router";
+ import { THEME } from "../lib/theme";
+ import { supabase, supabaseConfigured } from "../lib/supabase";
++import { describeError } from "../lib/errors";
+ import { useAuth } from "../lib/auth";
+ import { getUserTenantIds, getUserVenues, type TenantVenue } from "../lib/tenant";
+ 
+@@ -227,7 +228,7 @@ export default function EditEventScreen() {
+         { text: "OK", onPress: () => router.back() },
+       ]);
+     } catch (e: unknown) {
+-      Alert.alert("Could not save", e instanceof Error ? e.message : "Try again.");
++      Alert.alert("Could not save", describeError(e));
+     } finally {
+       setBusy(false);
+     }
+diff --git a/livework/app/setup-venue.tsx b/livework/app/setup-venue.tsx
+index 532dd8f..99a3732 100644
+--- a/livework/app/setup-venue.tsx
++++ b/livework/app/setup-venue.tsx
+@@ -35,6 +35,7 @@ import { THEME } from "../lib/theme";
+ import { supabase, supabaseConfigured } from "../lib/supabase";
+ import { useAuth } from "../lib/auth";
+ import { getUserTenantIds, getUserVenues } from "../lib/tenant";
++import { describeError } from "../lib/errors";
+ import VenueForm, { type VenueFormValues } from "../components/VenueForm";
+ 
+ export default function SetupVenueScreen() {
+@@ -133,7 +134,7 @@ export default function SetupVenueScreen() {
+         { text: "OK", onPress: () => router.replace("/") },
+       ]);
+     } catch (e: unknown) {
+-      Alert.alert("Could not set up venue", e instanceof Error ? e.message : "Try again.");
++      Alert.alert("Could not set up venue", describeError(e));
+     } finally {
+       setBusy(false);
+     }
+diff --git a/livework/app/venue-form.tsx b/livework/app/venue-form.tsx
+index 375dee3..13972e3 100644
+--- a/livework/app/venue-form.tsx
++++ b/livework/app/venue-form.tsx
+@@ -27,6 +27,7 @@ import { THEME } from "../lib/theme";
+ import { supabase, supabaseConfigured } from "../lib/supabase";
+ import { useAuth } from "../lib/auth";
+ import { getUserTenantIds, getUserVenues, type TenantVenue } from "../lib/tenant";
++import { describeError } from "../lib/errors";
+ import VenueForm, { type VenueFormValues } from "../components/VenueForm";
+ 
+ export default function VenueFormScreen() {
+@@ -116,7 +117,7 @@ export default function VenueFormScreen() {
+         ]);
+       }
+     } catch (e: unknown) {
+-      Alert.alert("Could not save venue", e instanceof Error ? e.message : "Try again.");
++      Alert.alert("Could not save venue", describeError(e));
+     } finally {
+       setBusy(false);
+     }
+diff --git a/livework/lib/errors.ts b/livework/lib/errors.ts
+new file mode 100644
+index 0000000..39b2782
+--- /dev/null
++++ b/livework/lib/errors.ts
+@@ -0,0 +1,26 @@
++// Shared error text for Livework screens.
++//
++// Supabase PostgREST errors are plain objects ({message, code, details,
++// hint}), NOT Error instances — so `e instanceof Error ? e.message :
++// "Try again."` swallowed the real message on every Supabase failure and
++// the app showed only "Try again.". describeError reads the real fields
++// so the screen shows what actually failed.
++export function describeError(e: unknown): string {
++  if (e instanceof Error) return e.message || "Try again.";
++  if (typeof e === "string" && e) return e;
++  if (e && typeof e === "object") {
++    const o = e as { message?: unknown; code?: unknown; details?: unknown; hint?: unknown };
++    const parts: string[] = [];
++    if (typeof o.message === "string" && o.message) parts.push(o.message);
++    if (typeof o.code === "string" && o.code) parts.push(`(${o.code})`);
++    if (typeof o.details === "string" && o.details) parts.push(o.details);
++    if (typeof o.hint === "string" && o.hint) parts.push(o.hint);
++    if (parts.length > 0) return parts.join(" ");
++    try {
++      return JSON.stringify(e);
++    } catch {
++      return "Try again.";
++    }
++  }
++  return "Try again.";
++}

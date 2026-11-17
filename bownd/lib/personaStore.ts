@@ -1,20 +1,32 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export type PersonaProfile = {
-  audience: "singles" | "couples" | "parents";
+  // "all" = All Persona (owner model 2026-11-15): every chooser has
+  // an All that means NO narrowing, and the Alls are the defaults.
+  // A persona is picked only on the persona screen (reached from
+  // Personal). It shapes ONLY Tailored For You on the Events page
+  // (owner refinement 2026-11-15 20:00): All Events, Spotlight,
+  // Home, and NYE are universal — identical for every viewer.
+  audience: "all" | "singles" | "couples" | "parents";
   vibe: "spicy" | "fun" | "relaxed" | "adventurous" | "sporty";
 };
 
-const KEY = "OUTNABOUT_PERSONA_V1";
+const KEY = "BOWND_PERSONA_V1";
+const LEGACY_KEY = "OUTNABOUT_PERSONA_V1";
 
 export const DEFAULT_PERSONA: PersonaProfile = {
-  audience: "singles",
+  audience: "all",
   vibe: "fun",
 };
 
 function normalizePersona(p: any): PersonaProfile {
+  // Valid saved values (all/singles/couples/parents) pass through —
+  // an existing user's pick is never rewritten. Anything unknown
+  // falls back to "all" (All Persona, no narrowing), the default.
   const audience: PersonaProfile["audience"] =
-    p?.audience === "couples" || p?.audience === "parents" ? p.audience : "singles";
+    p?.audience === "singles" || p?.audience === "couples" || p?.audience === "parents"
+      ? p.audience
+      : "all";
 
   let vibe: PersonaProfile["vibe"] = p?.vibe;
 
@@ -30,7 +42,17 @@ function normalizePersona(p: any): PersonaProfile {
 
 export async function loadPersona(): Promise<PersonaProfile> {
   try {
-    const raw = await AsyncStorage.getItem(KEY);
+    let raw = await AsyncStorage.getItem(KEY);
+    if (!raw) {
+      // One-time migration from the pre-rebrand key: carry the saved
+      // persona over, then drop the legacy key.
+      const legacy = await AsyncStorage.getItem(LEGACY_KEY);
+      if (legacy) {
+        raw = legacy;
+        await AsyncStorage.setItem(KEY, legacy);
+        await AsyncStorage.removeItem(LEGACY_KEY);
+      }
+    }
     if (!raw) return DEFAULT_PERSONA;
     return normalizePersona(JSON.parse(raw));
   } catch {
@@ -44,4 +66,31 @@ export async function savePersona(p: PersonaProfile) {
   } catch {
     // silent fail in dev
   }
+}
+
+/** The slice of an event persona matching is allowed to see. */
+export type PersonaMatchableEvent = {
+  vibeTags?: string[] | null;
+  audienceTags?: string[] | null;
+};
+
+/**
+ * Persona matching (the vc10 logic, moved here from events.tsx so
+ * the rule lives with the persona store): an event matches when
+ * its audienceTags cover the persona audience AND its vibeTags
+ * cover the persona vibe. All Persona (audience "all") matches
+ * everything — no narrowing. Used ONLY by Tailored For You
+ * (owner refinement, Mark 2026-11-15 20:00): a specific picked
+ * persona restricts Tailored's candidates to matches; All Events
+ * and Spotlight never consult this.
+ */
+export function matchesPersona(e: PersonaMatchableEvent, persona: PersonaProfile): boolean {
+  if (persona?.audience === "all") return true;
+  const pAudience = persona?.audience ? [persona.audience.toLowerCase()] : [];
+  const pVibes = persona?.vibe ? [persona.vibe.toLowerCase()] : [];
+  const eAudience = (e.audienceTags || []).map((s) => s.toLowerCase());
+  const eVibes = (e.vibeTags || []).map((s) => s.toLowerCase());
+  const audienceOK = pAudience.length === 0 ? true : pAudience.some((a) => eAudience.includes(a));
+  const vibeOK = pVibes.length === 0 ? true : pVibes.some((v) => eVibes.includes(v));
+  return audienceOK && vibeOK;
 }

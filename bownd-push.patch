@@ -1,0 +1,1646 @@
+diff --git a/bownd/app.json b/bownd/app.json
+index 3ec97b3..da778c1 100644
+--- a/bownd/app.json
++++ b/bownd/app.json
+@@ -29,6 +29,7 @@
+     },
+ 
+     "plugins": [
++      "expo-notifications",
+       [
+         "expo-camera",
+         {
+diff --git a/bownd/app/(tabs)/personal.tsx b/bownd/app/(tabs)/personal.tsx
+index 8c03ade..2c4689b 100644
+--- a/bownd/app/(tabs)/personal.tsx
++++ b/bownd/app/(tabs)/personal.tsx
+@@ -42,6 +42,7 @@ import {
+   type RedemptionHistoryItem,
+ } from "../../lib/store";
+ import { BottomNav, refStyles } from "../ui/reference";
++import NotificationSettings from "../../components/push/NotificationSettings";
+ import { MemberCode } from "../../components/ui/MemberCode";
+ import { CardBackground } from "../../components/ui/CardBackground";
+ import { resolveCardImage, categoryForVenueName, resolveEventCardImage } from "../../lib/placeholders";
+@@ -329,6 +330,14 @@ export default function PersonalScreen() {
+               </>
+             )}
+ 
++            {/* Notifications — push category toggles (plan §1.6) */}
++            {panel === "All" && (
++              <>
++                <Text style={[refStyles.darkHeading, styles.sectionHeading]}>Notifications</Text>
++                <NotificationSettings />
++              </>
++            )}
++
+             {/* Favorite venues — under the All panel */}
+             {panel === "All" && (
+               <>
+diff --git a/bownd/app/_layout.tsx b/bownd/app/_layout.tsx
+index 706d106..ecb0076 100644
+--- a/bownd/app/_layout.tsx
++++ b/bownd/app/_layout.tsx
+@@ -6,12 +6,24 @@
+ // (detail, list, vibe, redeem, scan) are auto-registered by Expo Router
+ // from their files — they need no explicit Stack.Screen entries.
+ import React from "react";
+-import { Stack } from "expo-router";
+-import { AuthProvider } from "../lib/auth";
++import { Stack, useRouter } from "expo-router";
++import { AuthProvider, useAuth } from "../lib/auth";
++import { usePushBootstrap } from "../lib/push";
++
++// Push notifications bootstrap (push-notifications-plan.md §1.1): wires
++// the foreground handler, Android channels, tap deep-link routing, and
++// token registration on sign-in. Renders nothing.
++function PushBootstrap() {
++  const { user } = useAuth();
++  const router = useRouter();
++  usePushBootstrap(user?.uid ?? null, (route) => router.push(route as never));
++  return null;
++}
+ 
+ export default function RootLayout() {
+   return (
+     <AuthProvider>
++      <PushBootstrap />
+       <Stack
+         screenOptions={{
+           headerShown: false,
+diff --git a/bownd/app/detail.tsx b/bownd/app/detail.tsx
+index 0f4eb40..4559a45 100644
+--- a/bownd/app/detail.tsx
++++ b/bownd/app/detail.tsx
+@@ -30,6 +30,7 @@ import {
+   type FavoriteItem,
+ } from "../lib/store";
+ import { useAuth } from "../lib/auth";
++import { maybeAskForPushPermission } from "../lib/push";
+ import {
+   findShowcaseEvent,
+   findShowcaseVenue,
+@@ -158,6 +159,11 @@ export default function DetailScreen() {
+     try {
+       const nowFav = await toggleFavorite(user?.uid ?? null, item);
+       setFav(nowFav);
++      // Plan §1.2 fallback moment: favoriting an event is the in-context
++      // permission ask (fires at most once; never after a refusal).
++      if (nowFav && item.kind === "event") {
++        void maybeAskForPushPermission(user?.uid ?? null);
++      }
+     } catch {
+       Alert.alert("Could not save favorite", "Try again.");
+     }
+diff --git a/bownd/components/push/NotificationSettings.tsx b/bownd/components/push/NotificationSettings.tsx
+new file mode 100644
+index 0000000..d1c7517
+--- /dev/null
++++ b/bownd/components/push/NotificationSettings.tsx
+@@ -0,0 +1,145 @@
++// Bownd notification settings section — mounted in the Personal tab's
++// "All" panel (plan §1.6: category toggles live in the app's settings /
++// profile surface). Transactional categories are shown as always-on
++// with the plan's plain-words rule; marketing categories are switches
++// persisted to the push_tokens registration (via lib/push.ts).
++import React, { useCallback, useEffect, useState } from "react";
++import { View, Text, StyleSheet, Switch, TouchableOpacity, ActivityIndicator } from "react-native";
++import { Ionicons } from "@expo/vector-icons";
++import { useAuth } from "../../lib/auth";
++import {
++  PUSH_CATEGORIES,
++  getPushPermissionState,
++  loadCategoryPrefs,
++  registerPushToken,
++  requestPushPermission,
++  saveCategoryPref,
++  type PushCategoryPrefs,
++  type PushPermissionState,
++} from "../../lib/push";
++
++export default function NotificationSettings() {
++  const { user } = useAuth();
++  const [permission, setPermission] = useState<PushPermissionState>("undetermined");
++  const [prefs, setPrefs] = useState<PushCategoryPrefs>({});
++  const [loaded, setLoaded] = useState(false);
++  const [busy, setBusy] = useState(false);
++
++  const load = useCallback(async () => {
++    const [state, stored] = await Promise.all([getPushPermissionState(), loadCategoryPrefs()]);
++    setPermission(state);
++    setPrefs(stored);
++    setLoaded(true);
++  }, []);
++
++  useEffect(() => {
++    void load();
++  }, [load]);
++
++  async function onEnable() {
++    if (busy) return;
++    setBusy(true);
++    try {
++      const next = await requestPushPermission();
++      setPermission(next);
++      if (next === "granted" && user) await registerPushToken(user.uid);
++    } finally {
++      setBusy(false);
++    }
++  }
++
++  async function onToggle(key: string, value: boolean) {
++    setPrefs((prev) => ({ ...prev, [key]: value }));
++    const next = await saveCategoryPref(key, value);
++    setPrefs(next);
++  }
++
++  if (!loaded) {
++    return (
++      <View style={styles.card}>
++        <ActivityIndicator color="#6242bb" />
++      </View>
++    );
++  }
++
++  return (
++    <View style={styles.card}>
++      {permission !== "granted" && (
++        <View style={styles.enableRow}>
++          <View style={{ flex: 1 }}>
++            <Text style={styles.enableTitle}>Notifications are off</Text>
++            <Text style={styles.enableSub}>
++              Turn them on for ticket confirmations, event reminders and offers matched to you.
++            </Text>
++          </View>
++          <TouchableOpacity style={styles.enableBtn} onPress={() => void onEnable()} disabled={busy}>
++            <Text style={styles.enableBtnText}>{busy ? "…" : "Enable"}</Text>
++          </TouchableOpacity>
++        </View>
++      )}
++
++      {PUSH_CATEGORIES.map((c, i) => (
++        <View key={c.key} style={[styles.row, i === PUSH_CATEGORIES.length - 1 && styles.rowLast]}>
++          <Ionicons
++            name={c.locked ? "lock-closed-outline" : "notifications-outline"}
++            size={18}
++            color="#6242bb"
++          />
++          <View style={{ flex: 1 }}>
++            <Text style={styles.rowTitle}>{c.label}</Text>
++            <Text style={styles.rowSub}>{c.description}</Text>
++          </View>
++          {c.locked ? (
++            <Text style={styles.alwaysOn}>Always on</Text>
++          ) : (
++            <Switch
++              value={prefs[c.key] !== false}
++              onValueChange={(v) => void onToggle(c.key, v)}
++              trackColor={{ false: "#cfc9dd", true: "#6242bb" }}
++            />
++          )}
++        </View>
++      ))}
++    </View>
++  );
++}
++
++const styles = StyleSheet.create({
++  card: {
++    backgroundColor: "#ffffff",
++    borderRadius: 16,
++    padding: 12,
++    borderWidth: 1,
++    borderColor: "#d5d0df",
++  },
++  enableRow: {
++    flexDirection: "row",
++    alignItems: "center",
++    gap: 12,
++    paddingBottom: 12,
++    marginBottom: 4,
++    borderBottomWidth: 1,
++    borderBottomColor: "#e7e3f0",
++  },
++  enableTitle: { fontSize: 14, fontWeight: "900", color: "#221c2a" },
++  enableSub: { marginTop: 3, fontSize: 12, color: "#514a5a", fontWeight: "700", lineHeight: 16 },
++  enableBtn: {
++    paddingHorizontal: 14,
++    paddingVertical: 10,
++    borderRadius: 14,
++    backgroundColor: "#3654b5",
++  },
++  enableBtnText: { color: "#fff", fontWeight: "900", fontSize: 12 },
++  row: {
++    flexDirection: "row",
++    alignItems: "center",
++    gap: 10,
++    paddingVertical: 10,
++    borderBottomWidth: 1,
++    borderBottomColor: "#e7e3f0",
++  },
++  rowLast: { borderBottomWidth: 0 },
++  rowTitle: { fontSize: 14, fontWeight: "900", color: "#221c2a" },
++  rowSub: { marginTop: 2, fontSize: 12, color: "#514a5a", fontWeight: "600", lineHeight: 16 },
++  alwaysOn: { fontSize: 11, fontWeight: "900", color: "#6242bb" },
++});
+diff --git a/bownd/lib/push.ts b/bownd/lib/push.ts
+new file mode 100644
+index 0000000..a49deea
+--- /dev/null
++++ b/bownd/lib/push.ts
+@@ -0,0 +1,456 @@
++// Bownd push notifications — client integration (push-notifications-plan.md
++// Part 1). Owns: permission state, Expo push token capture/refresh,
++// registration in the Supabase `push_tokens` registry, per-category
++// preferences, Android notification channels, and notification-tap
++// deep-link routing.
++//
++// Registry contract (plan §1.3): one row per account + app + device in
++// `push_tokens`, upserted on (account_id, app, device_id). The sender
++// (the push-send Edge Function — the ONLY sender) reads categories from
++// the row, never from client claims at send time.
++//
++// NOTE — Bownd has no Supabase Auth session (members sign in with
++// Firebase), so this module builds its own anon-key client from the same
++// EXPO_PUBLIC_SUPABASE_* env convention Livework/Livework+ use, and
++// registers with the Firebase uid as account_id. When the env vars are
++// absent the client is null and every call no-ops (same house pattern as
++// livework/lib/supabase.ts) — push simply stays dark until configured.
++import { useEffect, useRef } from "react";
++import { Alert, Platform } from "react-native";
++import AsyncStorage from "@react-native-async-storage/async-storage";
++import Constants from "expo-constants";
++import * as Notifications from "expo-notifications";
++import { createClient, type SupabaseClient } from "@supabase/supabase-js";
++
++// ---------- Registry client ----------
++
++const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
++const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
++
++export const pushConfigured = Boolean(supabaseUrl && supabaseAnonKey);
++
++const supabase: SupabaseClient | null =
++  pushConfigured && supabaseUrl && supabaseAnonKey
++    ? createClient(supabaseUrl, supabaseAnonKey, {
++        auth: { persistSession: false, autoRefreshToken: false },
++      })
++    : null;
++
++// ---------- Constants ----------
++
++export const PUSH_APP = "bownd" as const;
++export const PUSH_SCOPE = "customer" as const;
++
++export type PushCategoryClass = "transactional" | "marketing";
++
++export type PushCategoryDef = {
++  key: string;
++  label: string;
++  description: string;
++  klass: PushCategoryClass;
++  /** Transactional categories are always on (plan §1.6) — shown, not switched. */
++  locked: boolean;
++};
++
++export const PUSH_CATEGORIES: PushCategoryDef[] = [
++  {
++    key: "tickets",
++    label: "Tickets",
++    description: "Ticket confirmations and event reminders.",
++    klass: "transactional",
++    locked: true,
++  },
++  {
++    key: "event_changes",
++    label: "Event changes",
++    description:
++      "While you hold a ticket, changes to that event — postponements, cancellations and refunds — are always sent. They carry refund deadlines, so this one can't be turned off.",
++    klass: "transactional",
++    locked: true,
++  },
++  {
++    key: "points",
++    label: "Points",
++    description:
++      "A weekly summary of points you've earned. Warnings about points expiring are always sent — they protect points you've already earned.",
++    klass: "marketing",
++    locked: false,
++  },
++  {
++    key: "perks_drops",
++    label: "Perks & drops",
++    description: "Perk refreshes, member drops and member-free special events.",
++    klass: "marketing",
++    locked: false,
++  },
++  {
++    key: "events_for_you",
++    label: "Events for you",
++    description: "New events at venues you favorite and events matched to your personas.",
++    klass: "marketing",
++    locked: false,
++  },
++  {
++    key: "offers_campaigns",
++    label: "Offers & campaigns",
++    description: "Combined offers and campaign announcements.",
++    klass: "marketing",
++    locked: false,
++  },
++];
++
++export type PushCategoryPrefs = Record<string, boolean>;
++
++export function defaultCategoryPrefs(): PushCategoryPrefs {
++  const out: PushCategoryPrefs = {};
++  for (const c of PUSH_CATEGORIES) out[c.key] = true;
++  return out;
++}
++
++const STORAGE = {
++  deviceId: "bownd.push.device_id",
++  categories: "bownd.push.categories",
++  asked: "bownd.push.asked",
++} as const;
++
++// ---------- Device id (per install; survives token rotation) ----------
++
++function randomId(): string {
++  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
++  if (c?.randomUUID) return c.randomUUID();
++  const bytes = Array.from({ length: 16 }, () => Math.floor(Math.random() * 256));
++  bytes[6] = (bytes[6] & 0x0f) | 0x40;
++  bytes[8] = (bytes[8] & 0x3f) | 0x80;
++  const hex = bytes.map((b) => b.toString(16).padStart(2, "0")).join("");
++  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
++}
++
++let deviceIdCache: string | null = null;
++
++export async function getPushDeviceId(): Promise<string> {
++  if (deviceIdCache) return deviceIdCache;
++  try {
++    const existing = await AsyncStorage.getItem(STORAGE.deviceId);
++    if (existing) {
++      deviceIdCache = existing;
++      return existing;
++    }
++  } catch {
++    // Fall through and mint a fresh id.
++  }
++  const fresh = randomId();
++  deviceIdCache = fresh;
++  try {
++    await AsyncStorage.setItem(STORAGE.deviceId, fresh);
++  } catch {
++    // Non-fatal: the in-memory id still keys this session's row.
++  }
++  return fresh;
++}
++
++// ---------- Category preferences ----------
++
++export async function loadCategoryPrefs(): Promise<PushCategoryPrefs> {
++  const defaults = defaultCategoryPrefs();
++  try {
++    const raw = await AsyncStorage.getItem(STORAGE.categories);
++    if (!raw) return defaults;
++    const parsed = JSON.parse(raw) as Record<string, unknown>;
++    for (const c of PUSH_CATEGORIES) {
++      if (typeof parsed[c.key] === "boolean") defaults[c.key] = parsed[c.key] as boolean;
++    }
++    return defaults;
++  } catch {
++    return defaults;
++  }
++}
++
++let registrationAccountId: string | null = null;
++
++async function writeCategoriesToRegistry(
++  accountId: string,
++  prefs: PushCategoryPrefs,
++): Promise<void> {
++  if (!supabase) return;
++  const deviceId = await getPushDeviceId();
++  await supabase
++    .from("push_tokens")
++    .update({ categories_enabled: prefs, updated_at: new Date().toISOString() })
++    .eq("account_id", accountId)
++    .eq("app", PUSH_APP)
++    .eq("device_id", deviceId);
++}
++
++export async function saveCategoryPref(key: string, value: boolean): Promise<PushCategoryPrefs> {
++  const prefs = await loadCategoryPrefs();
++  prefs[key] = value;
++  try {
++    await AsyncStorage.setItem(STORAGE.categories, JSON.stringify(prefs));
++  } catch {
++    // The registry write-through below still records the choice.
++  }
++  if (registrationAccountId) {
++    try {
++      await writeCategoriesToRegistry(registrationAccountId, prefs);
++    } catch {
++      // Best-effort: local prefs re-sync on the next registration refresh.
++    }
++  }
++  return prefs;
++}
++
++// ---------- Permission ----------
++
++export type PushPermissionState = "granted" | "denied" | "undetermined";
++
++export async function getPushPermissionState(): Promise<PushPermissionState> {
++  try {
++    const { status } = await Notifications.getPermissionsAsync();
++    return status === "granted" ? "granted" : status === "denied" ? "denied" : "undetermined";
++  } catch {
++    return "undetermined";
++  }
++}
++
++export async function requestPushPermission(): Promise<PushPermissionState> {
++  try {
++    const { status } = await Notifications.requestPermissionsAsync();
++    return status === "granted" ? "granted" : status === "denied" ? "denied" : "undetermined";
++  } catch {
++    return "undetermined";
++  }
++}
++
++// ---------- Registration ----------
++
++function deviceTimezone(): string | null {
++  try {
++    return Intl.DateTimeFormat().resolvedOptions().timeZone ?? null;
++  } catch {
++    return null;
++  }
++}
++
++async function fetchExpoPushToken(): Promise<string | null> {
++  try {
++    const projectId =
++      (Constants.expoConfig?.extra?.eas as { projectId?: string } | undefined)?.projectId ??
++      Constants.easConfig?.projectId ??
++      undefined;
++    const result = await Notifications.getExpoPushTokenAsync(
++      projectId ? { projectId } : undefined,
++    );
++    return typeof result.data === "string" ? result.data : null;
++  } catch {
++    // Simulators, missing credentials, Expo Go — no token, no row.
++    return null;
++  }
++}
++
++/**
++ * Upserts this device's push_tokens row for the signed-in account.
++ * No-ops (returns false) when push is unconfigured, there is no account,
++ * permission is not granted, or no token is available.
++ */
++export async function registerPushToken(accountId: string | null): Promise<boolean> {
++  if (!supabase || !accountId) return false;
++  const permission = await getPushPermissionState();
++  if (permission !== "granted") return false;
++  const token = await fetchExpoPushToken();
++  if (!token) return false;
++  const deviceId = await getPushDeviceId();
++  const prefs = await loadCategoryPrefs();
++  const now = new Date().toISOString();
++  const { error } = await supabase.from("push_tokens").upsert(
++    {
++      account_id: accountId,
++      account_scope: PUSH_SCOPE,
++      tenant_id: null,
++      app: PUSH_APP,
++      platform: Platform.OS === "ios" ? "ios" : "android",
++      device_id: deviceId,
++      expo_push_token: token,
++      categories_enabled: prefs,
++      permission_status: "granted",
++      device_timezone: deviceTimezone(),
++      app_version: Constants.expoConfig?.version ?? null,
++      last_seen_at: now,
++      updated_at: now,
++      disabled_at: null,
++    },
++    { onConflict: "account_id,app,device_id" },
++  );
++  if (error) return false;
++  registrationAccountId = accountId;
++  return true;
++}
++
++/** Removes this device's registry row (master notifications switch off). */
++export async function unregisterPushToken(accountId: string | null): Promise<void> {
++  if (!supabase || !accountId) return;
++  const deviceId = await getPushDeviceId();
++  await supabase
++    .from("push_tokens")
++    .delete()
++    .eq("account_id", accountId)
++    .eq("app", PUSH_APP)
++    .eq("device_id", deviceId);
++  if (registrationAccountId === accountId) registrationAccountId = null;
++}
++
++// ---------- In-context permission ask (plan §1.2) ----------
++
++/**
++ * The one in-context ask. Callers invoke it at the plan's moments (e.g.
++ * after a member favorites an event). It fires at most once per install:
++ * only while permission is undetermined and never after a refusal — the
++ * settings screen carries the quiet enable row instead.
++ */
++export async function maybeAskForPushPermission(accountId: string | null): Promise<void> {
++  let asked: string | null = null;
++  try {
++    asked = await AsyncStorage.getItem(STORAGE.asked);
++  } catch {
++    asked = null;
++  }
++  if (asked) return;
++  const state = await getPushPermissionState();
++  if (state !== "undetermined") return;
++  try {
++    await AsyncStorage.setItem(STORAGE.asked, new Date().toISOString());
++  } catch {
++    // Continue — worst case the ask repeats on a later moment.
++  }
++  Alert.alert(
++    "Turn on notifications?",
++    "Get your ticket confirmations and event reminders here.",
++    [
++      { text: "Not now", style: "cancel" },
++      {
++        text: "Turn on",
++        onPress: () => {
++          void (async () => {
++            const next = await requestPushPermission();
++            if (next === "granted" && accountId) await registerPushToken(accountId);
++          })();
++        },
++      },
++    ],
++  );
++}
++
++// ---------- Deep links ----------
++
++const ALLOWED_ROUTE_PREFIXES = [
++  "/detail",
++  "/(tabs)/home",
++  "/(tabs)/events",
++  "/(tabs)/personal",
++  "/(tabs)/persona",
++  "/whats-close",
++  "/list",
++] as const;
++
++const HOME_ROUTE = "/(tabs)/home";
++
++/**
++ * Validates a push payload's deep_link against Bownd's real route table.
++ * Unknown or malformed links fall back to Home (plan §1.1) — a push tap
++ * never crashes and never opens an arbitrary URL.
++ */
++export function resolveDeepLink(data: unknown): string {
++  const link =
++    data && typeof data === "object" && typeof (data as { deep_link?: unknown }).deep_link === "string"
++      ? ((data as { deep_link: string }).deep_link as string)
++      : null;
++  if (!link || !link.startsWith("/") || link.startsWith("//")) {
++    if (link) console.warn("[push] Unrecognized deep link, falling back home:", link);
++    return HOME_ROUTE;
++  }
++  const path = link.split("?")[0];
++  const ok = ALLOWED_ROUTE_PREFIXES.some((p) => path === p || path.startsWith(`${p}/`));
++  if (!ok) {
++    console.warn("[push] Unrecognized deep link, falling back home:", link);
++    return HOME_ROUTE;
++  }
++  return link;
++}
++
++// ---------- Bootstrap hook ----------
++
++let handlerInstalled = false;
++
++function installForegroundHandler(): void {
++  if (handlerInstalled) return;
++  handlerInstalled = true;
++  Notifications.setNotificationHandler({
++    handleNotification: async () => ({
++      shouldShowBanner: true,
++      shouldShowList: true,
++      shouldPlaySound: false,
++      shouldSetBadge: false,
++    }),
++  });
++}
++
++async function installAndroidChannels(): Promise<void> {
++  if (Platform.OS !== "android") return;
++  for (const c of PUSH_CATEGORIES) {
++    try {
++      await Notifications.setNotificationChannelAsync(c.key, {
++        name: c.label,
++        importance:
++          c.klass === "transactional"
++            ? Notifications.AndroidImportance.HIGH
++            : Notifications.AndroidImportance.DEFAULT,
++      });
++    } catch {
++      // Channel creation is best-effort; sends still work without it.
++    }
++  }
++}
++
++/**
++ * Mount once inside the root layout (within AuthProvider). Wires the
++ * foreground handler, Android channels, tap routing (warm + cold start),
++ * token capture on sign-in, and token-rotation refresh.
++ */
++export function usePushBootstrap(
++  accountId: string | null,
++  navigate: (route: string) => void,
++): void {
++  const navigateRef = useRef(navigate);
++  navigateRef.current = navigate;
++
++  useEffect(() => {
++    installForegroundHandler();
++    void installAndroidChannels();
++
++    let alive = true;
++    // Cold start: the response that launched the app.
++    Notifications.getLastNotificationResponseAsync()
++      .then((response) => {
++        if (alive && response) {
++          navigateRef.current(resolveDeepLink(response.notification.request.content.data));
++        }
++      })
++      .catch(() => {});
++
++    const responseSub = Notifications.addNotificationResponseReceivedListener((response) => {
++      navigateRef.current(resolveDeepLink(response.notification.request.content.data));
++    });
++    const tokenSub = Notifications.addPushTokenListener(() => {
++      if (registrationAccountId) void registerPushToken(registrationAccountId);
++    });
++    return () => {
++      alive = false;
++      responseSub.remove();
++      tokenSub.remove();
++    };
++  }, []);
++
++  useEffect(() => {
++    if (!accountId) return;
++    void registerPushToken(accountId);
++  }, [accountId]);
++}
+diff --git a/bownd/package-lock.json b/bownd/package-lock.json
+index fa209da..d4447b4 100644
+--- a/bownd/package-lock.json
++++ b/bownd/package-lock.json
+@@ -13,6 +13,7 @@
+         "@react-native-community/slider": "5.0.1",
+         "@react-navigation/bottom-tabs": "^7.9.1",
+         "@react-navigation/native": "^7.1.27",
++        "@supabase/supabase-js": "^2.45.0",
+         "expo": "~54.0.33",
+         "expo-blur": "~15.0.8",
+         "expo-camera": "~17.0.10",
+@@ -23,6 +24,7 @@
+         "expo-linear-gradient": "~15.0.8",
+         "expo-linking": "~8.0.11",
+         "expo-location": "~19.0.8",
++        "expo-notifications": "~0.32.17",
+         "expo-router": "~6.0.23",
+         "expo-secure-store": "~15.0.8",
+         "firebase": "^12.7.0",
+@@ -2970,6 +2972,12 @@
+         "node": ">=6"
+       }
+     },
++    "node_modules/@ide/backoff": {
++      "version": "1.0.0",
++      "resolved": "https://registry.npmjs.org/@ide/backoff/-/backoff-1.0.0.tgz",
++      "integrity": "sha512-F0YfUDjvT+Mtt/R4xdl2X0EYCHMMiJqNLdxHD++jDT5ydEFIyqbCHh51Qx2E211dgZprPKhV7sHmnXKpLuvc5g==",
++      "license": "MIT"
++    },
+     "node_modules/@isaacs/fs-minipass": {
+       "version": "4.0.1",
+       "resolved": "https://registry.npmjs.org/@isaacs/fs-minipass/-/fs-minipass-4.0.1.tgz",
+@@ -3934,6 +3942,101 @@
+         "@sinonjs/commons": "^3.0.0"
+       }
+     },
++    "node_modules/@supabase/auth-js": {
++      "version": "2.64.4",
++      "resolved": "https://registry.npmjs.org/@supabase/auth-js/-/auth-js-2.64.4.tgz",
++      "integrity": "sha512-9ITagy4WP4FLl+mke1rchapOH0RQpf++DI+WSG2sO1OFOZ0rW3cwAM0nCrMOxu+Zw4vJ4zObc08uvQrXx590Tg==",
++      "license": "MIT",
++      "dependencies": {
++        "@supabase/node-fetch": "^2.6.14"
++      }
++    },
++    "node_modules/@supabase/functions-js": {
++      "version": "2.4.1",
++      "resolved": "https://registry.npmjs.org/@supabase/functions-js/-/functions-js-2.4.1.tgz",
++      "integrity": "sha512-8sZ2ibwHlf+WkHDUZJUXqqmPvWQ3UHN0W30behOJngVh/qHHekhJLCFbh0AjkE9/FqqXtf9eoVvmYgfCLk5tNA==",
++      "license": "MIT",
++      "dependencies": {
++        "@supabase/node-fetch": "^2.6.14"
++      }
++    },
++    "node_modules/@supabase/node-fetch": {
++      "version": "2.6.15",
++      "resolved": "https://registry.npmjs.org/@supabase/node-fetch/-/node-fetch-2.6.15.tgz",
++      "integrity": "sha512-1ibVeYUacxWYi9i0cf5efil6adJ9WRyZBLivgjs+AUpewx1F3xPi7gLgaASI2SmIQxPoCEjAsLAzKPgMJVgOUQ==",
++      "license": "MIT",
++      "dependencies": {
++        "whatwg-url": "^5.0.0"
++      },
++      "engines": {
++        "node": "4.x || >=6.0.0"
++      }
++    },
++    "node_modules/@supabase/postgrest-js": {
++      "version": "1.15.8",
++      "resolved": "https://registry.npmjs.org/@supabase/postgrest-js/-/postgrest-js-1.15.8.tgz",
++      "integrity": "sha512-YunjXpoQjQ0a0/7vGAvGZA2dlMABXFdVI/8TuVKtlePxyT71sl6ERl6ay1fmIeZcqxiuFQuZw/LXUuStUG9bbg==",
++      "license": "MIT",
++      "dependencies": {
++        "@supabase/node-fetch": "^2.6.14"
++      }
++    },
++    "node_modules/@supabase/realtime-js": {
++      "version": "2.10.2",
++      "resolved": "https://registry.npmjs.org/@supabase/realtime-js/-/realtime-js-2.10.2.tgz",
++      "integrity": "sha512-qyCQaNg90HmJstsvr2aJNxK2zgoKh9ZZA8oqb7UT2LCh3mj9zpa3Iwu167AuyNxsxrUE8eEJ2yH6wLCij4EApA==",
++      "license": "MIT",
++      "dependencies": {
++        "@supabase/node-fetch": "^2.6.14",
++        "@types/phoenix": "^1.5.4",
++        "@types/ws": "^8.5.10",
++        "ws": "^8.14.2"
++      }
++    },
++    "node_modules/@supabase/realtime-js/node_modules/ws": {
++      "version": "8.22.0",
++      "resolved": "https://registry.npmjs.org/ws/-/ws-8.22.0.tgz",
++      "integrity": "sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==",
++      "license": "MIT",
++      "engines": {
++        "node": ">=10.0.0"
++      },
++      "peerDependencies": {
++        "bufferutil": "^4.0.1",
++        "utf-8-validate": ">=5.0.2"
++      },
++      "peerDependenciesMeta": {
++        "bufferutil": {
++          "optional": true
++        },
++        "utf-8-validate": {
++          "optional": true
++        }
++      }
++    },
++    "node_modules/@supabase/storage-js": {
++      "version": "2.6.0",
++      "resolved": "https://registry.npmjs.org/@supabase/storage-js/-/storage-js-2.6.0.tgz",
++      "integrity": "sha512-REAxr7myf+3utMkI2oOmZ6sdplMZZ71/2NEIEMBZHL9Fkmm3/JnaOZVSRqvG4LStYj2v5WhCruCzuMn6oD/Drw==",
++      "license": "MIT",
++      "dependencies": {
++        "@supabase/node-fetch": "^2.6.14"
++      }
++    },
++    "node_modules/@supabase/supabase-js": {
++      "version": "2.45.0",
++      "resolved": "https://registry.npmjs.org/@supabase/supabase-js/-/supabase-js-2.45.0.tgz",
++      "integrity": "sha512-j66Mfs8RhzCQCKxKogAFQYH9oNhRmgIdKk6pexguI2Oc7hi+nL9UNJug5aL1tKnBdaBM3h65riPLQSdL6sWa3Q==",
++      "license": "MIT",
++      "dependencies": {
++        "@supabase/auth-js": "2.64.4",
++        "@supabase/functions-js": "2.4.1",
++        "@supabase/node-fetch": "2.6.15",
++        "@supabase/postgrest-js": "1.15.8",
++        "@supabase/realtime-js": "2.10.2",
++        "@supabase/storage-js": "2.6.0"
++      }
++    },
+     "node_modules/@types/babel__core": {
+       "version": "7.20.5",
+       "resolved": "https://registry.npmjs.org/@types/babel__core/-/babel__core-7.20.5.tgz",
+@@ -4017,6 +4120,12 @@
+         "undici-types": "~8.9.0"
+       }
+     },
++    "node_modules/@types/phoenix": {
++      "version": "1.6.8",
++      "resolved": "https://registry.npmjs.org/@types/phoenix/-/phoenix-1.6.8.tgz",
++      "integrity": "sha512-8uBiGk2kDk+e0/9eq8CWuDG5VLrS50roV4doR3xn21/EL8olbWSi2TBNa/CFJS00VLOuawH/UGQQsn+2W8tNrA==",
++      "license": "MIT"
++    },
+     "node_modules/@types/react": {
+       "version": "19.1.17",
+       "resolved": "https://registry.npmjs.org/@types/react/-/react-19.1.17.tgz",
+@@ -4033,6 +4142,15 @@
+       "integrity": "sha512-9aEbYZ3TbYMznPdcdr3SmIrLXwC/AKZXQeCf9Pgao5CKb8CyHuEX5jzWPTkvregvhRJHcpRO6BFoGW9ycaOkYw==",
+       "license": "MIT"
+     },
++    "node_modules/@types/ws": {
++      "version": "8.18.2",
++      "resolved": "https://registry.npmjs.org/@types/ws/-/ws-8.18.2.tgz",
++      "integrity": "sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==",
++      "license": "MIT",
++      "dependencies": {
++        "@types/node": "*"
++      }
++    },
+     "node_modules/@types/yargs": {
+       "version": "17.0.35",
+       "resolved": "https://registry.npmjs.org/@types/yargs/-/yargs-17.0.35.tgz",
+@@ -4281,12 +4399,40 @@
+       "integrity": "sha512-BSHWgDSAiKs50o2Re8ppvp3seVHXSRM44cdSsT9FfNEUUZLOGWVCsiWaRPWM1Znn+mqZ1OfVZ3z3DWEzSp7hRA==",
+       "license": "MIT"
+     },
++    "node_modules/assert": {
++      "version": "2.1.0",
++      "resolved": "https://registry.npmjs.org/assert/-/assert-2.1.0.tgz",
++      "integrity": "sha512-eLHpSK/Y4nhMJ07gDaAzoX/XAKS8PSaojml3M0DM4JpV1LAi5JOJ/p6H/XWrl8L+DzVEvVCW1z3vWAaB9oTsQw==",
++      "license": "MIT",
++      "dependencies": {
++        "call-bind": "^1.0.2",
++        "is-nan": "^1.3.2",
++        "object-is": "^1.1.5",
++        "object.assign": "^4.1.4",
++        "util": "^0.12.5"
++      }
++    },
+     "node_modules/async-limiter": {
+       "version": "1.0.1",
+       "resolved": "https://registry.npmjs.org/async-limiter/-/async-limiter-1.0.1.tgz",
+       "integrity": "sha512-csOlWGAcRFJaI6m+F2WKdnMKr4HhdhFVBk0H/QbJFMCr+uO2kwohwXQPxw/9OCxp05r5ghVBFSyioixx3gfkNQ==",
+       "license": "MIT"
+     },
++    "node_modules/available-typed-arrays": {
++      "version": "1.0.7",
++      "resolved": "https://registry.npmjs.org/available-typed-arrays/-/available-typed-arrays-1.0.7.tgz",
++      "integrity": "sha512-wvUjBtSGN7+7SjNpq/9M2Tg350UZD3q62IFZLbRAR1bSMlCo1ZaeW+BJ+D090e4hIIZLBcTDWe4Mh4jvUDajzQ==",
++      "license": "MIT",
++      "dependencies": {
++        "possible-typed-array-names": "^1.0.0"
++      },
++      "engines": {
++        "node": ">= 0.4"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/ljharb"
++      }
++    },
+     "node_modules/babel-jest": {
+       "version": "29.7.0",
+       "resolved": "https://registry.npmjs.org/babel-jest/-/babel-jest-29.7.0.tgz",
+@@ -4529,6 +4675,12 @@
+         "@babel/core": "^7.0.0"
+       }
+     },
++    "node_modules/badgin": {
++      "version": "1.2.3",
++      "resolved": "https://registry.npmjs.org/badgin/-/badgin-1.2.3.tgz",
++      "integrity": "sha512-NQGA7LcfCpSzIbGRbkgjgdWkjy7HI+Th5VLxTJfW5EeaAf3fnS+xWQaQOCYiny+q6QSvxqoSO04vCx+4u++EJw==",
++      "license": "MIT"
++    },
+     "node_modules/balanced-match": {
+       "version": "4.0.4",
+       "resolved": "https://registry.npmjs.org/balanced-match/-/balanced-match-4.0.4.tgz",
+@@ -4740,6 +4892,53 @@
+         "node": ">= 0.8"
+       }
+     },
++    "node_modules/call-bind": {
++      "version": "1.0.9",
++      "resolved": "https://registry.npmjs.org/call-bind/-/call-bind-1.0.9.tgz",
++      "integrity": "sha512-a/hy+pNsFUTR+Iz8TCJvXudKVLAnz/DyeSUo10I5yvFDQJBFU2s9uqQpoSrJlroHUKoKqzg+epxyP9lqFdzfBQ==",
++      "license": "MIT",
++      "dependencies": {
++        "call-bind-apply-helpers": "^1.0.2",
++        "es-define-property": "^1.0.1",
++        "get-intrinsic": "^1.3.0",
++        "set-function-length": "^1.2.2"
++      },
++      "engines": {
++        "node": ">= 0.4"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/ljharb"
++      }
++    },
++    "node_modules/call-bind-apply-helpers": {
++      "version": "1.0.2",
++      "resolved": "https://registry.npmjs.org/call-bind-apply-helpers/-/call-bind-apply-helpers-1.0.2.tgz",
++      "integrity": "sha512-Sp1ablJ0ivDkSzjcaJdxEunN5/XvksFJ2sMBFfq6x0ryhQV/2b/KwFe21cMpmHtPOSij8K99/wSfoEuTObmuMQ==",
++      "license": "MIT",
++      "dependencies": {
++        "es-errors": "^1.3.0",
++        "function-bind": "^1.1.2"
++      },
++      "engines": {
++        "node": ">= 0.4"
++      }
++    },
++    "node_modules/call-bound": {
++      "version": "1.0.4",
++      "resolved": "https://registry.npmjs.org/call-bound/-/call-bound-1.0.4.tgz",
++      "integrity": "sha512-+ys997U96po4Kx/ABpBCqhA9EuxJaQWDQg7295H4hBphv3IZg0boBKuwYpt4YXp6MZ5AmZQnU/tyMTlRpaSejg==",
++      "license": "MIT",
++      "dependencies": {
++        "call-bind-apply-helpers": "^1.0.2",
++        "get-intrinsic": "^1.3.0"
++      },
++      "engines": {
++        "node": ">= 0.4"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/ljharb"
++      }
++    },
+     "node_modules/camelcase": {
+       "version": "6.3.0",
+       "resolved": "https://registry.npmjs.org/camelcase/-/camelcase-6.3.0.tgz",
+@@ -5198,6 +5397,23 @@
+         "url": "https://github.com/sponsors/sindresorhus"
+       }
+     },
++    "node_modules/define-data-property": {
++      "version": "1.1.4",
++      "resolved": "https://registry.npmjs.org/define-data-property/-/define-data-property-1.1.4.tgz",
++      "integrity": "sha512-rBMvIzlpA8v6E+SJZoo++HAYqsLrkg7MSfIinMPFhmkorw7X+dOXVJQs+QT69zGkzMyfDnIMN2Wid1+NbL3T+A==",
++      "license": "MIT",
++      "dependencies": {
++        "es-define-property": "^1.0.0",
++        "es-errors": "^1.3.0",
++        "gopd": "^1.0.1"
++      },
++      "engines": {
++        "node": ">= 0.4"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/ljharb"
++      }
++    },
+     "node_modules/define-lazy-prop": {
+       "version": "2.0.0",
+       "resolved": "https://registry.npmjs.org/define-lazy-prop/-/define-lazy-prop-2.0.0.tgz",
+@@ -5207,6 +5423,23 @@
+         "node": ">=8"
+       }
+     },
++    "node_modules/define-properties": {
++      "version": "1.2.1",
++      "resolved": "https://registry.npmjs.org/define-properties/-/define-properties-1.2.1.tgz",
++      "integrity": "sha512-8QmQKqEASLd5nx0U1B1okLElbUuuttJ/AnYmRXbbbGDWh6uS208EjD4Xqq/I9wK7u0v6O08XhTWnt5XtEbR6Dg==",
++      "license": "MIT",
++      "dependencies": {
++        "define-data-property": "^1.0.1",
++        "has-property-descriptors": "^1.0.0",
++        "object-keys": "^1.1.1"
++      },
++      "engines": {
++        "node": ">= 0.4"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/ljharb"
++      }
++    },
+     "node_modules/depd": {
+       "version": "2.0.0",
+       "resolved": "https://registry.npmjs.org/depd/-/depd-2.0.0.tgz",
+@@ -5329,6 +5562,20 @@
+         "url": "https://dotenvx.com"
+       }
+     },
++    "node_modules/dunder-proto": {
++      "version": "1.0.1",
++      "resolved": "https://registry.npmjs.org/dunder-proto/-/dunder-proto-1.0.1.tgz",
++      "integrity": "sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==",
++      "license": "MIT",
++      "dependencies": {
++        "call-bind-apply-helpers": "^1.0.1",
++        "es-errors": "^1.3.0",
++        "gopd": "^1.2.0"
++      },
++      "engines": {
++        "node": ">= 0.4"
++      }
++    },
+     "node_modules/ee-first": {
+       "version": "1.1.1",
+       "resolved": "https://registry.npmjs.org/ee-first/-/ee-first-1.1.1.tgz",
+@@ -5386,6 +5633,15 @@
+         "stackframe": "^1.3.4"
+       }
+     },
++    "node_modules/es-define-property": {
++      "version": "1.0.1",
++      "resolved": "https://registry.npmjs.org/es-define-property/-/es-define-property-1.0.1.tgz",
++      "integrity": "sha512-e3nRfgfUZ4rNGL232gUgX06QNyyez04KdjFrF+LTRoOXmrOgFKDg4BCdsjW8EnT69eqdYGmRpJwiPVYNrCaW3g==",
++      "license": "MIT",
++      "engines": {
++        "node": ">= 0.4"
++      }
++    },
+     "node_modules/es-errors": {
+       "version": "1.3.0",
+       "resolved": "https://registry.npmjs.org/es-errors/-/es-errors-1.3.0.tgz",
+@@ -5395,6 +5651,18 @@
+         "node": ">= 0.4"
+       }
+     },
++    "node_modules/es-object-atoms": {
++      "version": "1.1.2",
++      "resolved": "https://registry.npmjs.org/es-object-atoms/-/es-object-atoms-1.1.2.tgz",
++      "integrity": "sha512-HWcBoN6NileqtSydK2FqHbS/LoDd2pqrnQHLyJzBj4kOp/ky2MWMN694xOfkK8/SnUsW2DH7EfyVlydKCsm1Zw==",
++      "license": "MIT",
++      "dependencies": {
++        "es-errors": "^1.3.0"
++      },
++      "engines": {
++        "node": ">= 0.4"
++      }
++    },
+     "node_modules/escalade": {
+       "version": "3.2.0",
+       "resolved": "https://registry.npmjs.org/escalade/-/escalade-3.2.0.tgz",
+@@ -5505,6 +5773,15 @@
+         }
+       }
+     },
++    "node_modules/expo-application": {
++      "version": "7.0.8",
++      "resolved": "https://registry.npmjs.org/expo-application/-/expo-application-7.0.8.tgz",
++      "integrity": "sha512-qFGyxk7VJbrNOQWBbE09XUuGuvkOgFS9QfToaK2FdagM2aQ+x3CvGV2DuVgl/l4ZxPgIf3b/MNh9xHpwSwn74Q==",
++      "license": "MIT",
++      "peerDependencies": {
++        "expo": "*"
++      }
++    },
+     "node_modules/expo-blur": {
+       "version": "15.0.8",
+       "resolved": "https://registry.npmjs.org/expo-blur/-/expo-blur-15.0.8.tgz",
+@@ -5761,6 +6038,26 @@
+         "react-native": "*"
+       }
+     },
++    "node_modules/expo-notifications": {
++      "version": "0.32.17",
++      "resolved": "https://registry.npmjs.org/expo-notifications/-/expo-notifications-0.32.17.tgz",
++      "integrity": "sha512-lwwzn7tImuzTzn9PAglZlS2VfZEvsfFGJTK9Eb8I4cqkGh2DI23YJFJH+WPEIu4QhDvk5JeBjklenJ8IZbmA4A==",
++      "license": "MIT",
++      "dependencies": {
++        "@expo/image-utils": "^0.8.8",
++        "@ide/backoff": "^1.0.0",
++        "abort-controller": "^3.0.0",
++        "assert": "^2.0.0",
++        "badgin": "^1.1.5",
++        "expo-application": "~7.0.8",
++        "expo-constants": "~18.0.13"
++      },
++      "peerDependencies": {
++        "expo": "*",
++        "react": "*",
++        "react-native": "*"
++      }
++    },
+     "node_modules/expo-router": {
+       "version": "6.0.24",
+       "resolved": "https://registry.npmjs.org/expo-router/-/expo-router-6.0.24.tgz",
+@@ -6653,6 +6950,21 @@
+       "integrity": "sha512-6FPvD/IVyT4ZlNe7Wcn5Fb/4ChigpucKYSvD6a+0iMoLn2inpo711eyIcKjmDtE5XNcgAkSH9uN/nfAeZzHEfg==",
+       "license": "BSD-2-Clause"
+     },
++    "node_modules/for-each": {
++      "version": "0.3.5",
++      "resolved": "https://registry.npmjs.org/for-each/-/for-each-0.3.5.tgz",
++      "integrity": "sha512-dKx12eRCVIzqCxFGplyFKJMPvLEWgmNtUrpTiJIR5u97zEhRG8ySrtboPHZXx7daLxQVrl643cTzbab2tkQjxg==",
++      "license": "MIT",
++      "dependencies": {
++        "is-callable": "^1.2.7"
++      },
++      "engines": {
++        "node": ">= 0.4"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/ljharb"
++      }
++    },
+     "node_modules/freeport-async": {
+       "version": "2.0.0",
+       "resolved": "https://registry.npmjs.org/freeport-async/-/freeport-async-2.0.0.tgz",
+@@ -6700,6 +7012,15 @@
+         "url": "https://github.com/sponsors/ljharb"
+       }
+     },
++    "node_modules/generator-function": {
++      "version": "2.0.1",
++      "resolved": "https://registry.npmjs.org/generator-function/-/generator-function-2.0.1.tgz",
++      "integrity": "sha512-SFdFmIJi+ybC0vjlHN0ZGVGHc3lgE0DxPAT0djjVg+kjOnSqclqmj0KQ7ykTOLP6YxoqOvuAODGdcHJn+43q3g==",
++      "license": "MIT",
++      "engines": {
++        "node": ">= 0.4"
++      }
++    },
+     "node_modules/gensync": {
+       "version": "1.0.0-beta.2",
+       "resolved": "https://registry.npmjs.org/gensync/-/gensync-1.0.0-beta.2.tgz",
+@@ -6718,6 +7039,30 @@
+         "node": "6.* || 8.* || >= 10.*"
+       }
+     },
++    "node_modules/get-intrinsic": {
++      "version": "1.3.0",
++      "resolved": "https://registry.npmjs.org/get-intrinsic/-/get-intrinsic-1.3.0.tgz",
++      "integrity": "sha512-9fSjSaos/fRIVIp+xSJlE6lfwhES7LNtKaCBIamHsjr2na1BiABJPo0mOjjz8GJDURarmCPGqaiVg5mfjb98CQ==",
++      "license": "MIT",
++      "dependencies": {
++        "call-bind-apply-helpers": "^1.0.2",
++        "es-define-property": "^1.0.1",
++        "es-errors": "^1.3.0",
++        "es-object-atoms": "^1.1.1",
++        "function-bind": "^1.1.2",
++        "get-proto": "^1.0.1",
++        "gopd": "^1.2.0",
++        "has-symbols": "^1.1.0",
++        "hasown": "^2.0.2",
++        "math-intrinsics": "^1.1.0"
++      },
++      "engines": {
++        "node": ">= 0.4"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/ljharb"
++      }
++    },
+     "node_modules/get-nonce": {
+       "version": "1.0.1",
+       "resolved": "https://registry.npmjs.org/get-nonce/-/get-nonce-1.0.1.tgz",
+@@ -6736,6 +7081,19 @@
+         "node": ">=8.0.0"
+       }
+     },
++    "node_modules/get-proto": {
++      "version": "1.0.1",
++      "resolved": "https://registry.npmjs.org/get-proto/-/get-proto-1.0.1.tgz",
++      "integrity": "sha512-sTSfBjoXBp89JvIKIefqw7U2CCebsc74kiY6awiGogKtoSGbgjYE/G/+l9sF3MWFPNc9IcoOC4ODfKHfxFmp0g==",
++      "license": "MIT",
++      "dependencies": {
++        "dunder-proto": "^1.0.1",
++        "es-object-atoms": "^1.0.0"
++      },
++      "engines": {
++        "node": ">= 0.4"
++      }
++    },
+     "node_modules/getenv": {
+       "version": "2.0.0",
+       "resolved": "https://registry.npmjs.org/getenv/-/getenv-2.0.0.tgz",
+@@ -6762,6 +7120,18 @@
+         "url": "https://github.com/sponsors/isaacs"
+       }
+     },
++    "node_modules/gopd": {
++      "version": "1.2.0",
++      "resolved": "https://registry.npmjs.org/gopd/-/gopd-1.2.0.tgz",
++      "integrity": "sha512-ZUKRh6/kUFoAiTAtTYPZJ3hw9wNxx+BIBOijnlG9PnrJsCcSjs1wyyD6vJpaYtgnzDrKYRSqf3OO6Rfa93xsRg==",
++      "license": "MIT",
++      "engines": {
++        "node": ">= 0.4"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/ljharb"
++      }
++    },
+     "node_modules/graceful-fs": {
+       "version": "4.2.11",
+       "resolved": "https://registry.npmjs.org/graceful-fs/-/graceful-fs-4.2.11.tgz",
+@@ -6777,6 +7147,45 @@
+         "node": ">=4"
+       }
+     },
++    "node_modules/has-property-descriptors": {
++      "version": "1.0.2",
++      "resolved": "https://registry.npmjs.org/has-property-descriptors/-/has-property-descriptors-1.0.2.tgz",
++      "integrity": "sha512-55JNKuIW+vq4Ke1BjOTjM2YctQIvCT7GFzHwmfZPGo5wnrgkid0YQtnAleFSqumZm4az3n2BS+erby5ipJdgrg==",
++      "license": "MIT",
++      "dependencies": {
++        "es-define-property": "^1.0.0"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/ljharb"
++      }
++    },
++    "node_modules/has-symbols": {
++      "version": "1.1.0",
++      "resolved": "https://registry.npmjs.org/has-symbols/-/has-symbols-1.1.0.tgz",
++      "integrity": "sha512-1cDNdwJ2Jaohmb3sg4OmKaMBwuC48sYni5HUw2DvsC8LjGTLK9h+eb1X6RyuOHe4hT0ULCW68iomhjUoKUqlPQ==",
++      "license": "MIT",
++      "engines": {
++        "node": ">= 0.4"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/ljharb"
++      }
++    },
++    "node_modules/has-tostringtag": {
++      "version": "1.0.2",
++      "resolved": "https://registry.npmjs.org/has-tostringtag/-/has-tostringtag-1.0.2.tgz",
++      "integrity": "sha512-NqADB8VjPFLM2V0VvHUewwwsw0ZWBaIdgo+ieHtK3hasLz4qeCRjYcqfB6AQrBggRKppKF8L52/VqdVsO47Dlw==",
++      "license": "MIT",
++      "dependencies": {
++        "has-symbols": "^1.0.3"
++      },
++      "engines": {
++        "node": ">= 0.4"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/ljharb"
++      }
++    },
+     "node_modules/hasown": {
+       "version": "2.0.4",
+       "resolved": "https://registry.npmjs.org/hasown/-/hasown-2.0.4.tgz",
+@@ -6961,12 +7370,40 @@
+         "loose-envify": "^1.0.0"
+       }
+     },
++    "node_modules/is-arguments": {
++      "version": "1.2.0",
++      "resolved": "https://registry.npmjs.org/is-arguments/-/is-arguments-1.2.0.tgz",
++      "integrity": "sha512-7bVbi0huj/wrIAOzb8U1aszg9kdi3KN/CyU19CTI7tAoZYEZoL9yCDXpbXN+uPsuWnP02cyug1gleqq+TU+YCA==",
++      "license": "MIT",
++      "dependencies": {
++        "call-bound": "^1.0.2",
++        "has-tostringtag": "^1.0.2"
++      },
++      "engines": {
++        "node": ">= 0.4"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/ljharb"
++      }
++    },
+     "node_modules/is-arrayish": {
+       "version": "0.3.4",
+       "resolved": "https://registry.npmjs.org/is-arrayish/-/is-arrayish-0.3.4.tgz",
+       "integrity": "sha512-m6UrgzFVUYawGBh1dUsWR5M2Clqic9RVXC/9f8ceNlv2IcO9j9J/z8UoCLPqtsPBFNzEpfR3xftohbfqDx8EQA==",
+       "license": "MIT"
+     },
++    "node_modules/is-callable": {
++      "version": "1.2.7",
++      "resolved": "https://registry.npmjs.org/is-callable/-/is-callable-1.2.7.tgz",
++      "integrity": "sha512-1BC0BVFhS/p0qtw6enp8e+8OD0UrK0oFLztSjNzhcKA3WDuJxxAPXzPuPtKkjEY9UUoEWlX/8fgKeu2S8i9JTA==",
++      "license": "MIT",
++      "engines": {
++        "node": ">= 0.4"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/ljharb"
++      }
++    },
+     "node_modules/is-core-module": {
+       "version": "2.17.0",
+       "resolved": "https://registry.npmjs.org/is-core-module/-/is-core-module-2.17.0.tgz",
+@@ -7006,6 +7443,41 @@
+         "node": ">=8"
+       }
+     },
++    "node_modules/is-generator-function": {
++      "version": "1.1.2",
++      "resolved": "https://registry.npmjs.org/is-generator-function/-/is-generator-function-1.1.2.tgz",
++      "integrity": "sha512-upqt1SkGkODW9tsGNG5mtXTXtECizwtS2kA161M+gJPc1xdb/Ax629af6YrTwcOeQHbewrPNlE5Dx7kzvXTizA==",
++      "license": "MIT",
++      "dependencies": {
++        "call-bound": "^1.0.4",
++        "generator-function": "^2.0.0",
++        "get-proto": "^1.0.1",
++        "has-tostringtag": "^1.0.2",
++        "safe-regex-test": "^1.1.0"
++      },
++      "engines": {
++        "node": ">= 0.4"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/ljharb"
++      }
++    },
++    "node_modules/is-nan": {
++      "version": "1.3.2",
++      "resolved": "https://registry.npmjs.org/is-nan/-/is-nan-1.3.2.tgz",
++      "integrity": "sha512-E+zBKpQ2t6MEo1VsonYmluk9NxGrbzpeeLC2xIViuO2EjU2xsXsBPwTr3Ykv9l08UYEVEdWeRZNouaZqF6RN0w==",
++      "license": "MIT",
++      "dependencies": {
++        "call-bind": "^1.0.0",
++        "define-properties": "^1.1.3"
++      },
++      "engines": {
++        "node": ">= 0.4"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/ljharb"
++      }
++    },
+     "node_modules/is-number": {
+       "version": "7.0.0",
+       "resolved": "https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz",
+@@ -7024,6 +7496,39 @@
+         "node": ">=8"
+       }
+     },
++    "node_modules/is-regex": {
++      "version": "1.2.1",
++      "resolved": "https://registry.npmjs.org/is-regex/-/is-regex-1.2.1.tgz",
++      "integrity": "sha512-MjYsKHO5O7mCsmRGxWcLWheFqN9DJ/2TmngvjKXihe6efViPqc274+Fx/4fYj/r03+ESvBdTXK0V6tA3rgez1g==",
++      "license": "MIT",
++      "dependencies": {
++        "call-bound": "^1.0.2",
++        "gopd": "^1.2.0",
++        "has-tostringtag": "^1.0.2",
++        "hasown": "^2.0.2"
++      },
++      "engines": {
++        "node": ">= 0.4"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/ljharb"
++      }
++    },
++    "node_modules/is-typed-array": {
++      "version": "1.1.15",
++      "resolved": "https://registry.npmjs.org/is-typed-array/-/is-typed-array-1.1.15.tgz",
++      "integrity": "sha512-p3EcsicXjit7SaskXHs1hA91QxgTw46Fv6EFKKGS5DRFLD8yKnohjF3hxoju94b/OcMZoQukzpPpBE9uLVKzgQ==",
++      "license": "MIT",
++      "dependencies": {
++        "which-typed-array": "^1.1.16"
++      },
++      "engines": {
++        "node": ">= 0.4"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/ljharb"
++      }
++    },
+     "node_modules/is-wsl": {
+       "version": "2.2.0",
+       "resolved": "https://registry.npmjs.org/is-wsl/-/is-wsl-2.2.0.tgz",
+@@ -7880,6 +8385,15 @@
+       "integrity": "sha512-ocnPZQLNpvbedwTy9kNrQEsknEfgvcLMvOtz3sFeWApDq1MXH1TqkCIx58xlpESsfwQOnuBO9beyQuNGzVvuhQ==",
+       "license": "Apache-2.0"
+     },
++    "node_modules/math-intrinsics": {
++      "version": "1.1.0",
++      "resolved": "https://registry.npmjs.org/math-intrinsics/-/math-intrinsics-1.1.0.tgz",
++      "integrity": "sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==",
++      "license": "MIT",
++      "engines": {
++        "node": ">= 0.4"
++      }
++    },
+     "node_modules/mdn-data": {
+       "version": "2.0.14",
+       "resolved": "https://registry.npmjs.org/mdn-data/-/mdn-data-2.0.14.tgz",
+@@ -8494,6 +9008,51 @@
+         "node": ">=0.10.0"
+       }
+     },
++    "node_modules/object-is": {
++      "version": "1.1.6",
++      "resolved": "https://registry.npmjs.org/object-is/-/object-is-1.1.6.tgz",
++      "integrity": "sha512-F8cZ+KfGlSGi09lJT7/Nd6KJZ9ygtvYC0/UYYLI9nmQKLMnydpB9yvbv9K1uSkEu7FU9vYPmVwLg328tX+ot3Q==",
++      "license": "MIT",
++      "dependencies": {
++        "call-bind": "^1.0.7",
++        "define-properties": "^1.2.1"
++      },
++      "engines": {
++        "node": ">= 0.4"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/ljharb"
++      }
++    },
++    "node_modules/object-keys": {
++      "version": "1.1.1",
++      "resolved": "https://registry.npmjs.org/object-keys/-/object-keys-1.1.1.tgz",
++      "integrity": "sha512-NuAESUOUMrlIXOfHKzD6bpPu3tYt3xvjNdRIQ+FeT0lNb4K8WR70CaDxhuNguS2XG+GjkyMwOzsN5ZktImfhLA==",
++      "license": "MIT",
++      "engines": {
++        "node": ">= 0.4"
++      }
++    },
++    "node_modules/object.assign": {
++      "version": "4.1.7",
++      "resolved": "https://registry.npmjs.org/object.assign/-/object.assign-4.1.7.tgz",
++      "integrity": "sha512-nK28WOo+QIjBkDduTINE4JkF/UJJKyf2EJxvJKfblDpyg0Q+pkOHNTL0Qwy6NP6FhE/EnzV73BxxqcJaXY9anw==",
++      "license": "MIT",
++      "dependencies": {
++        "call-bind": "^1.0.8",
++        "call-bound": "^1.0.3",
++        "define-properties": "^1.2.1",
++        "es-object-atoms": "^1.0.0",
++        "has-symbols": "^1.1.0",
++        "object-keys": "^1.1.1"
++      },
++      "engines": {
++        "node": ">= 0.4"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/ljharb"
++      }
++    },
+     "node_modules/on-finished": {
+       "version": "2.3.0",
+       "resolved": "https://registry.npmjs.org/on-finished/-/on-finished-2.3.0.tgz",
+@@ -8788,6 +9347,15 @@
+         "node": ">=10.13.0"
+       }
+     },
++    "node_modules/possible-typed-array-names": {
++      "version": "1.1.0",
++      "resolved": "https://registry.npmjs.org/possible-typed-array-names/-/possible-typed-array-names-1.1.0.tgz",
++      "integrity": "sha512-/+5VFTchJDoVj3bhoqi6UeymcD00DAwb1nJwamzPvHEszJ4FpF6SNNbUbOS8yI56qHzdV8eK0qEfOSiodkTdxg==",
++      "license": "MIT",
++      "engines": {
++        "node": ">= 0.4"
++      }
++    },
+     "node_modules/postcss": {
+       "version": "8.4.49",
+       "resolved": "https://registry.npmjs.org/postcss/-/postcss-8.4.49.tgz",
+@@ -9726,6 +10294,23 @@
+       ],
+       "license": "MIT"
+     },
++    "node_modules/safe-regex-test": {
++      "version": "1.1.0",
++      "resolved": "https://registry.npmjs.org/safe-regex-test/-/safe-regex-test-1.1.0.tgz",
++      "integrity": "sha512-x/+Cz4YrimQxQccJf5mKEbIa1NzeCRNI5Ecl/ekmlYaampdNLPalVyIcCZNNH3MvmqBugV5TMYZXv0ljslUlaw==",
++      "license": "MIT",
++      "dependencies": {
++        "call-bound": "^1.0.2",
++        "es-errors": "^1.3.0",
++        "is-regex": "^1.2.1"
++      },
++      "engines": {
++        "node": ">= 0.4"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/ljharb"
++      }
++    },
+     "node_modules/sax": {
+       "version": "1.6.1",
+       "resolved": "https://registry.npmjs.org/sax/-/sax-1.6.1.tgz",
+@@ -9861,6 +10446,23 @@
+       "integrity": "sha512-KiKBS8AnWGEyLzofFfmvKwpdPzqiy16LvQfK3yv/fVH7Bj13/wl3JSR1J+rfgRE9q7xUJK4qvgS8raSOeLUehw==",
+       "license": "ISC"
+     },
++    "node_modules/set-function-length": {
++      "version": "1.2.2",
++      "resolved": "https://registry.npmjs.org/set-function-length/-/set-function-length-1.2.2.tgz",
++      "integrity": "sha512-pgRc4hJ4/sNjWCSS9AmnS40x3bNMDTknHgL5UaMBTMyJnU90EgWh1Rz+MC9eFu4BuN/UwZjKQuY/1v3rM7HMfg==",
++      "license": "MIT",
++      "dependencies": {
++        "define-data-property": "^1.1.4",
++        "es-errors": "^1.3.0",
++        "function-bind": "^1.1.2",
++        "get-intrinsic": "^1.2.4",
++        "gopd": "^1.0.1",
++        "has-property-descriptors": "^1.0.2"
++      },
++      "engines": {
++        "node": ">= 0.4"
++      }
++    },
+     "node_modules/setprototypeof": {
+       "version": "1.2.0",
+       "resolved": "https://registry.npmjs.org/setprototypeof/-/setprototypeof-1.2.0.tgz",
+@@ -10456,6 +11058,12 @@
+         "node": ">=0.6"
+       }
+     },
++    "node_modules/tr46": {
++      "version": "0.0.3",
++      "resolved": "https://registry.npmjs.org/tr46/-/tr46-0.0.3.tgz",
++      "integrity": "sha512-N3WMsuqV66lT30CrXNbEjx4GEwlow3v6rr4mCcv6prnfwhS01rkgyFdjPNBYd9br7LpXV1+Emh01fHnq2Gdgrw==",
++      "license": "MIT"
++    },
+     "node_modules/ts-interface-checker": {
+       "version": "0.1.13",
+       "resolved": "https://registry.npmjs.org/ts-interface-checker/-/ts-interface-checker-0.1.13.tgz",
+@@ -10655,6 +11263,19 @@
+         "react": "^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0"
+       }
+     },
++    "node_modules/util": {
++      "version": "0.12.5",
++      "resolved": "https://registry.npmjs.org/util/-/util-0.12.5.tgz",
++      "integrity": "sha512-kZf/K6hEIrWHI6XqOFUiiMa+79wE/D8Q+NCNAWclkyg3b4d2k7s0QGepNjiABc+aR3N1PAyHL7p6UcLY6LmrnA==",
++      "license": "MIT",
++      "dependencies": {
++        "inherits": "^2.0.3",
++        "is-arguments": "^1.0.4",
++        "is-generator-function": "^1.0.7",
++        "is-typed-array": "^1.1.3",
++        "which-typed-array": "^1.1.2"
++      }
++    },
+     "node_modules/utils-merge": {
+       "version": "1.0.1",
+       "resolved": "https://registry.npmjs.org/utils-merge/-/utils-merge-1.0.1.tgz",
+@@ -10971,6 +11592,16 @@
+       "integrity": "sha512-EqhiFU6daOA8kpjOWTL0olhVOF3i7OrFzSYiGsEMB8GcXS+RrzauAERX65xMeNWVqxA6HXH2m69Z9LaKKdisfg==",
+       "license": "MIT"
+     },
++    "node_modules/whatwg-url": {
++      "version": "5.0.0",
++      "resolved": "https://registry.npmjs.org/whatwg-url/-/whatwg-url-5.0.0.tgz",
++      "integrity": "sha512-saE57nupxk6v3HY35+jzBwYa0rKSy0XR8JSxZPwgLr7ys0IBzhGviA1/TUGJLmSVqs8pb9AnvICXEuOHLprYTw==",
++      "license": "MIT",
++      "dependencies": {
++        "tr46": "~0.0.3",
++        "webidl-conversions": "^3.0.0"
++      }
++    },
+     "node_modules/whatwg-url-without-unicode": {
+       "version": "8.0.0-3",
+       "resolved": "https://registry.npmjs.org/whatwg-url-without-unicode/-/whatwg-url-without-unicode-8.0.0-3.tgz",
+@@ -10985,6 +11616,12 @@
+         "node": ">=10"
+       }
+     },
++    "node_modules/whatwg-url/node_modules/webidl-conversions": {
++      "version": "3.0.1",
++      "resolved": "https://registry.npmjs.org/webidl-conversions/-/webidl-conversions-3.0.1.tgz",
++      "integrity": "sha512-2JAn3z8AR6rjK8Sm8orRC0h/bcl/DqL7tRPdGZ4I1CjdF+EaMLmYxBHyXuKL849eucPFhvBoxMsflfOb8kxaeQ==",
++      "license": "BSD-2-Clause"
++    },
+     "node_modules/which": {
+       "version": "2.0.2",
+       "resolved": "https://registry.npmjs.org/which/-/which-2.0.2.tgz",
+@@ -11006,6 +11643,27 @@
+       "integrity": "sha512-iBdZ57RDvnOR9AGBhML2vFZf7h8vmBjhoaZqODJBFWHVtKkDmKuHai3cx5PgVMrX5YDNp27AofYbAwctSS+vhQ==",
+       "license": "ISC"
+     },
++    "node_modules/which-typed-array": {
++      "version": "1.1.24",
++      "resolved": "https://registry.npmjs.org/which-typed-array/-/which-typed-array-1.1.24.tgz",
++      "integrity": "sha512-wk4Mf4pR5mRP7eYuuTBCIQ9d0ud2Fv2jRLQpfgnRjbOxAFHmjKFValgTpitVKzJJS8ajnYQV2Du1SZ8j6b/EUQ==",
++      "license": "MIT",
++      "dependencies": {
++        "available-typed-arrays": "^1.0.7",
++        "call-bind": "^1.0.9",
++        "call-bound": "^1.0.4",
++        "for-each": "^0.3.5",
++        "get-proto": "^1.0.1",
++        "gopd": "^1.2.0",
++        "has-tostringtag": "^1.0.2"
++      },
++      "engines": {
++        "node": ">= 0.4"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/ljharb"
++      }
++    },
+     "node_modules/wonka": {
+       "version": "6.3.6",
+       "resolved": "https://registry.npmjs.org/wonka/-/wonka-6.3.6.tgz",
+diff --git a/bownd/package.json b/bownd/package.json
+index 3a2141c..09106a5 100644
+--- a/bownd/package.json
++++ b/bownd/package.json
+@@ -16,6 +16,7 @@
+     "@react-native-community/slider": "5.0.1",
+     "@react-navigation/bottom-tabs": "^7.9.1",
+     "@react-navigation/native": "^7.1.27",
++    "@supabase/supabase-js": "^2.45.0",
+     "expo": "~54.0.33",
+     "expo-blur": "~15.0.8",
+     "expo-camera": "~17.0.10",
+@@ -26,6 +27,7 @@
+     "expo-linear-gradient": "~15.0.8",
+     "expo-linking": "~8.0.11",
+     "expo-location": "~19.0.8",
++    "expo-notifications": "~0.32.17",
+     "expo-router": "~6.0.23",
+     "expo-secure-store": "~15.0.8",
+     "firebase": "^12.7.0",

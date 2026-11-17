@@ -67,20 +67,61 @@ async function updateFunnelStatus(
   });
 }
 
-/** Full status payload: funnel + money views + money-goal progress + workers + jobs + approvals. */
-async function buildStatusPayload(service: SupabaseClient, funnel: Record<string, unknown>) {
-  const funnelId = String(funnel.id);
+/**
+ * The funnel's money family: money_funnels rows belonging to this funnel OR
+ * to any sub-row funnel (funnels.config.parent_funnel = this funnel's id),
+ * in created_at order — the same family the Livework+ client resolver uses
+ * (resolveCanonicalFunnels in livework-plus/lib/data.ts). A funnel's target
+ * may live on a sub-row's money row (e.g. Social Content + SEO's target is
+ * on its SEO sub-row's backfill mirror), so reading only rows whose
+ * funnel_id is the canonical funnel's own id misses it.
+ * SCHEMA NOTE: money_funnels.funnel_id is a plain FK (NOT unique) per the
+ * migration deviation — a funnel family may have several money views.
+ * Legacy rows (metadata.registry_note set) are never sub-rows, matching the
+ * client's isLegacy exclusion.
+ */
+async function loadFamilyMoneyRows(
+  service: SupabaseClient,
+  funnelId: string,
+): Promise<Array<Record<string, unknown>>> {
+  const { data: funnelRows } = await service.from("funnels").select("id, config, metadata");
+  const subIds = ((funnelRows ?? []) as Array<Record<string, unknown>>)
+    .filter((f) => {
+      const cfg = (f.config ?? {}) as Record<string, unknown>;
+      const meta = (f.metadata ?? {}) as Record<string, unknown>;
+      const isLegacy = typeof meta.registry_note === "string" && meta.registry_note.length > 0;
+      return !isLegacy && cfg.parent_funnel === funnelId && String(f.id) !== funnelId;
+    })
+    .map((f) => String(f.id));
   const { data: moneyRows } = await service
     .from("money_funnels")
     .select("*")
-    .eq("funnel_id", funnelId)
+    .in("funnel_id", [funnelId, ...subIds])
     .order("created_at", { ascending: true });
-  const moneyList = (moneyRows ?? []) as Array<Record<string, unknown>>;
-  // Canonical money view: prefer the backfill mirror (key backfill_*), else the first row.
-  // SCHEMA NOTE: money_funnels.funnel_id is a plain FK (NOT unique) per the
-  // migration deviation — a funnel may have several money views.
-  const canonical =
-    moneyList.find((m) => String(m.key ?? "").startsWith("backfill_")) ?? moneyList[0] ?? null;
+  return (moneyRows ?? []) as Array<Record<string, unknown>>;
+}
+
+/**
+ * The family's canonical money row, mirroring the client resolver's pick:
+ * the target-carrying row wins (getMoneyTarget non-null); otherwise the
+ * backfill mirror (key backfill_*); otherwise the first row.
+ */
+function pickCanonicalMoneyRow(
+  moneyList: Array<Record<string, unknown>>,
+): Record<string, unknown> | null {
+  return (
+    moneyList.find((m) => getMoneyTarget(m) !== null) ??
+    moneyList.find((m) => String(m.key ?? "").startsWith("backfill_")) ??
+    moneyList[0] ??
+    null
+  );
+}
+
+/** Full status payload: funnel + money views + money-goal progress + workers + jobs + approvals. */
+async function buildStatusPayload(service: SupabaseClient, funnel: Record<string, unknown>) {
+  const funnelId = String(funnel.id);
+  const moneyList = await loadFamilyMoneyRows(service, funnelId);
+  const canonical = pickCanonicalMoneyRow(moneyList);
   const progress = canonical
     ? {
       revenue_model: canonical.revenue_model ?? null,
@@ -292,15 +333,13 @@ Deno.serve((req) =>
         if (typeof targetCents !== "number" || !Number.isInteger(targetCents) || targetCents <= 0) {
           throw new HttpError(400, "revenue_target_cents must be a positive integer (cents)");
         }
-        const { data: moneyRows, error: moneyError } = await service
-          .from("money_funnels")
-          .select("*")
-          .eq("funnel_id", funnelId)
-          .order("created_at", { ascending: true });
-        if (moneyError) throw new Error(`Money funnel lookup failed: ${moneyError.message}`);
-        const moneyList = (moneyRows ?? []) as Array<Record<string, unknown>>;
-        const canonical =
-          moneyList.find((m) => String(m.key ?? "").startsWith("backfill_")) ?? moneyList[0] ?? null;
+        // Resolve the family's canonical money row with the same picker
+        // as the status payload: the target may live on a sub-row's money
+        // row (Social Content + SEO's is on its SEO sub-row's mirror), and
+        // writing the edit to one of the canonical funnel's own rows
+        // instead would split the target across two rows.
+        const moneyList = await loadFamilyMoneyRows(service, funnelId);
+        const canonical = pickCanonicalMoneyRow(moneyList);
         if (canonical) {
           const beforeTarget = getMoneyTarget(canonical);
           const beforeModel = typeof canonical.revenue_model === "string" ? canonical.revenue_model : null;

@@ -1,0 +1,57 @@
+diff --git a/livework/app/index.tsx b/livework/app/index.tsx
+index 65d9b8c..12db6a1 100644
+--- a/livework/app/index.tsx
++++ b/livework/app/index.tsx
+@@ -385,12 +385,31 @@ export default function DashboardScreen() {
+                 No ticket/revenue data exists, so "top" cannot be
+                 ranked by performance: rows are soonest first, with
+                 real fields only (title, date, type, price, status).
+-                Edit / Delete work exactly as before. */}
+-            <Section
+-              title="Top Performing Events"
+-              action="This Month"
+-              onAction={() => setRange("month")}
+-            >
++                Edit / Delete work exactly as before. The list follows
++                the selected range (data.events is the in-window set),
++                so it gets the same honest chip row as Event Activity.
++                Previously the header hardcoded "This Month" and
++                tapping it silently forced the whole dashboard to
++                month — the label never reflected the actual window. */}
++            <Section title="Top Performing Events">
++              <View style={styles.rangeChipRow}>
++                {RANGES.map((r) => (
++                  <Pressable
++                    key={r.key}
++                    style={[styles.rangeChip, range === r.key && styles.rangeChipActive]}
++                    onPress={() => setRange(r.key)}
++                  >
++                    <Text
++                      style={[
++                        styles.rangeChipText,
++                        range === r.key && styles.rangeChipTextActive,
++                      ]}
++                    >
++                      {r.label}
++                    </Text>
++                  </Pressable>
++                ))}
++              </View>
+               <Text style={styles.sectionNote}>
+                 Your events, soonest first — performance ranking needs ticket data.
+               </Text>
+@@ -516,8 +535,12 @@ export default function DashboardScreen() {
+               <Text style={styles.empty}>Projections need historical ticket data — not available yet.</Text>
+             </Section>
+ 
+-            {/* Audience Insights — no attendee data exists */}
+-            <Section title="Audience Insights" action="This Month" onAction={() => setRange("month")}>
++            {/* Audience Insights — no attendee data exists, so this is
++                an honest empty state with no range to select: the
++                old hardcoded "This Month" header action silently
++                forced the whole dashboard to month, so it was
++                removed rather than left lying about a window. */}
++            <Section title="Audience Insights">
+               <Text style={styles.empty}>Audience insights need attendee data — not available yet.</Text>
+             </Section>
+ 

@@ -13,6 +13,11 @@ export type TenantVenue = {
   state: string | null;
   phone: string | null;
   website: string | null;
+  // Verification gate (v1: manual operator review). The real enforcement
+  // is server-side in bownd-sync; the app reads these for display and
+  // for the UX gate (Publish disabled until verified).
+  is_test: boolean;
+  verification_status: string | null;
 };
 
 async function currentUserId(): Promise<string | null> {
@@ -51,7 +56,7 @@ export async function getUserVenues(): Promise<TenantVenue[]> {
   if (tenantIds.length === 0) return [];
   const { data, error } = await supabase
     .from("venues")
-    .select("id, tenant_id, name, address, city, state, phone, website")
+    .select("id, tenant_id, name, address, city, state, phone, website, is_test, verification_status")
     .in("tenant_id", tenantIds)
     .order("name", { ascending: true });
   if (error) throw error;
@@ -64,5 +69,7 @@ export async function getUserVenues(): Promise<TenantVenue[]> {
     state: typeof v.state === "string" ? v.state : null,
     phone: typeof v.phone === "string" ? v.phone : null,
     website: typeof v.website === "string" ? v.website : null,
+    is_test: v.is_test === true,
+    verification_status: typeof v.verification_status === "string" ? v.verification_status : null,
   }));
 }

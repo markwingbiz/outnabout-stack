@@ -1,6 +1,10 @@
 {
   "expo": {
     "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0A0616"
+      },
       "package": "com.livework.app"
     },
     "experiments": {
@@ -12,6 +16,7 @@
       },
       "router": {}
     },
+    "icon": "./assets/icon.png",
     "ios": {
       "bundleIdentifier": "com.livework.app",
       "supportsTablet": true
@@ -21,10 +26,17 @@
     "orientation": "portrait",
     "plugins": [
       "expo-router",
-      "expo-font"
+      "expo-font",
+      "expo-notifications",
+      "@react-native-community/datetimepicker"
     ],
     "scheme": "livework",
     "slug": "livework",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0A0616"
+    },
     "userInterfaceStyle": "dark",
     "version": "1.0.0",
     "owner": "markwing"

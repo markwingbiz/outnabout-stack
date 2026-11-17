@@ -1,0 +1,1 @@
+{"description":"Local verification harness for the stripe-webhook receiver. In-memory DB + fake Stripe API + events signed with a harness-only secret. No live keys, no network, no real money. Run: node run.ts","name":"stripe-harness","private":true,"type":"module"}

@@ -14,6 +14,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
+  TextInput,
   StyleSheet,
   ScrollView,
   Pressable,
@@ -27,6 +28,7 @@ import ForgeGate from "../../components/ForgeGate";
 import {
   PHASE_A_CUTOFF_ISO,
   asPrettyJson,
+  asRecord,
   callForge,
   formatDate,
   newIdempotencyKey,
@@ -46,8 +48,18 @@ type ApprovalInfo = {
   title: string | null;
 };
 
-function StatusBadge({ status }: { status: string | null | undefined }) {
-  const s = normalizeStatus(status);
+function isRejectedForRework(row: DeliverableRow): boolean {
+  return (
+    normalizeStatus(row.status) === "FAILED" && asRecord(row.metadata).needs_rework === true
+  );
+}
+
+function displayStatus(row: DeliverableRow): string {
+  return isRejectedForRework(row) ? "REJECTED" : normalizeStatus(row.status);
+}
+
+function StatusBadge({ row }: { row: DeliverableRow }) {
+  const s = displayStatus(row);
   const color =
     s === "PUBLISHED"
       ? THEME.green
@@ -88,6 +100,8 @@ function DeliverablesContent() {
   const [approval, setApproval] = useState<ApprovalInfo | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [acting, setActing] = useState(false);
+  const [rejectingId, setRejectingId] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
 
   const refresh = useCallback(async () => {
     if (!supabase) {
@@ -139,7 +153,7 @@ function DeliverablesContent() {
 
   const filtered = useMemo(() => {
     return rows.filter((r) => {
-      if (statusFilter !== "ALL" && normalizeStatus(r.status) !== statusFilter) return false;
+      if (statusFilter !== "ALL" && displayStatus(r) !== statusFilter) return false;
       if (typeFilter !== "ALL" && r.deliverable_type !== typeFilter) return false;
       if (funnelFilter !== "ALL" && r.funnel_id !== funnelFilter) return false;
       return true;
@@ -165,6 +179,8 @@ function DeliverablesContent() {
   }
 
   function toggleExpand(row: DeliverableRow) {
+    setRejectingId(null);
+    setRejectReason("");
     if (expandedId === row.id) {
       setExpandedId(null);
       setApproval(null);
@@ -175,7 +191,11 @@ function DeliverablesContent() {
     void loadApproval(row);
   }
 
-  async function doTransition(row: DeliverableRow, transition: DeliverableTransition) {
+  async function doTransition(
+    row: DeliverableRow,
+    transition: DeliverableTransition,
+    reason?: string,
+  ) {
     setActing(true);
     setError(null);
     try {
@@ -183,8 +203,13 @@ function DeliverablesContent() {
         action: "transition_deliverable",
         deliverable_id: row.id,
         transition,
+        // Rejection reason (optional): the function stamps it into the
+        // deliverable metadata as rework_reason for the rework loop.
+        ...(transition === "reject" && reason ? { reason } : {}),
         idempotency_key: newIdempotencyKey(),
       });
+      setRejectingId(null);
+      setRejectReason("");
       await refresh();
       await loadApproval(row);
     } catch (e) {
@@ -198,24 +223,30 @@ function DeliverablesContent() {
     }
   }
 
+  // Approve / Publish confirm via Alert. Reject does NOT use this —
+  // it opens the inline reason box instead (see startReject below),
+  // mirroring the Approvals screens' reject flow.
   function confirmTransition(row: DeliverableRow, transition: DeliverableTransition) {
-    const label = transition === "approve" ? "Approve" : transition === "publish" ? "Publish" : "Reject";
+    const label = transition === "publish" ? "Publish" : "Approve";
     Alert.alert(
       `${label} deliverable?`,
       transition === "publish"
         ? "Publishing marks this deliverable as published. The linked approval (if any) must already be approved."
-        : transition === "reject"
-          ? "Rejected is terminal — this deliverable cannot be approved afterwards."
-          : "Approving moves this deliverable to approved. Publish it afterwards to mark it published.",
+        : "Approving moves this deliverable to approved. Publish it afterwards to mark it published.",
       [
         { text: "Cancel", style: "cancel" },
         {
           text: label,
-          style: transition === "reject" ? "destructive" : "default",
+          style: "default",
           onPress: () => void doTransition(row, transition),
         },
       ],
     );
+  }
+
+  function startReject(row: DeliverableRow) {
+    setRejectingId(row.id);
+    setRejectReason("");
   }
 
   const statusTabs: { key: StatusFilter; label: string }[] = [
@@ -331,7 +362,7 @@ function DeliverablesContent() {
                   <Text style={styles.deliverableTitle} numberOfLines={2}>
                     {row.title || row.deliverable_type || "Untitled deliverable"}
                   </Text>
-                  <StatusBadge status={row.status} />
+                  <StatusBadge row={row} />
                 </View>
                 {!!row.summary && (
                   <Text style={styles.summary} numberOfLines={3}>
@@ -385,30 +416,85 @@ function DeliverablesContent() {
                   )}
 
                   {transitions.length > 0 ? (
-                    <View style={styles.buttonRow}>
-                      {transitions.map((t) => {
-                        const blocked = t.transition === "publish" && publishBlocked;
-                        return (
+                    rejectingId === row.id ? (
+                      <View style={styles.rejectBox}>
+                        <Text style={styles.rejectNote}>
+                          Rejecting sends this deliverable back to its worker for rework — it is
+                          not final. A reason helps the worker know what to fix.
+                        </Text>
+                        <TextInput
+                          style={styles.reasonInput}
+                          placeholder="Reason for rejection (optional)…"
+                          placeholderTextColor={THEME.textFaint}
+                          value={rejectReason}
+                          onChangeText={setRejectReason}
+                          multiline
+                          editable={!acting}
+                        />
+                        <View style={styles.buttonRow}>
                           <Pressable
-                            key={t.transition}
                             style={[
                               styles.actionBtn,
-                              t.transition === "reject" && styles.actionBtnDanger,
-                              (acting || blocked) && styles.actionBtnDisabled,
+                              styles.actionBtnDanger,
+                              acting && styles.actionBtnDisabled,
                             ]}
-                            onPress={() => confirmTransition(row, t.transition)}
-                            disabled={acting || blocked}
+                            onPress={() =>
+                              void doTransition(row, "reject", rejectReason.trim() || undefined)
+                            }
+                            disabled={acting}
                           >
                             <Text style={styles.actionText}>
-                              {acting ? "Working…" : t.label}
+                              {acting ? "Rejecting…" : "Confirm Reject"}
                             </Text>
                           </Pressable>
-                        );
-                      })}
-                    </View>
+                          <Pressable
+                            style={[
+                              styles.actionBtn,
+                              styles.actionBtnGhost,
+                              acting && styles.actionBtnDisabled,
+                            ]}
+                            onPress={() => {
+                              setRejectingId(null);
+                              setRejectReason("");
+                            }}
+                            disabled={acting}
+                          >
+                            <Text style={styles.actionText}>Cancel</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    ) : (
+                      <View style={styles.buttonRow}>
+                        {transitions.map((t) => {
+                          const blocked = t.transition === "publish" && publishBlocked;
+                          return (
+                            <Pressable
+                              key={t.transition}
+                              style={[
+                                styles.actionBtn,
+                                t.transition === "reject" && styles.actionBtnDanger,
+                                (acting || blocked) && styles.actionBtnDisabled,
+                              ]}
+                              onPress={() =>
+                                t.transition === "reject"
+                                  ? startReject(row)
+                                  : confirmTransition(row, t.transition)
+                              }
+                              disabled={acting || blocked}
+                            >
+                              <Text style={styles.actionText}>
+                                {acting ? "Working…" : t.label}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                    )
                   ) : (
                     <Text style={styles.terminalNote}>
-                      This deliverable is in a terminal state — no actions available.
+                      {normalizeStatus(row.status) === "FAILED"
+                        ? "Rejected — this deliverable has gone back to its worker for rework."
+                        : "This deliverable is in a terminal state — no actions available."}
                     </Text>
                   )}
                   {publishBlocked && (
@@ -503,8 +589,22 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   actionBtnDanger: { backgroundColor: "rgba(236,72,153,0.22)" },
+  actionBtnGhost: { backgroundColor: "rgba(255,255,255,0.10)" },
   actionBtnDisabled: { opacity: 0.5 },
   actionText: { color: "#fff", fontSize: 13, fontWeight: "800" },
+  rejectBox: { marginTop: 6, gap: 10 },
+  rejectNote: { color: THEME.textMuted, fontSize: 12, lineHeight: 16 },
+  reasonInput: {
+    color: "#fff",
+    fontSize: 14,
+    minHeight: 48,
+    borderWidth: 1,
+    borderColor: THEME.cardBorder,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    textAlignVertical: "top",
+  },
   terminalNote: { color: THEME.textFaint, fontSize: 12, marginTop: 6 },
   blockedNote: { color: THEME.orange, fontSize: 12, lineHeight: 16, marginTop: 4 },
 });

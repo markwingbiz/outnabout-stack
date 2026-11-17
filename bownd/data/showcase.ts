@@ -269,6 +269,11 @@ export type Playlist = {
   subtitle: string;
   itemIds: string[];
   match: (e: EventItem, venueName: string) => boolean;
+  // Featured Playlists rail flag (premium UI pass): optional, default
+  // false — only playlists explicitly flagged render in Home's
+  // Featured Playlists rail. The built-ins below are Bownd's editorial
+  // front door, so they carry the flag.
+  featured?: boolean;
 };
 
 export type ResolvedPlaylistItem =
@@ -280,6 +285,7 @@ export type ResolvedPlaylist = {
   title: string;
   subtitle: string;
   items: ResolvedPlaylistItem[];
+  featured?: boolean;
 };
 
 function sameCalendarDay(a: Date, b: Date): boolean {
@@ -304,6 +310,7 @@ function hasTag(tags: string[] | undefined, ...wanted: string[]): boolean {
 export const PLAYLISTS: Playlist[] = [
   {
     id: "tonight-in-kc",
+    featured: true,
     title: "Tonight in KC",
     subtitle: "Happening tonight",
     itemIds: ["demo-event-pickleball", "demo-event-jazz", "demo-event-comedy"],
@@ -311,6 +318,7 @@ export const PLAYLISTS: Playlist[] = [
   },
   {
     id: "date-night",
+    featured: true,
     title: "Date Night",
     subtitle: "Couples picks",
     itemIds: [
@@ -324,6 +332,7 @@ export const PLAYLISTS: Playlist[] = [
   },
   {
     id: "family-fun",
+    featured: true,
     title: "Family Fun",
     subtitle: "Bring the whole crew",
     itemIds: [
@@ -378,7 +387,7 @@ export function resolvePlaylists(
       }
     }
     if (items.length >= 1) {
-      out.push({ id: p.id, title: p.title, subtitle: p.subtitle, items });
+      out.push({ id: p.id, title: p.title, subtitle: p.subtitle, items, featured: p.featured === true });
     }
   }
   return out;

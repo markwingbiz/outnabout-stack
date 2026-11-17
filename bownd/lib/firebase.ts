@@ -16,6 +16,25 @@ import {
 } from "firebase/auth";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
+// Expo/Metro inlines ONLY static process.env.EXPO_PUBLIC_* accesses into
+// the shipped bundle. A dynamic lookup (process.env[k]) is never inlined
+// and reads an empty env object on device, so a guard written that way
+// reports every var missing even when all values are in the bundle.
+// Every value is therefore read ONCE here with a literal static access;
+// the guard and the config below consume this object, never process.env.
+const FIREBASE_ENV = {
+  EXPO_PUBLIC_FIREBASE_API_KEY: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
+  EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN:
+    process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  EXPO_PUBLIC_FIREBASE_PROJECT_ID:
+    process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
+  EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET:
+    process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID:
+    process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  EXPO_PUBLIC_FIREBASE_APP_ID: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
+} as const;
+
 const REQUIRED_VARS = [
   "EXPO_PUBLIC_FIREBASE_API_KEY",
   "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN",
@@ -26,7 +45,7 @@ const REQUIRED_VARS = [
 ] as const;
 
 export const firebaseMissingVars: string[] = REQUIRED_VARS.filter(
-  (k) => !process.env[k]
+  (k) => !FIREBASE_ENV[k]
 );
 
 export const firebaseConfigured = firebaseMissingVars.length === 0;
@@ -37,13 +56,13 @@ let auth: Auth | null = null;
 
 if (firebaseConfigured) {
   const firebaseConfig = {
-    apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY as string,
-    authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN as string,
-    projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID as string,
-    storageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET as string,
-    messagingSenderId: process.env
-      .EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID as string,
-    appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID as string,
+    apiKey: FIREBASE_ENV.EXPO_PUBLIC_FIREBASE_API_KEY as string,
+    authDomain: FIREBASE_ENV.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN as string,
+    projectId: FIREBASE_ENV.EXPO_PUBLIC_FIREBASE_PROJECT_ID as string,
+    storageBucket: FIREBASE_ENV.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET as string,
+    messagingSenderId:
+      FIREBASE_ENV.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID as string,
+    appId: FIREBASE_ENV.EXPO_PUBLIC_FIREBASE_APP_ID as string,
   };
 
   app = getApps().length ? getApp() : initializeApp(firebaseConfig);

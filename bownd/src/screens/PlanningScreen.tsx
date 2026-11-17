@@ -46,7 +46,7 @@ export default function PlanningScreen() {
       <SafeAreaView style={styles.safe}>
         {/* Header */}
         <View style={styles.header}>
-          <Text style={styles.brand}>OutnAbout</Text>
+          <Text style={styles.brand}>Bownd</Text>
           {/* If you have a logo PNG, place it here */}
           {/* <Image source={require("../../assets/logo.png")} style={{ width: 28, height: 28, marginLeft: 8 }} /> */}
         </View>

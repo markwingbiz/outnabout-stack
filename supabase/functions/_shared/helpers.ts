@@ -268,12 +268,39 @@ export function getMoneyTarget(moneyRow: Record<string, unknown>): number | null
 }
 
 /**
+ * Funnel ids whose money_funnels rows belong to a funnel's money family:
+ * the funnel itself plus any sub-row funnel (funnels.config.parent_funnel
+ * = the funnel's id), excluding legacy rows (metadata.registry_note set).
+ * Mirrors the family resolution in forge-funnel's loadFamilyMoneyRows and
+ * the Livework+ client resolver (resolveCanonicalFunnels) — a funnel's
+ * target may live on a sub-row's money row (Social Content + SEO's is on
+ * its SEO sub-row's backfill mirror), so reading only the canonical
+ * funnel's own rows misses it.
+ */
+export async function getMoneyFamilyFunnelIds(
+  service: SupabaseClient,
+  funnelId: string,
+): Promise<string[]> {
+  const { data: funnelRows } = await service.from("funnels").select("id, config, metadata");
+  const subIds = ((funnelRows ?? []) as Array<Record<string, unknown>>)
+    .filter((f) => {
+      const cfg = (f.config ?? {}) as Record<string, unknown>;
+      const meta = (f.metadata ?? {}) as Record<string, unknown>;
+      const isLegacy = typeof meta.registry_note === "string" && meta.registry_note.length > 0;
+      return !isLegacy && cfg.parent_funnel === funnelId && String(f.id) !== funnelId;
+    })
+    .map((f) => String(f.id));
+  return [funnelId, ...subIds];
+}
+
+/**
  * Check a funnel's activation gates:
  *  - workers: at least one worker assigned (worker_funnels status 'active',
  *    falling back to config.worker_slugs)
  *  - config: non-empty config with an objective and a trigger/schedule
  *  - money_goal: at least one linked money_funnels row with a non-null
- *    revenue_model AND a revenue target (see getMoneyTarget)
+ *    revenue_model AND a revenue target (see getMoneyTarget) — "linked"
+ *    covers the funnel's whole money family (see getMoneyFamilyFunnelIds)
  *  - worker_contracts (only when includeContracts): every assigned worker
  *    has non-null input_schema, output_schema, tools, queue_name
  */
@@ -303,11 +330,13 @@ export async function checkFunnelGates(
     (config.objective as string).length > 0 &&
     (config.trigger != null || config.schedule != null);
 
-  // Money goal.
+  // Money goal — read the funnel's whole money family, not just its own
+  // rows: a target carried only by a sub-row's money row still counts.
+  const familyIds = await getMoneyFamilyFunnelIds(service, funnelId);
   const { data: moneyRowsRaw } = await service
     .from("money_funnels")
     .select("id, key, revenue_model, metadata, verified_revenue_cents, spent_cents, budget_cents, currency")
-    .eq("funnel_id", funnelId);
+    .in("funnel_id", familyIds);
   const moneyRows = ((moneyRowsRaw ?? []) as Array<Record<string, unknown>>).map((m) => ({
     id: String(m.id),
     key: (m.key as string | null) ?? null,

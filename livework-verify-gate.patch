@@ -1,0 +1,813 @@
+diff --git a/bownd/app/(tabs)/home.tsx b/bownd/app/(tabs)/home.tsx
+index edb0d02..2b394ad 100644
+--- a/bownd/app/(tabs)/home.tsx
++++ b/bownd/app/(tabs)/home.tsx
+@@ -183,6 +183,9 @@ export default function Home() {
+                   {item.venue.isTest && (
+                     <Text style={styles.testBadgeText}>Test</Text>
+                   )}
++                  {item.venue.verified && (
++                    <Text style={styles.verifiedBadgeText}>✓ Verified</Text>
++                  )}
+                   <Text style={styles.venueCardMeta}>Tap to view</Text>
+                 </CardBackground>
+               </TouchableOpacity>
+@@ -294,6 +297,7 @@ export default function Home() {
+                           {v.name}
+                         </Text>
+                         {v.isTest && <Text style={styles.testBadgeText}>Test</Text>}
++                        {v.verified && <Text style={styles.verifiedBadgeText}>✓ Verified</Text>}
+                         <Text style={styles.venueCardMeta}>Tap to view</Text>
+                       </CardBackground>
+                     </TouchableOpacity>
+@@ -335,6 +339,7 @@ export default function Home() {
+                           {v.name}
+                         </Text>
+                         {v.isTest && <Text style={styles.testBadgeText}>Test</Text>}
++                        {v.verified && <Text style={styles.verifiedBadgeText}>✓ Verified</Text>}
+                         <Text style={styles.venueCardMeta}>Tap to view</Text>
+                       </CardBackground>
+                     </TouchableOpacity>
+@@ -433,4 +438,10 @@ const styles = StyleSheet.create({
+     fontSize: 11,
+     marginTop: 4,
+   },
++  verifiedBadgeText: {
++    color: "#7ee2a0",
++    fontWeight: "900",
++    fontSize: 11,
++    marginTop: 4,
++  },
+ });
+diff --git a/bownd/app/whats-close.tsx b/bownd/app/whats-close.tsx
+index 5fc2b6d..54b4dea 100644
+--- a/bownd/app/whats-close.tsx
++++ b/bownd/app/whats-close.tsx
+@@ -225,6 +225,7 @@ export default function WhatsCloseScreen() {
+                     <Text style={styles.muted}>
+                       {formatDistance(miles)} away · {eventCount} event
+                       {eventCount === 1 ? "" : "s"}
++                      {venue.verified ? " · ✓ Verified" : ""}
+                       {venue.isTest ? " · Test" : ""}
+                       {usingDemo ? " · Sample" : ""}
+                     </Text>
+diff --git a/bownd/lib/store.ts b/bownd/lib/store.ts
+index 0b998c4..70db36a 100644
+--- a/bownd/lib/store.ts
++++ b/bownd/lib/store.ts
+@@ -103,6 +103,10 @@ export type Venue = {
+   photoUrl?: string;
+   // Operator-only test flag — see EventItem.isTest.
+   isTest?: boolean;
++  // Verification gate: true when the venue passed operator verification
++  // (bownd-sync writes this from venues.verification_status). Verified
++  // venues show a "✓ Verified" badge in the UI.
++  verified?: boolean;
+ };
+ 
+ export type UserProfile = {
+@@ -189,6 +193,7 @@ function toVenue(id: string, data: any): Venue {
+     featured: data.featured === true,
+     photoUrl: typeof data.photoUrl === "string" ? data.photoUrl : undefined,
+     isTest: data.isTest === true,
++    verified: data.verified === true,
+   };
+ }
+ 
+diff --git a/livework/app/_layout.tsx b/livework/app/_layout.tsx
+index bda22ab..746c905 100644
+--- a/livework/app/_layout.tsx
++++ b/livework/app/_layout.tsx
+@@ -61,6 +61,7 @@ export default function RootLayout() {
+           <Stack.Screen name="edit-event" />
+           <Stack.Screen name="redemptions" />
+           <Stack.Screen name="publish" />
++          <Stack.Screen name="verify-review" />
+           <Stack.Screen name="(auth)" />
+         </Stack>
+       </TenantGate>
+diff --git a/livework/app/publish.tsx b/livework/app/publish.tsx
+index cb14fb0..80bb8e1 100644
+--- a/livework/app/publish.tsx
++++ b/livework/app/publish.tsx
+@@ -42,10 +42,15 @@ import { THEME } from "../lib/theme";
+ import { supabase } from "../lib/supabase";
+ import { useAuth } from "../lib/auth";
+ import { getUserTenantIds, getUserVenues, type TenantVenue } from "../lib/tenant";
++import { canPublishToBownd, verificationLabel, verificationStatusOf } from "../lib/verification";
+ 
+ // Publish-request creation is ENABLED — see the verified-live notes in
+ // the file header. Keys: venue `livework:venue:<venue_id>`, event
+ // `livework:<event_id>`.
++//
++// Verification gate (v1): publishing is UX-blocked here when the event's
++// venue is not verified — bownd-sync ALSO enforces it server-side
++// (request would fail with 'venue_unverified'). is_test venues exempt.
+ 
+ /** Statuses that mean "already queued or live" — never insert over these. */
+ const ACTIVE_REQUEST_STATUSES = ["pending", "processing", "published"];
+@@ -193,6 +198,15 @@ export default function PublishScreen() {
+       return;
+     }
+     const venue = venues.find((v) => v.id === ev.venueId);
++    // UX gate: refuse to queue until the venue is verified. The vendor
++    // requests a review from My Venues; after approval this unblocks.
++    if (venue && !canPublishToBownd(venue)) {
++      Alert.alert(
++        "Venue not verified",
++        `"${venue.name}" is ${verificationLabel(verificationStatusOf(venue)).toLowerCase()} — only verified venues publish to Bownd. Request a verification review from My Venues, and publishing unlocks after approval.`,
++      );
++      return;
++    }
+     const tenantId = ev.tenantId ?? venue?.tenant_id ?? null;
+     if (!tenantId) {
+       Alert.alert("Could not publish", "Couldn't determine which tenant owns this event.");
+diff --git a/livework/app/venues.tsx b/livework/app/venues.tsx
+index 4addb5f..baf4319 100644
+--- a/livework/app/venues.tsx
++++ b/livework/app/venues.tsx
+@@ -28,6 +28,7 @@ import {
+   Pressable,
+   SafeAreaView,
+   ActivityIndicator,
++  Alert,
+ } from "react-native";
+ import { Ionicons } from "@expo/vector-icons";
+ import { useFocusEffect } from "expo-router";
+@@ -35,7 +36,14 @@ import { useRouter } from "expo-router";
+ import { THEME } from "../lib/theme";
+ import { supabase } from "../lib/supabase";
+ import { useAuth } from "../lib/auth";
++import { isOperatorEmail } from "../lib/demo";
+ import { getUserVenues, type TenantVenue } from "../lib/tenant";
++import {
++  verificationStatusOf,
++  verificationLabel,
++  verificationHint,
++  requestVerificationReview,
++} from "../lib/verification";
+ 
+ type VenueWithCount = TenantVenue & { eventCount: number | null; redemptionCount: number | null };
+ 
+@@ -43,11 +51,25 @@ function addressLine(v: TenantVenue): string {
+   return [v.address, v.city, v.state].filter((p) => p && p.trim()).join(", ");
+ }
+ 
++/** Status chip color by verification state — display only. */
++function chipStyle(status: ReturnType<typeof verificationStatusOf>): {
++  backgroundColor: string;
++  borderColor: string;
++} {
++  if (status === "verified") return { backgroundColor: "rgba(46,160,90,0.16)", borderColor: "rgba(46,160,90,0.55)" };
++  if (status === "pending_review") return { backgroundColor: "rgba(230,160,40,0.16)", borderColor: "rgba(230,160,40,0.55)" };
++  if (status === "rejected") return { backgroundColor: "rgba(220,70,70,0.16)", borderColor: "rgba(220,70,70,0.55)" };
++  if (status === "test") return { backgroundColor: "rgba(150,120,255,0.16)", borderColor: "rgba(150,120,255,0.55)" };
++  return { backgroundColor: "rgba(140,140,140,0.16)", borderColor: "rgba(140,140,140,0.45)" };
++}
++
+ export default function VenuesScreen() {
+   const router = useRouter();
+   const { session, loading: authLoading } = useAuth();
+   const [venues, setVenues] = useState<VenueWithCount[] | null>(null);
+   const [error, setError] = useState<string | null>(null);
++  const [requestingId, setRequestingId] = useState<string | null>(null);
++  const isOperator = isOperatorEmail(session?.user?.email ?? null);
+ 
+   const load = useCallback(async () => {
+     setError(null);
+@@ -96,6 +118,29 @@ export default function VenuesScreen() {
+     }, [session, load]),
+   );
+ 
++  // Request an operator verification review for one venue. The database
++  // trigger allows ONLY the unverified/rejected -> pending_review move,
++  // so this can never grant verification by itself.
++  async function onRequestReview(venueId: string) {
++    if (requestingId) return;
++    setRequestingId(venueId);
++    try {
++      await requestVerificationReview(venueId);
++      Alert.alert(
++        "Review requested",
++        "Your venue is in the operator review queue. Publishing to Bownd unlocks after approval.",
++      );
++      await load();
++    } catch (e: unknown) {
++      Alert.alert(
++        "Could not request review",
++        e instanceof Error ? e.message : "Something went wrong. Try again.",
++      );
++    } finally {
++      setRequestingId(null);
++    }
++  }
++
+   if (authLoading || venues === null) {
+     return (
+       <SafeAreaView style={styles.root}>
+@@ -147,6 +192,13 @@ export default function VenuesScreen() {
+           <Text style={styles.addText}>+ Add Venue</Text>
+         </Pressable>
+ 
++        {isOperator && (
++          <Pressable style={styles.queueBtn} onPress={() => router.push("/verify-review")}>
++            <Text style={styles.queueBtnText}>Review pending verifications</Text>
++            <Ionicons name="chevron-forward" size={16} color={THEME.purple} />
++          </Pressable>
++        )}
++
+         {venues.length === 0 ? (
+           <View style={styles.card}>
+             <Text style={styles.empty}>No venues yet.</Text>
+@@ -155,14 +207,33 @@ export default function VenuesScreen() {
+         ) : (
+           venues.map((v) => {
+             const line = addressLine(v);
++            // Verification gate (v1): status is display + UX gate only —
++            // bownd-sync enforces it server-side before anything publishes.
++            const vStatus = verificationStatusOf(v);
++            const canRequest = vStatus === "unverified" || vStatus === "rejected";
+             return (
+               <Pressable key={v.id} style={styles.card} onPress={() => router.push(`/venue-form?id=${v.id}`)}>
+                 <View style={styles.row}>
+                   <View style={{ flex: 1 }}>
+                     <Text style={styles.venueName}>{v.name}</Text>
++                    <View style={[styles.chip, chipStyle(vStatus)]}>
++                      <Text style={styles.chipText}>{verificationLabel(vStatus)}</Text>
++                    </View>
++                    <Text style={styles.verifyHint}>{verificationHint(vStatus)}</Text>
+                     {!!line && <Text style={styles.detail}>{line}</Text>}
+                     {!!v.phone && <Text style={styles.detail}>{v.phone}</Text>}
+                     {!!v.website && <Text style={styles.detail}>{v.website}</Text>}
++                    {canRequest && (
++                      <Pressable
++                        style={styles.reviewBtn}
++                        disabled={requestingId === v.id}
++                        onPress={() => void onRequestReview(v.id)}
++                      >
++                        <Text style={styles.reviewBtnText}>
++                          {requestingId === v.id ? "Requesting…" : "Request verification review"}
++                        </Text>
++                      </Pressable>
++                    )}
+                     <Text style={styles.count}>
+                       {v.eventCount === null
+                         ? "Events: —"
+@@ -212,6 +283,18 @@ const styles = StyleSheet.create({
+     alignItems: "center",
+   },
+   addText: { color: "#fff", fontWeight: "900", fontSize: 13 },
++  queueBtn: {
++    flexDirection: "row",
++    alignItems: "center",
++    justifyContent: "center",
++    gap: 4,
++    borderWidth: 1,
++    borderColor: THEME.purple,
++    borderRadius: 10,
++    paddingVertical: 10,
++    paddingHorizontal: 14,
++  },
++  queueBtnText: { color: THEME.purple, fontWeight: "900", fontSize: 13 },
+   card: {
+     backgroundColor: THEME.card,
+     borderRadius: THEME.radius,
+@@ -221,6 +304,25 @@ const styles = StyleSheet.create({
+   },
+   row: { flexDirection: "row", alignItems: "center", gap: 12 },
+   venueName: { color: "#fff", fontSize: 16, fontWeight: "900" },
++  chip: {
++    alignSelf: "flex-start",
++    borderWidth: 1,
++    borderRadius: 999,
++    paddingHorizontal: 10,
++    paddingVertical: 3,
++    marginTop: 8,
++  },
++  chipText: { color: "#fff", fontSize: 11, fontWeight: "800" },
++  verifyHint: { color: THEME.textFaint, fontSize: 12, marginTop: 6, lineHeight: 17 },
++  reviewBtn: {
++    alignSelf: "flex-start",
++    backgroundColor: THEME.purple,
++    borderRadius: 999,
++    paddingHorizontal: 16,
++    paddingVertical: 9,
++    marginTop: 10,
++  },
++  reviewBtnText: { color: "#fff", fontSize: 12, fontWeight: "800" },
+   detail: { color: THEME.textMuted, fontSize: 13, marginTop: 3, lineHeight: 18 },
+   count: { color: THEME.purple, fontSize: 13, fontWeight: "800", marginTop: 8 },
+   countSub: { color: THEME.textMuted, fontSize: 13, fontWeight: "700", marginTop: 3 },
+diff --git a/livework/app/verify-review.tsx b/livework/app/verify-review.tsx
+new file mode 100644
+index 0000000..2886fd9
+--- /dev/null
++++ b/livework/app/verify-review.tsx
+@@ -0,0 +1,262 @@
++// Livework — Verification reviews (operator only).
++//
++// The review queue for the venue verification gate (v1: manual review).
++// Pending venue claims across ALL tenants, approve/reject via the
++// review_venue_verification RPC (SECURITY DEFINER — the operator never
++// needs RLS access to other vendors' rows).
++//
++// Why manual: this is how Groupon and DoorDash both started — a human
++// reviewing each business before anything goes public. v2 phone codes
++// bolt on later by writing the same verification columns.
++//
++// Approving flips the venue to 'verified' (method 'manual_review');
++// the vendor's next publish attempt then succeeds. Rejecting leaves
++// the venue unpublished with an audit row.
++import React, { useCallback, useEffect, useState } from "react";
++import {
++  View,
++  Text,
++  StyleSheet,
++  ScrollView,
++  Pressable,
++  SafeAreaView,
++  ActivityIndicator,
++  Alert,
++} from "react-native";
++import { Ionicons } from "@expo/vector-icons";
++import { useFocusEffect } from "expo-router";
++import { useRouter } from "expo-router";
++import { THEME } from "../lib/theme";
++import { useAuth } from "../lib/auth";
++import { isOperatorEmail } from "../lib/demo";
++import {
++  listPendingVerifications,
++  reviewVerification,
++  type PendingVerification,
++} from "../lib/verification";
++
++function addressLine(v: PendingVerification): string {
++  return [v.address, v.city, v.state].filter((p) => p && p.trim()).join(", ");
++}
++
++function formatDate(iso: string | null): string {
++  if (!iso) return "Date unknown";
++  const d = new Date(iso);
++  if (Number.isNaN(d.getTime())) return "Date unknown";
++  return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
++}
++
++export default function VerifyReviewScreen() {
++  const router = useRouter();
++  const { session, loading: authLoading } = useAuth();
++  const [pending, setPending] = useState<PendingVerification[] | null>(null);
++  const [error, setError] = useState<string | null>(null);
++  const [actingId, setActingId] = useState<string | null>(null);
++  const isOperator = isOperatorEmail(session?.user?.email ?? null);
++
++  const load = useCallback(async () => {
++    if (!isOperator) return;
++    setError(null);
++    try {
++      setPending(await listPendingVerifications());
++    } catch (e: unknown) {
++      setError(e instanceof Error ? e.message : "Could not load the review queue.");
++      setPending([]);
++    }
++  }, [isOperator]);
++
++  useEffect(() => {
++    if (session) void load();
++  }, [session, load]);
++
++  useFocusEffect(
++    useCallback(() => {
++      if (session) void load();
++    }, [session, load]),
++  );
++
++  async function onReview(v: PendingVerification, approve: boolean) {
++    if (actingId) return;
++    if (!approve) {
++      // Confirm a rejection — the venue stays unpublished either way.
++      Alert.alert(
++        "Reject this claim?",
++        `"${v.name}" stays unpublished. The vendor can fix their details and request a review again.`,
++        [
++          { text: "Keep in queue", style: "cancel" },
++          { text: "Reject", style: "destructive", onPress: () => void doReview(v, false) },
++        ],
++      );
++      return;
++    }
++    await doReview(v, true);
++  }
++
++  async function doReview(v: PendingVerification, approve: boolean) {
++    setActingId(v.id);
++    try {
++      await reviewVerification(v.id, approve, null);
++      Alert.alert(
++        approve ? "Verified" : "Rejected",
++        approve
++          ? `"${v.name}" is verified. The vendor's next publish to Bownd will go through.`
++          : `"${v.name}" was rejected and stays unpublished.`,
++      );
++      await load();
++    } catch (e: unknown) {
++      Alert.alert(
++        "Review failed",
++        e instanceof Error ? e.message : "Something went wrong. Try again.",
++      );
++    } finally {
++      setActingId(null);
++    }
++  }
++
++  if (authLoading || pending === null) {
++    return (
++      <SafeAreaView style={styles.root}>
++        <ActivityIndicator color={THEME.purple} size="large" style={{ marginTop: 40 }} />
++      </SafeAreaView>
++    );
++  }
++
++  if (!session || !isOperator) {
++    return (
++      <SafeAreaView style={styles.root}>
++        <View style={styles.center}>
++          <Text style={styles.centerTitle}>Operators only</Text>
++          <Text style={styles.centerSub}>
++            Verification reviews are for the Bownd operator. Vendors request reviews from My Venues.
++          </Text>
++          <Pressable style={styles.centerBtn} onPress={() => router.back()}>
++            <Text style={styles.centerBtnText}>Go back</Text>
++          </Pressable>
++        </View>
++      </SafeAreaView>
++    );
++  }
++
++  if (error) {
++    return (
++      <SafeAreaView style={styles.root}>
++        <View style={styles.center}>
++          <Text style={styles.centerTitle}>Could not load the review queue</Text>
++          <Text style={styles.centerSub}>{error}</Text>
++          <Pressable style={styles.centerBtn} onPress={() => void load()}>
++            <Text style={styles.centerBtnText}>Retry</Text>
++          </Pressable>
++        </View>
++      </SafeAreaView>
++    );
++  }
++
++  return (
++    <SafeAreaView style={styles.root}>
++      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
++        <View style={styles.header}>
++          <Pressable onPress={() => router.back()} hitSlop={10}>
++            <Ionicons name="chevron-back" size={24} color="#fff" />
++          </Pressable>
++          <Text style={styles.title}>Verification reviews</Text>
++          <View style={{ width: 24 }} />
++        </View>
++
++        <Text style={styles.sub}>
++          Approve a claim only when you can confirm this is really the venue — call their listed
++          number, check their website, or recognize them. Claims on well-known venues get extra
++          scrutiny: a duplicate name + address is flagged by review, first verified claim wins.
++        </Text>
++
++        {pending.length === 0 ? (
++          <View style={styles.card}>
++            <Text style={styles.empty}>Queue is empty.</Text>
++            <Text style={styles.emptySub}>
++              New venue claims land here when a vendor requests a verification review.
++            </Text>
++          </View>
++        ) : (
++          pending.map((v) => {
++            const line = addressLine(v);
++            const acting = actingId === v.id;
++            return (
++              <View key={v.id} style={styles.card}>
++                <Text style={styles.venueName}>{v.name}</Text>
++                {!!line && <Text style={styles.detail}>{line}</Text>}
++                {!!v.phone && <Text style={styles.detail}>☎ {v.phone}</Text>}
++                {!!v.website && <Text style={styles.detail}>{v.website}</Text>}
++                <Text style={styles.meta}>Requested {formatDate(v.createdAt)}</Text>
++                <View style={styles.actions}>
++                  <Pressable
++                    style={[styles.approveBtn, acting && styles.disabledBtn]}
++                    disabled={acting}
++                    onPress={() => void onReview(v, true)}
++                  >
++                    <Text style={styles.approveText}>Approve</Text>
++                  </Pressable>
++                  <Pressable
++                    style={[styles.rejectBtn, acting && styles.disabledBtn]}
++                    disabled={acting}
++                    onPress={() => void onReview(v, false)}
++                  >
++                    <Text style={styles.rejectText}>Reject</Text>
++                  </Pressable>
++                </View>
++              </View>
++            );
++          })
++        )}
++      </ScrollView>
++    </SafeAreaView>
++  );
++}
++
++const styles = StyleSheet.create({
++  root: { flex: 1, backgroundColor: THEME.bg },
++  content: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 24, gap: 14 },
++  center: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 24, gap: 12 },
++  centerTitle: { color: "#fff", fontSize: 20, fontWeight: "900", textAlign: "center" },
++  centerSub: { color: THEME.textMuted, fontSize: 14, textAlign: "center", lineHeight: 20 },
++  centerBtn: { backgroundColor: THEME.purple, borderRadius: 999, paddingHorizontal: 24, paddingVertical: 12, marginTop: 8 },
++  centerBtnText: { color: "#fff", fontSize: 15, fontWeight: "800" },
++  header: {
++    flexDirection: "row",
++    alignItems: "center",
++    justifyContent: "space-between",
++    marginBottom: 4,
++  },
++  title: { color: "#fff", fontSize: 20, fontWeight: "900" },
++  sub: { color: THEME.textMuted, fontSize: 13, lineHeight: 19 },
++  card: {
++    backgroundColor: THEME.card,
++    borderRadius: THEME.radius,
++    borderWidth: 1,
++    borderColor: THEME.cardBorder,
++    padding: 16,
++  },
++  venueName: { color: "#fff", fontSize: 16, fontWeight: "900" },
++  detail: { color: THEME.textMuted, fontSize: 13, marginTop: 3, lineHeight: 18 },
++  meta: { color: THEME.textFaint, fontSize: 12, marginTop: 8 },
++  empty: { color: THEME.textMuted, fontSize: 14, fontWeight: "700" },
++  emptySub: { color: THEME.textFaint, fontSize: 13, marginTop: 6, lineHeight: 18 },
++  actions: { flexDirection: "row", gap: 10, marginTop: 14 },
++  approveBtn: {
++    flex: 1,
++    backgroundColor: "rgba(46,160,90,0.9)",
++    borderRadius: 10,
++    paddingVertical: 11,
++    alignItems: "center",
++  },
++  approveText: { color: "#fff", fontWeight: "900", fontSize: 13 },
++  rejectBtn: {
++    flex: 1,
++    backgroundColor: "rgba(220,70,70,0.16)",
++    borderWidth: 1,
++    borderColor: "rgba(220,70,70,0.55)",
++    borderRadius: 10,
++    paddingVertical: 11,
++    alignItems: "center",
++  },
++  rejectText: { color: "#ff8a8a", fontWeight: "900", fontSize: 13 },
++  disabledBtn: { opacity: 0.5 },
++});
+diff --git a/livework/lib/tenant.ts b/livework/lib/tenant.ts
+index 68bc40e..09fccd0 100644
+--- a/livework/lib/tenant.ts
++++ b/livework/lib/tenant.ts
+@@ -13,6 +13,11 @@ export type TenantVenue = {
+   state: string | null;
+   phone: string | null;
+   website: string | null;
++  // Verification gate (v1: manual operator review). The real enforcement
++  // is server-side in bownd-sync; the app reads these for display and
++  // for the UX gate (Publish disabled until verified).
++  is_test: boolean;
++  verification_status: string | null;
+ };
+ 
+ async function currentUserId(): Promise<string | null> {
+@@ -51,7 +56,7 @@ export async function getUserVenues(): Promise<TenantVenue[]> {
+   if (tenantIds.length === 0) return [];
+   const { data, error } = await supabase
+     .from("venues")
+-    .select("id, tenant_id, name, address, city, state, phone, website")
++    .select("id, tenant_id, name, address, city, state, phone, website, is_test, verification_status")
+     .in("tenant_id", tenantIds)
+     .order("name", { ascending: true });
+   if (error) throw error;
+@@ -64,5 +69,7 @@ export async function getUserVenues(): Promise<TenantVenue[]> {
+     state: typeof v.state === "string" ? v.state : null,
+     phone: typeof v.phone === "string" ? v.phone : null,
+     website: typeof v.website === "string" ? v.website : null,
++    is_test: v.is_test === true,
++    verification_status: typeof v.verification_status === "string" ? v.verification_status : null,
+   }));
+ }
+diff --git a/livework/lib/verification.ts b/livework/lib/verification.ts
+new file mode 100644
+index 0000000..27f4335
+--- /dev/null
++++ b/livework/lib/verification.ts
+@@ -0,0 +1,117 @@
++// Livework — venue verification helpers (verification gate v1).
++//
++// The REAL gate is server-side: bownd-sync refuses to publish anything
++// whose venue is not 'verified' (venues.verification_status), and a
++// database trigger stops tenants from granting themselves verification.
++// This file is only the app-side surface: status labels, the
++// request-review action, and the operator review RPCs.
++//
++// v2 phone codes slot in later by writing the same columns with
++// verification_method='phone_code' — the gate reads STATUS only.
++import { supabase } from "./supabase";
++
++export type VerificationStatus = "unverified" | "pending_review" | "verified" | "rejected";
++
++export function verificationStatusOf(v: {
++  verification_status?: unknown;
++  is_test?: boolean;
++}): VerificationStatus | "test" {
++  if (v.is_test === true) return "test";
++  const s = typeof v.verification_status === "string" ? v.verification_status : "unverified";
++  if (s === "verified" || s === "pending_review" || s === "rejected") return s;
++  return "unverified";
++}
++
++export function verificationLabel(status: VerificationStatus | "test"): string {
++  if (status === "verified") return "Verified";
++  if (status === "pending_review") return "In review";
++  if (status === "rejected") return "Not verified";
++  if (status === "test") return "Test data";
++  return "Unverified";
++}
++
++export function verificationHint(status: VerificationStatus | "test"): string {
++  if (status === "verified") return "Approved — this venue can publish to Bownd.";
++  if (status === "pending_review")
++    return "An operator is checking this venue. Publishing unlocks after approval.";
++  if (status === "rejected")
++    return "Verification was declined. Request a review again after fixing your details.";
++  if (status === "test") return "Operator test venue — exempt from verification.";
++  return "Only verified venues publish to Bownd. Request a review to get verified.";
++}
++
++/** True when the venue is allowed to publish (UX gate only — bownd-sync re-checks). */
++export function canPublishToBownd(v: {
++  verification_status?: unknown;
++  is_test?: boolean;
++}): boolean {
++  if (v.is_test === true) return true;
++  return verificationStatusOf(v) === "verified";
++}
++
++/**
++ * Request a verification review for one of the vendor's own venues.
++ * Moves it into the operator's review queue. The database trigger
++ * allows ONLY the unverified/rejected -> pending_review move, so this
++ * cannot grant verification by itself.
++ */
++export async function requestVerificationReview(venueId: string): Promise<void> {
++  if (!supabase) throw new Error("Supabase is not configured.");
++  const { error } = await supabase
++    .from("venues")
++    .update({ verification_status: "pending_review" })
++    .eq("id", venueId);
++  if (error) throw error;
++}
++
++export type PendingVerification = {
++  id: string;
++  name: string;
++  address: string | null;
++  city: string | null;
++  state: string | null;
++  phone: string | null;
++  website: string | null;
++  tenantId: string | null;
++  createdAt: string | null;
++};
++
++/** Operator-only: pending venue claims across ALL tenants. */
++export async function listPendingVerifications(): Promise<PendingVerification[]> {
++  if (!supabase) throw new Error("Supabase is not configured.");
++  const { data, error } = await supabase.rpc("list_pending_venue_verifications");
++  if (error) throw error;
++  return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
++    id: String(r.id ?? ""),
++    name: String(r.name ?? "Unnamed venue"),
++    address: typeof r.address === "string" ? r.address : null,
++    city: typeof r.city === "string" ? r.city : null,
++    state: typeof r.state === "string" ? r.state : null,
++    phone: typeof r.phone === "string" ? r.phone : null,
++    website: typeof r.website === "string" ? r.website : null,
++    tenantId: typeof r.tenant_id === "string" ? r.tenant_id : null,
++    createdAt: typeof r.created_at === "string" ? r.created_at : null,
++  }));
++}
++
++/**
++ * Operator-only: approve or reject a pending venue claim. Writes an
++ * audit row (venue.verification.review) and flips the status to
++ * 'verified' (method 'manual_review') or 'rejected'.
++ */
++export async function reviewVerification(
++  venueId: string,
++  approve: boolean,
++  note: string | null,
++): Promise<string> {
++  if (!supabase) throw new Error("Supabase is not configured.");
++  const { data, error } = await supabase.rpc("review_venue_verification", {
++    p_venue_id: venueId,
++    p_approve: approve,
++    p_note: note,
++  });
++  if (error) throw error;
++  const row = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | null;
++  const status = row && typeof row.status === "string" ? row.status : approve ? "verified" : "rejected";
++  return status;
++}
+diff --git a/supabase/functions/bownd-sync/index.ts b/supabase/functions/bownd-sync/index.ts
+index 82c2d25..1e1ac11 100644
+--- a/supabase/functions/bownd-sync/index.ts
++++ b/supabase/functions/bownd-sync/index.ts
+@@ -10,6 +10,14 @@
+ //   Firestore write is set-with-merge on the stored doc ref (re-publishing
+ //   the same request produces the same doc, never a duplicate).
+ //
++//   VERIFICATION GATE: a venue publishes only when
++//   venues.verification_status = 'verified' (v1 = manual operator review;
++//   verification_method records how). Event publishes are gated on their
++//   venue. is_test venues are exempt (operator test data, never public).
++//   Unverified => the request fails with 'venue_unverified'; it is
++//   retryable, so after an operator verifies the venue the vendor just
++//   retries. This gate is server-side — the apps cannot bypass it.
++//
+ // 'mirror' (Firestore -> Supabase): lists Firestore events / venues /
+ //   redemptions changed since the per-collection watermark in
+ //   bownd_mirror_state, upserts them into Supabase, advances the watermark,
+@@ -752,6 +760,46 @@ async function noteRequestError(
+   }
+ }
+ 
++/**
++ * Venue verification gate (v1: manual operator review).
++ * A venue publishes only when venues.verification_status = 'verified'.
++ * Event publishes are gated on the venue the event belongs to.
++ * Operator test rows (venues.is_test = true) are EXEMPT — test data,
++ * never public. Fail-closed: a missing/unknown status blocks.
++ * The gate reads STATUS only, so v2 phone codes slot in by writing
++ * the same column (verification_method records how it was verified).
++ */
++async function checkVenueVerification(
++  service: SupabaseClient,
++  kind: "event" | "venue",
++  supabaseRow: Record<string, unknown>,
++): Promise<{ ok: boolean; detail: string }> {
++  let venue: Record<string, unknown> | null = null;
++  if (kind === "venue") {
++    venue = supabaseRow;
++  } else {
++    const venueId = asNonEmptyString(supabaseRow.venue_id);
++    if (!venueId) return { ok: true, detail: "" }; // venue-less event — nothing to gate on.
++    const { data, error } = await service
++      .from("venues")
++      .select("id, name, is_test, verification_status")
++      .eq("id", venueId)
++      .maybeSingle();
++    if (error) return { ok: false, detail: `Venue lookup for verification gate failed: ${error.message}` };
++    if (!data) return { ok: false, detail: `The event's venue (${venueId}) was not found.` };
++    venue = data as Record<string, unknown>;
++  }
++  if (venue.is_test === true) return { ok: true, detail: "" };
++  const status =
++    typeof venue.verification_status === "string" ? venue.verification_status : "unverified";
++  if (status === "verified") return { ok: true, detail: "" };
++  const name = asNonEmptyString(venue.name) ?? String(venue.id);
++  return {
++    ok: false,
++    detail: `Venue "${name}" is not verified (status: ${status}). An operator reviews every venue claim before it can publish to Bownd — request a review in Livework, then retry the publish.`,
++  };
++}
++
+ /** Resolve the Firestore venue doc id for a Supabase venue id. */
+ async function resolveFirestoreVenueRef(
+   service: SupabaseClient,
+@@ -807,6 +855,10 @@ function supabaseVenueToFirestore(
+     tenantRef,
+     tenantId,
+     isTest: rowIsTest(row),
++    // Verification flag for Bownd's "Verified" venue badge. Only
++    // verified (or test) venues pass the publish gate above, so this is
++    // true for every non-test venue doc Bownd reads.
++    verified: row.verification_status === "verified",
+     sourceRef: `supabase:${String(row.id)}`,
+     updatedAt: SERVER_TIMESTAMP,
+   };
+@@ -874,6 +926,11 @@ async function publishOne(
+     );
+   }
+ 
++  // Venue verification gate — server-side, the apps cannot bypass it.
++  // Unverified venues (and their events) never reach Bownd.
++  const gate = await checkVenueVerification(service, kind, supabaseRow);
++  if (!gate.ok) return await fail("venue_unverified", gate.detail);
++
+   // Build the Firestore doc.
+   let firestoreDoc: Record<string, unknown>;
+   let collection: string;

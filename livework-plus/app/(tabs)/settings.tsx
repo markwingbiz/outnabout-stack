@@ -1,8 +1,13 @@
-// Livework+ Settings (Phase 5).
-// Notifications switch is persisted on-device (AsyncStorage) with an
-// honest note that push is not set up yet. Account shows the real
-// session (sign in / sign out). The other four rows are honestly
-// disabled — their backend screens do not exist yet.
+// Livework+ Control Center (Settings), rebuilt to the reference layout:
+// header card + Preferences section + Your Settings section.
+//
+// The rows are the app's REAL settings only. The reference's old
+// dating-content rows (Relationship Goals, Deal Breakers, Preferences,
+// Location, Profile Strength / matches) stay replaced — Phase 8 replaced
+// that content and it does not come back. Preferences holds the rows
+// that work (Notifications, Account); Your Settings holds the rows
+// whose backend screens do not exist yet, honestly disabled with a
+// "Soon" tag and a reason.
 // Requires phase-a-ui Auth (<AuthProvider> in app/_layout.tsx).
 import React, { useEffect, useState } from "react";
 import {
@@ -15,11 +20,22 @@ import {
   Switch,
   ActivityIndicator,
 } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { THEME } from "../../lib/theme";
 import { useAuth } from "../../lib/auth";
-import { loadNotifPref, saveNotifPref } from "../../lib/local-store";
+import {
+  PUSH_CATEGORIES,
+  enablePushNotifications,
+  getPushPermissionState,
+  loadCategoryPrefs,
+  loadPushMasterOff,
+  saveCategoryPref,
+  unregisterPushToken,
+  type PushCategoryPrefs,
+  type PushPermissionState,
+} from "../../lib/push";
 
 const DISABLED_ROWS = [
   { icon: "lock-closed", title: "Privacy & Safety", sub: "Control your privacy settings" },
@@ -31,32 +47,47 @@ const DISABLED_ROWS = [
 export default function SettingsScreen() {
   const router = useRouter();
   const { session, user, loading: authLoading, signOut } = useAuth();
-  const [notifs, setNotifs] = useState(true);
-  const [notifsLoaded, setNotifsLoaded] = useState(false);
+  const [permission, setPermission] = useState<PushPermissionState>("undetermined");
+  const [masterOff, setMasterOff] = useState(false);
+  const [prefs, setPrefs] = useState<PushCategoryPrefs>({});
+  const [pushLoaded, setPushLoaded] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
 
   useEffect(() => {
     let alive = true;
-    loadNotifPref().then((v) => {
-      if (alive) {
-        setNotifs(v);
-        setNotifsLoaded(true);
-      }
-    });
+    Promise.all([getPushPermissionState(), loadPushMasterOff(), loadCategoryPrefs()]).then(
+      ([state, off, stored]) => {
+        if (alive) {
+          setPermission(state);
+          setMasterOff(off);
+          setPrefs(stored);
+          setPushLoaded(true);
+        }
+      },
+    );
     return () => {
       alive = false;
     };
   }, []);
 
-  async function onToggleNotifs(value: boolean) {
-    setNotifs(value);
-    try {
-      await saveNotifPref(value);
-    } catch {
-      // Preference write failed — revert the toggle so the UI never
-      // claims a save that did not happen.
-      setNotifs(!value);
+  const pushOn = permission === "granted" && !masterOff;
+
+  async function onToggleMaster(value: boolean) {
+    if (!user) return;
+    if (value) {
+      const next = await enablePushNotifications(user.id);
+      setPermission(next);
+      setMasterOff(next !== "granted");
+    } else {
+      await unregisterPushToken(user.id);
+      setMasterOff(true);
     }
+  }
+
+  async function onToggleCategory(key: string, value: boolean) {
+    setPrefs((prev) => ({ ...prev, [key]: value }));
+    const next = await saveCategoryPref(key, value);
+    setPrefs(next);
   }
 
   async function onSignOut() {
@@ -71,37 +102,89 @@ export default function SettingsScreen() {
   return (
     <SafeAreaView style={styles.root}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-        <Text style={styles.title}>Settings</Text>
+        {/* Control Center header */}
+        <LinearGradient
+          colors={["#2B1B5E", "#1A1038", "#14102A"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.hero}
+        >
+          <View style={{ flex: 1 }}>
+            <Text style={styles.heroTitle}>Control Center</Text>
+            <Text style={styles.heroSub}>
+              Manage your preferences and set the foundation for great connections.
+            </Text>
+          </View>
+          <View style={styles.shield}>
+            <Ionicons name="shield-checkmark" size={44} color={THEME.purpleBright} />
+          </View>
+        </LinearGradient>
 
-        {/* Notifications — preference persisted on-device; push not set up */}
+        {/* Preferences — rows that work */}
+        <Text style={styles.sectionLabel}>Preferences</Text>
         <View style={styles.group}>
+          {/* Notifications — real push registration (lib/push.ts) */}
           <View style={styles.row}>
             <View style={styles.rowIcon}>
               <Ionicons name="notifications" size={20} color={THEME.purpleBright} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle}>Notifications</Text>
-              <Text style={styles.rowSub}>Manage alerts and reminders</Text>
+              <Text style={styles.rowSub}>
+                {!pushLoaded
+                  ? "Loading…"
+                  : pushOn
+                    ? "On for this device"
+                    : permission === "denied"
+                      ? "Off — enable in system settings, or tap the switch to retry"
+                      : "Off — tap to enable"}
+              </Text>
             </View>
-            {!notifsLoaded ? (
+            {!pushLoaded ? (
               <ActivityIndicator color={THEME.purpleBright} />
             ) : (
               <Switch
-                value={notifs}
-                onValueChange={(v) => void onToggleNotifs(v)}
+                value={pushOn}
+                onValueChange={(v) => void onToggleMaster(v)}
                 trackColor={{ false: "#3B3B4D", true: THEME.purpleBright }}
               />
             )}
           </View>
-        </View>
-        <Text style={styles.note}>
-          Push notifications are not set up yet (no notification service). This switch saves your
-          preference on this device only.
-        </Text>
-
-        {/* Account — real session */}
-        <View style={styles.group}>
-          <View style={styles.row}>
+          {/* Push categories — written to the push_tokens registration */}
+          {PUSH_CATEGORIES.map((c) => (
+            <View key={c.key} style={styles.row}>
+              <View style={styles.rowIcon}>
+                <Ionicons
+                  name={c.key === "operator_private" ? "lock-closed" : "megaphone"}
+                  size={20}
+                  color={THEME.purpleBright}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rowTitle}>{c.label}</Text>
+                <Text style={styles.rowSub}>{c.description}</Text>
+              </View>
+              <Switch
+                value={pushOn && prefs[c.key] !== false}
+                disabled={!pushOn}
+                onValueChange={(v) => void onToggleCategory(c.key, v)}
+                trackColor={{ false: "#3B3B4D", true: THEME.purpleBright }}
+              />
+            </View>
+          ))}
+          {/* Admin composer (plan §1.7) */}
+          <Pressable style={styles.row} onPress={() => router.push("/(tabs)/push-composer")}>
+            <View style={styles.rowIcon}>
+              <Ionicons name="send" size={20} color={THEME.purpleBright} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowTitle}>Send a push notification</Text>
+              <Text style={styles.rowSub}>Compose for Bownd, Livework or Livework+</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={THEME.textFaint} />
+          </Pressable>
+          {/* Account — real session */}
+          <View style={[styles.row, styles.rowLast]}>
             <View style={styles.rowIcon}>
               <Ionicons name="person-circle" size={20} color={THEME.purpleBright} />
             </View>
@@ -122,11 +205,20 @@ export default function SettingsScreen() {
             )}
           </View>
         </View>
+        <Text style={styles.note}>
+          Pushes are sent by the push-send service. Category choices are saved to your notification
+          registration on this device and honored by the sender. Private reminders always use
+          generic wording — no details ever appear in the notification itself.
+        </Text>
 
-        {/* Disabled rows — backend screens do not exist yet */}
+        {/* Your Settings — backend screens do not exist yet */}
+        <Text style={styles.sectionLabel}>Your Settings</Text>
         <View style={styles.group}>
-          {DISABLED_ROWS.map((r) => (
-            <View key={r.title} style={[styles.row, styles.rowDisabled]}>
+          {DISABLED_ROWS.map((r, i) => (
+            <View
+              key={r.title}
+              style={[styles.row, styles.rowDisabled, i === DISABLED_ROWS.length - 1 && styles.rowLast]}
+            >
               <View style={styles.rowIcon}>
                 <Ionicons name={r.icon as never} size={20} color={THEME.purpleBright} />
               </View>
@@ -154,7 +246,29 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: THEME.bg },
   content: { paddingHorizontal: 18, paddingTop: 10 },
-  title: { color: "#fff", fontSize: 26, fontWeight: "900", marginBottom: 16 },
+  hero: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderRadius: THEME.radius,
+    padding: 18,
+    marginBottom: 22,
+    borderWidth: 1,
+    borderColor: "rgba(168,85,247,0.25)",
+  },
+  heroTitle: { color: "#fff", fontSize: 24, fontWeight: "900" },
+  heroSub: { color: THEME.textMuted, fontSize: 13, marginTop: 6, lineHeight: 18 },
+  shield: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: "rgba(168,85,247,0.16)",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "rgba(168,85,247,0.4)",
+  },
+  sectionLabel: { color: "#fff", fontSize: 15, fontWeight: "800", marginBottom: 10 },
   group: {
     backgroundColor: THEME.card,
     borderRadius: THEME.radius,
@@ -171,6 +285,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "rgba(255,255,255,0.05)",
   },
+  rowLast: { borderBottomWidth: 0 },
   rowDisabled: { opacity: 0.55 },
   rowIcon: {
     width: 40,
